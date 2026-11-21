@@ -52,14 +52,29 @@ def _household_id(principal: MaybePrincipal) -> int | None:
     return principal.household.id if principal is not None else None
 
 
+WORKER_ICON = 'var ICON = "/static/icon-192.png";'
+
+
 @cache
-def _worker() -> bytes:
-    return WORKER_FILE.read_bytes()
+def worker(instance_label: str) -> str:
+    """The service worker. A labeled instance's notifications show its test mascot, as its
+    pages and manifest do."""
+    script = WORKER_FILE.read_text()
+    if instance_label:
+        script = script.replace(WORKER_ICON, WORKER_ICON.replace("icon-", "icon-test-"), 1)
+    return script
+
+
+def app_name(instance_label: str) -> str:
+    """What the installed app is called: "Dinnerbell", or "Dinnerbell Test" on an instance
+    labeled Test, so a phone with both tells them apart."""
+    return f"Dinnerbell {instance_label}" if instance_label else "Dinnerbell"
 
 
 def manifest(version: str, instance_label: str) -> dict[str, object]:
     """The web app manifest (spec 6.15): Dinnerbell, standalone, starting at ``/``, with the
-    icons from /static. A labeled instance, such as test, gets the test mascot, as its pages do."""
+    icons from /static. A labeled instance, such as test, gets its label in the name and the test
+    mascot, as its pages do."""
     variant = "-test" if instance_label else ""
     icons = [
         {
@@ -72,8 +87,8 @@ def manifest(version: str, instance_label: str) -> dict[str, object]:
     ]
     return {
         "id": "/",
-        "name": "Dinnerbell",
-        "short_name": "Dinnerbell",
+        "name": app_name(instance_label),
+        "short_name": app_name(instance_label),
         "lang": "en",
         "start_url": "/",
         "scope": "/",
@@ -93,11 +108,11 @@ async def manifest_file(principal: MaybePrincipal, context: Context, db: Databas
 
 
 @router.get("/sw.js")
-async def service_worker(principal: MaybePrincipal, db: Database) -> Response:
+async def service_worker(principal: MaybePrincipal, context: Context, db: Database) -> Response:
     """Served from the root, not /static, so its scope is the whole site, with its own policy."""
     await web_app.require_web_app(db, _household_id(principal))
     headers = {"Content-Security-Policy": WORKER_CONTENT_SECURITY_POLICY}
-    return Response(_worker(), media_type=WORKER_TYPE, headers=headers)
+    return Response(worker(context.settings.instance_label), media_type=WORKER_TYPE, headers=headers)
 
 
 @router.get("/app")
@@ -122,9 +137,10 @@ async def save_switch(
     principal: AdminCSRFChecked,
     context: Context,
     db: Database,
-    on: Annotated[str | None, Form(max_length=8)] = None,
+    on: Annotated[str, Form(max_length=8)] = "",
 ) -> Response:
-    """The switch is a checkbox: the browser sends ``on`` when it's checked and nothing when not."""
-    turned_on = on is not None
+    """The switch is a checkbox: the browser sends ``on=on`` when it's checked and nothing when
+    not. Only that value turns it on; anything else is off."""
+    turned_on = on == "on"
     await web_app.set_web_app(db, principal.member, turned_on, now=context.clock())
     return RedirectResponse(f"/admin/web-app?notice={'on' if turned_on else 'off'}", status_code=303)

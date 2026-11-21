@@ -31,7 +31,7 @@ Joining needs no extra scopes for a public channel. A private channel needs `gro
 
 ## The web app
 
-**Admin** > **Web app** has one switch, **Turn on the web app**, off by default ([ADR 0010](adr/0010-optional-web-app.md), spec [6.15](spec.md#615-web-app-and-push)). While it's off, nothing changes. Turning it on or off writes a `household.web_app_updated` audit row.
+**Admin** > **Web app** has one switch, **Turn on the web app**, off by default ([ADR 0010](adr/0010-optional-web-app.md), spec [6.15](spec.md#615-web-app-and-push)). While it's off, members see no change, and Slack delivery is unchanged; Admin gains a **Web app** tab. Turning it on or off writes a `household.web_app_updated` audit row.
 
 While it's on:
 
@@ -39,7 +39,7 @@ While it's on:
 - **Preferences** has **Notifications**: **Slack**, **Web app**, or **Both**. A member linked to Slack starts on **Slack**. A member without a Slack link has only **Web app**, and moves to **Slack** once they're linked, unless they chose otherwise while linked before.
 - Slack skips direct messages, such as reminders, to members on **Web app**, instead of failing to send them. Channel posts still go to the channel.
 
-Push notifications and signing in with a code aren't built yet. Until they are, a member on **Web app** gets nothing outside the web pages, as a member without Slack does today. Turning the switch off keeps each member's choice for when it's on again.
+Push notifications and signing in with a code aren't built yet, and **Admin** > **Web app** says so. Until they are, a member on **Web app** gets no direct messages at all, as a member without Slack gets none today; Dinnerbell logs a warning for each one it skips for a member who isn't linked to Slack. Turning the switch off keeps each member's choice for when it's on again.
 
 ## The Assistant page
 

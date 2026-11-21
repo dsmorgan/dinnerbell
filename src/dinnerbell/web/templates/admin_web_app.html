@@ -5,11 +5,13 @@
 {% include "_admin_tabs.html" %}
 <h1>Web app</h1>
 {% if notice %}<p class="alert ok" role="status">{{ notice }}</p>{% endif %}
-<p class="small muted">The web app lets members add Dinnerbell to their phone's Home Screen and choose, on <strong>Preferences</strong>, whether Dinnerbell reaches them in Slack, the web app, or both. A member without a Slack account can only use the web app. While it's on, Slack skips direct messages to members who chose the web app, instead of failing to send them. Channel posts still go to the channel. Push notifications and signing in with a code come in a later version.</p>
+<p class="small muted">The web app lets members add Dinnerbell to their phone's Home Screen and choose, on <strong>Preferences</strong>, whether Dinnerbell reaches them in Slack, the web app, or both. A member without a Slack account can only use the web app. While it's on, Slack skips direct messages to members who chose the web app, instead of failing to send them. Channel posts still go to the channel.</p>
+{#- Part 1 of #138 only: delete this warning once push notifications and code sign-in exist. -#}
+<p class="alert error" role="note" id="not-built-yet"><strong>Not finished yet.</strong> Push notifications and signing in with a code aren't built yet. Until they are, members on <strong>Web app</strong>, including every member without a Slack account, get no direct messages at all: no reminders, no roles, no hand-offs. Turn this on only to try it out.</p>
 <form method="post" action="/admin/web-app" class="card stack" id="web-app-switch">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <label class="check"><input type="checkbox" name="on" value="on" aria-describedby="web-app-about"{% if on %} checked{% endif %}> Turn on the web app</label>
-  <p class="small muted" id="web-app-about">Off by default. While it's off, nothing changes: Slack sends what it always has, and the app's pages don't exist. Turning it off keeps each member's choice for when it's on again.</p>
+  <p class="small muted" id="web-app-about">Off by default. While it's off, members see no change, Slack delivery is unchanged, and the app's pages don't exist. Turning it off keeps each member's choice for when it's on again.</p>
   <button type="submit" class="button primary">Save</button>
 </form>
 {% if on %}
