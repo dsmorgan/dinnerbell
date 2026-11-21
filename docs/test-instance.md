@@ -19,7 +19,7 @@ Both instances run from your production clone or bundle, as the same user:
 | Slack app and command | Dinnerbell, `/dinnerbell` | Dinnerbell Test, `/dinnerbell-test` |
 | Pangolin authentication | Off | On |
 
-The instances share `compose.yaml`, the Slack workspace, and `DINNERBELL_BIND`. Test doesn't read `compose.override.yaml`. The secret key, both Slack tokens, and the client secret must differ.
+The instances share `compose.yaml`, the Slack workspace, and `DINNERBELL_BIND`. Test doesn't read `compose.override.yaml`; it takes its Anthropic key file from `secrets-test/` instead ([Secrets in files for test](#secrets-in-files-for-test)). The secret key, both Slack tokens, and the client secret must differ.
 
 ## Create the test channel and Slack app
 
@@ -49,6 +49,26 @@ To write it by hand instead, copy `.env.test.example` to `.env.test`, run `chmod
 ### Secrets in files for test
 
 To keep test's secrets in files, follow [Keep secrets in files](setup.md#keep-secrets-in-files) in `secrets-test/`, from `.env.test`, and check them with `deploy/check-secrets --env-file .env.test secrets-test`. Test needs no `-f` options: when any of the four files exists, `deploy/dinnerbell-test` mounts them and requires all four.
+
+To keep test's [Anthropic API key](configuration.md#the-assistant) in a file too, create `secrets-test/DINNERBELL_ANTHROPIC_API_KEY`. The file is optional and works with or without the four: when it exists, `deploy/dinnerbell-test` adds `deploy/compose.test-anthropic.yaml`, which mounts it read-only at `/run/secrets/DINNERBELL_ANTHROPIC_API_KEY`. Test never reads production's `secrets/DINNERBELL_ANTHROPIC_API_KEY`, and doesn't need the `compose.override.yaml` that production uses for its key.
+
+1. Write the key into the file, owner-only and with no trailing newline. Type a space before the command to keep the key out of your shell history.
+
+   ```sh
+   ( umask 077 && mkdir -p secrets-test && printf '%s' '<test key>' >secrets-test/DINNERBELL_ANTHROPIC_API_KEY )
+   ```
+
+2. Give the file to the container's user, UID 10001, with mode 600. With rootful Docker, use `sudo chown 10001:10001` instead of `podman unshare chown`.
+
+   ```sh
+   chmod 600 secrets-test/DINNERBELL_ANTHROPIC_API_KEY
+   podman unshare chown 10001:10001 secrets-test/DINNERBELL_ANTHROPIC_API_KEY
+   ```
+
+3. Delete the `DINNERBELL_ANTHROPIC_API_KEY` line from `.env.test`, or leave it empty. If the line and the file both hold a value, they must match, or test refuses to start.
+4. Recreate test with `deploy/dinnerbell-test down` and `deploy/dinnerbell-test up -d`. Its first line names the file: `secrets from ..., Anthropic key from secrets-test/DINNERBELL_ANTHROPIC_API_KEY`, and the log no longer shows the `DINNERBELL_ANTHROPIC_API_KEY is set in the environment` warning.
+
+To go back to `.env.test`, put the line back, and delete the file.
 
 ## Add the Pangolin resource
 

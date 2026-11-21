@@ -6,6 +6,18 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+### Added
+
+- **The test instance can keep its Anthropic key in a file** (#279). Create `secrets-test/DINNERBELL_ANTHROPIC_API_KEY`, and `deploy/dinnerbell-test` mounts it read-only at `/run/secrets/DINNERBELL_ANTHROPIC_API_KEY` through the new `deploy/compose.test-anthropic.yaml`, with or without test's four other secret files. Its configuration check reads the file too. Without the file, nothing changes. The wrapper never reads production's `secrets/DINNERBELL_ANTHROPIC_API_KEY`, and doesn't compare the key with production's: unlike a Slack token, a shared key splits nothing between the instances. It refuses a directory or a link to nothing in the file's place, and when `.env.test` also sets the key, the two must match. See "Secrets in files for test" in [docs/test-instance.md](docs/test-instance.md#secrets-in-files-for-test). The install bundle ships the new compose file.
+
+### Changed
+
+- **`dinnerbell config check` no longer prints warnings that `serve` logs.** Before, `deploy/dinnerbell-test up` printed a `... is set in the environment` warning in your terminal for each secret in `.env.test`, and the service then logged it again. Now the check prints only errors and `Configuration is valid.`, and the warnings appear only in the service's log. A line in the env file that python-dotenv can't parse still shows a warning, because only the check reads the file that way.
+
+### Upgrade notes
+
+- **Test instance:** nothing to do. To move test's Anthropic key out of `.env.test`, see "Secrets in files for test" in [docs/test-instance.md](docs/test-instance.md#secrets-in-files-for-test).
+
 ## [0.18.1] - 2026-11-21
 
 ### Changed

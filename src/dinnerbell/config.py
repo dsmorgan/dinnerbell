@@ -32,7 +32,8 @@ SECRETS_DIR = Path("/run/secrets")
 # with a warning. Keep in step with compose.secrets.yaml and SECRETS in deploy/dinnerbell-test
 # (scripts/check-compose.sh checks both). The Anthropic key is the exception: compose.secrets.yaml
 # doesn't mount it, because every file it lists must exist, and the key is optional
-# (docs/configuration.md says how to mount it).
+# (docs/configuration.md says how to mount it). For the test instance, deploy/dinnerbell-test adds
+# deploy/compose.test-anthropic.yaml when secrets-test/ holds the file (ANTHROPIC in the script).
 SECRET_FIELDS = ("secret_key", "slack_bot_token", "slack_app_token", "oidc_client_secret", "anthropic_api_key")
 FILES_HELP = 'See "Keep secrets in files" in docs/setup.md.'
 log = logging.getLogger(__name__)

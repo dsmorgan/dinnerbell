@@ -159,7 +159,12 @@ def _environment(values: Mapping[str, str]) -> Iterator[None]:
 def _config_check(env_file: str | None, secrets_dir: str | None) -> int:
     """Validate the settings ``serve`` would read. The deploy/dinnerbell-test wrapper runs this in a
     one-off container before it starts test, with the env file on stdin, so the file is parsed by
-    python-dotenv, as podman-compose 1.2.0 and later parse an ``env_file``."""
+    python-dotenv, as podman-compose 1.2.0 and later parse an ``env_file``.
+
+    It prints errors and "Configuration is valid.", nothing else: ``serve`` logs the warnings, about
+    a secret in the environment, an unknown setting, or a retired flag, on every start. Logging isn't
+    set up here, and a warning logged anyway would reach the terminal through Python's last-resort
+    handler, so the secret warnings are collected and dropped."""
     from dotenv import dotenv_values
 
     values: dict[str, str] = {}
@@ -178,7 +183,7 @@ def _config_check(env_file: str | None, secrets_dir: str | None) -> int:
         values = {name: value for name, value in parsed.items() if value is not None}
     with _environment(values):
         try:
-            load_settings(Path(secrets_dir) if secrets_dir else None)
+            load_settings(Path(secrets_dir) if secrets_dir else None, warnings=[])  # serve logs them
         except ConfigError as exc:
             print(exc, file=sys.stderr)
             return 2

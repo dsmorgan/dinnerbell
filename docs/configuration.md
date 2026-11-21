@@ -114,6 +114,8 @@ secrets:
 
 Then add `-f compose.override.yaml` last to every command that already names `compose.secrets.yaml`.
 
+The test instance doesn't read `compose.override.yaml`. It keeps its own key in `secrets-test/DINNERBELL_ANTHROPIC_API_KEY`, which `deploy/dinnerbell-test` mounts when the file exists: see [Secrets in files for test](test-instance.md#secrets-in-files-for-test).
+
 ## The sign-in rate limit
 
 Dinnerbell allows 20 requests a minute to the sign-in pages under `/auth/` from each client address. A sign-in takes two requests, and a sign-out one. Past the limit, the page says "Too many sign-in attempts. Wait a minute and try again."

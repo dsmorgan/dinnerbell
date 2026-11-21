@@ -20,7 +20,10 @@
 # secrets-test/: when any of them exists, this script adds compose.secrets.yaml and
 # deploy/compose.test-secrets.yaml, which bind-mount them at /run/secrets, and requires all four.
 # There's no switch to forget: the files themselves opt in, so a secret file is never silently
-# ignored, and an install without them runs on the env file alone.
+# ignored, and an install without them runs on the env file alone. The assistant's Anthropic key is
+# optional and separate: when secrets-test/DINNERBELL_ANTHROPIC_API_KEY exists, this script adds
+# deploy/compose.test-anthropic.yaml, which mounts it at /run/secrets, whether or not the four are
+# files. It never reads production's secrets/DINNERBELL_ANTHROPIC_API_KEY.
 #
 # Before any command that may start a container (all but down, stop, logs, and the like), it
 # requires all four of test's secret files when any exists, refuses a secret that test shares with
@@ -43,6 +46,10 @@ IMAGE=ghcr.io/dsmorgan/dinnerbell
 # this name. The names and directories match compose.secrets.yaml and
 # deploy/compose.test-secrets.yaml; scripts/check-compose.sh checks that.
 SECRETS="DINNERBELL_SECRET_KEY DINNERBELL_SLACK_BOT_TOKEN DINNERBELL_SLACK_APP_TOKEN DINNERBELL_OIDC_CLIENT_SECRET"
+# The optional Anthropic key, a file only when it exists, mounted by deploy/compose.test-anthropic.yaml
+# (scripts/check-compose.sh checks the name and path). It isn't compared with production's: a
+# shared Slack token splits events between the instances, but a shared Anthropic key does no harm.
+ANTHROPIC=DINNERBELL_ANTHROPIC_API_KEY
 PRODUCTION_SECRETS=secrets
 TEST_SECRETS=secrets-test
 # SHA-256 of nothing: an empty secret file or an unset variable.
@@ -168,8 +175,8 @@ case "${DINNERBELL_COMPOSE:-podman-compose}" in
     *) engine="${DINNERBELL_ENGINE:-podman}" ;;
 esac
 
-# The configuration check in a one-off container of image $1, with test's secret files mounted
-# when test uses them.
+# The configuration check in a one-off container of image $1, with test's secret files, and its
+# Anthropic key file, mounted when test uses them.
 run_check() {
     image=$1
     set --
@@ -177,6 +184,9 @@ run_check() {
         for name in $SECRETS; do
             set -- "$@" -v "$PWD/$TEST_SECRETS/$name:/run/secrets/$name:ro"
         done
+    fi
+    if [ "$anthropic_file" = yes ]; then
+        set -- "$@" -v "$PWD/$TEST_SECRETS/$ANTHROPIC:/run/secrets/$ANTHROPIC:ro"
     fi
     "$engine" run -i --rm --pull=never --log-driver none --network none --read-only \
         --cap-drop ALL --security-opt no-new-privileges "$@" "$image" config check --env-file -
@@ -229,6 +239,8 @@ network, and names each setting that's missing or invalid, never its value.
 It refuses to run when:
   - .env.test is missing, sets DINNERBELL_INSTANCE_LABEL more than once, or leaves it empty.
   - secrets-test/ holds some of test's four secret files but not all, or one is a directory.
+  - secrets-test/DINNERBELL_ANTHROPIC_API_KEY is a directory or a link to nothing. The file is
+    optional: when it exists, test mounts it, whether or not the other four are files.
   - it can't read .env.test or .env (run it as the user who owns them).
   - test shares DINNERBELL_SECRET_KEY, DINNERBELL_SLACK_BOT_TOKEN, DINNERBELL_SLACK_APP_TOKEN, or
     DINNERBELL_OIDC_CLIENT_SECRET with production, in env files or secret files, or .env.test
@@ -252,7 +264,8 @@ EOF
 esac
 [ ! -L "$0" ] || fail "run the script from your clone (deploy/dinnerbell-test), not through a symlink."
 CDPATH='' cd -- "$(dirname -- "$0")/.."
-for file in compose.yaml compose.secrets.yaml deploy/compose.test.yaml deploy/compose.test-secrets.yaml; do
+for file in compose.yaml compose.secrets.yaml deploy/compose.test.yaml deploy/compose.test-secrets.yaml \
+    deploy/compose.test-anthropic.yaml; do
     [ -f "$file" ] || fail "can't find $file in the clone this script is in."
 done
 
@@ -323,6 +336,17 @@ if [ "$starts" = yes ] && [ "$secret_files" = yes ]; then
     done
 fi
 
+# Test keeps its Anthropic key in a file when secrets-test/ holds one (or a dangling link or a
+# directory there, mistakes named below), with or without the four; otherwise in the env file, if
+# anywhere. Production's file in secrets/ never counts.
+anthropic_file=no
+if [ -e "$TEST_SECRETS/$ANTHROPIC" ] || [ -L "$TEST_SECRETS/$ANTHROPIC" ]; then anthropic_file=yes; fi
+if [ "$starts" = yes ] && [ "$anthropic_file" = yes ]; then
+    [ ! -d "$TEST_SECRETS/$ANTHROPIC" ] || fail "$TEST_SECRETS/$ANTHROPIC is a directory. Remove it and create the file."
+    [ -e "$TEST_SECRETS/$ANTHROPIC" ] ||
+        fail "$TEST_SECRETS/$ANTHROPIC not found: it's a link to a file that doesn't exist. Create the file, or remove the link to keep the key in $DINNERBELL_ENV_FILE. See \"Secrets in files for test\" in docs/test-instance.md."
+fi
+
 # Shared tokens split Slack events between the instances; a shared secret key lets one instance's
 # cookies and CSRF tokens work on the other. awk compares the values itself, so they never reach
 # the shell, a command line, or a message. An error counts as shared.
@@ -363,6 +387,7 @@ $print
 fi
 
 if [ "$secret_files" = yes ]; then secrets_from="files in $TEST_SECRETS/"; else secrets_from="$DINNERBELL_ENV_FILE"; fi
+[ "$anthropic_file" = no ] || secrets_from="$secrets_from, Anthropic key from $TEST_SECRETS/$ANTHROPIC"
 echo "dinnerbell-test: project $PROJECT, volume $VOLUME, env file $DINNERBELL_ENV_FILE, secrets from $secrets_from, image tag $DINNERBELL_TAG, port $DINNERBELL_PORT" >&2
 
 if [ "$starts" = yes ]; then
@@ -385,7 +410,8 @@ if [ "$starts" = yes ]; then
         printf '%s\n' "$problems" | grep -q "^dinnerbell: error: argument COMMAND: invalid choice: 'config'"; then
         echo "dinnerbell-test: $image predates dinnerbell config check; starting without it." >&2
     elif [ "$status" -eq 0 ]; then
-        # Warnings, such as a line python-dotenv can't parse.
+        # python-dotenv's warnings, such as a line it can't parse. The check drops Dinnerbell's own,
+        # such as a secret in the env file: serve logs those.
         [ -z "$problems" ] || printf '%s\n' "$problems" >&2
     else
         printf '%s\n' "$problems" >&2
@@ -395,6 +421,7 @@ if [ "$starts" = yes ]; then
     fi
 fi
 
+if [ "$anthropic_file" = yes ]; then set -- -f deploy/compose.test-anthropic.yaml "$@"; fi
 if [ "$secret_files" = yes ]; then
     set -- -f compose.yaml -f compose.secrets.yaml -f deploy/compose.test.yaml -f deploy/compose.test-secrets.yaml "$@"
 else
