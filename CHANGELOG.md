@@ -10,7 +10,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ### Changed
 
-- **joserfc 1.8.0 checks sign-in tokens more strictly.** It rejects an ID token whose `exp` equals the current time, and `exp`, `nbf`, or `iat` values of NaN, Infinity, `true`, or `false`. Dinnerbell already allows 60 seconds of clock difference, so a valid sign-in isn't affected. fastapi 0.162.2 and pydantic 2.14.3 are patch releases.
+- **joserfc 1.8.0 checks sign-in tokens more strictly.** It rejects an ID token that expires exactly at the end of Dinnerbell's 60-second clock allowance, and `exp`, `nbf`, or `iat` values of NaN, Infinity, `true`, or `false`. A valid ID token expires in the future and has numeric times, so sign-in isn't affected. fastapi 0.162.2 and pydantic 2.14.3 are patch releases.
 - **The image uses uv 0.13.8 and a newer Python 3.12 slim build.** The image still installs Debian's fixed zlib (#236): the new base doesn't have it yet.
 - **The setup docs suggest a channel named apart from the bot**, such as `#dinnerbell-channel`, so the channel and `@Dinnerbell` don't look alike in Slack. Dinnerbell finds the channel by its ID, so you can rename an existing channel in Slack without changing `.env` or restarting.
 
