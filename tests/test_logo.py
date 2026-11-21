@@ -201,9 +201,13 @@ def png_rgba(path: Path) -> tuple[int, int, bytes]:
     [
         (STATIC / "favicon-32.png", 32, False),
         (STATIC / "apple-touch-icon.png", 180, True),
+        (STATIC / "icon-192.png", 192, True),  # the web app's manifest (#138)
+        (STATIC / "icon-512.png", 512, True),
         (ROOT / "deploy" / "slack-app-icon-1024.png", 1024, True),
         (STATIC / "favicon-test-32.png", 32, False),
         (STATIC / "apple-touch-icon-test.png", 180, True),
+        (STATIC / "icon-test-192.png", 192, True),
+        (STATIC / "icon-test-512.png", 512, True),
         (ROOT / "deploy" / "slack-app-icon-test-1024.png", 1024, True),
     ],
     ids=lambda value: value.name if isinstance(value, Path) else str(value),
@@ -229,6 +233,10 @@ def test_logo_files_are_served_as_images(client: TestClient) -> None:
         ("logo-test-mark.svg", "image/svg+xml"),
         ("favicon-test-32.png", "image/png"),
         ("apple-touch-icon-test.png", "image/png"),
+        ("icon-192.png", "image/png"),
+        ("icon-512.png", "image/png"),
+        ("icon-test-192.png", "image/png"),
+        ("icon-test-512.png", "image/png"),
     ]:
         response = client.get(f"/static/{name}")
         assert response.status_code == 200, name

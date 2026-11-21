@@ -10,6 +10,10 @@ Delivery is in outbox order per event, with two kinds of holding back:
 - Updates to one message never overtake each other: a newer update waits while an older one is
   in a channel's hands, and an older one is closed as superseded, unsent, once a newer exists.
 
+While a household has the web app on (spec 6.15), a direct message to a member on **Web app**
+is closed as skipped, unsent, before the channel sees it: skipped, not failed, so it never
+counts in ``/healthz``'s failures. With the switch off, nothing is skipped.
+
 A row is claimed and committed before the channel is called, and no transaction is held open
 during the call, so two drainers never deliver the same row and a slow channel never blocks
 writers.
@@ -26,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from dinnerbell.db.events import EventRepository
 from dinnerbell.db.outbox import OutboxEntry, OutboxRepository
+from dinnerbell.db.repositories import MemberRepository
 from dinnerbell.domain.events import EventState
 from dinnerbell.domain.notifications import (
     CALL_OFF_SUPERSEDES,
@@ -49,6 +54,7 @@ from dinnerbell.domain.notifications import (
     ScheduleChanged,
     from_payload,
 )
+from dinnerbell.services import web_app
 from dinnerbell.services.clock import Clock
 
 log = logging.getLogger(__name__)
@@ -74,6 +80,7 @@ MIN_HOLD = timedelta(seconds=5)
 """The shortest a held row waits, even if the channel asks for less."""
 SUPERSEDED = "superseded by a newer update"
 TAKEN_BACK = "superseded: every badge in it was taken back"
+SKIPPED_WEB_APP = "skipped: the member gets the web app, not Slack"
 
 
 async def picks_posts(db: AsyncSession, household_id: int, events: list[EventInfo]) -> dict[int, MessageRef]:
@@ -124,6 +131,8 @@ class DrainResult:
     failed: int = 0
     superseded: int = 0
     held: int = 0
+    skipped: int = 0
+    """Direct messages closed unsent because their member is on the web app (spec 6.15)."""
     stopped: bool = False
     """The channel was unavailable, so the pass ended early."""
 
@@ -137,6 +146,7 @@ async def drain(
     async with sessionmaker() as db:
         repo = OutboxRepository(db)
         blocked: set[int] = set()
+        switches: dict[int, bool] = {}  # each household's web app switch, read once a pass
         for entry in await repo.due(limit, clock()):
             if not await _may_send(repo, entry, blocked, clock()):
                 continue
@@ -148,7 +158,7 @@ async def drain(
             # attempt; a correction may still trim a badge post, which a retry reads anew.
             current = await repo.get(entry.id) if claimed else None
             await db.commit()
-            settled = current is not None and await _deliver(db, channel, current, token, clock, result)
+            settled = current is not None and await _deliver(db, channel, current, token, clock, result, switches)
             if result.stopped:
                 break
             if not settled and entry.creates_message and entry.event_id is not None:
@@ -171,9 +181,15 @@ async def _may_send(repo: OutboxRepository, entry: OutboxEntry, blocked: set[int
 
 
 async def _deliver(
-    db: AsyncSession, channel: Channel, entry: OutboxEntry, token: str, clock: Clock, result: DrainResult
+    db: AsyncSession,
+    channel: Channel,
+    entry: OutboxEntry,
+    token: str,
+    clock: Clock,
+    result: DrainResult,
+    switches: dict[int, bool],
 ) -> bool:
-    """Deliver one claimed row. True once it's settled: delivered, superseded, or given up."""
+    """Deliver one claimed row. True once it's settled: delivered, superseded, skipped, or given up."""
     repo = OutboxRepository(db)
     try:
         notification = from_payload(entry.kind, entry.payload)
@@ -197,6 +213,14 @@ async def _deliver(
         await db.commit()
         result.superseded += 1
         log.info("notification closed", extra=_about(entry, note=overtaken))
+        return True
+    if await _skipped(db, entry, notification, switches):
+        await repo.delivered(entry.id, token, now=clock(), ref=None, note=SKIPPED_WEB_APP)
+        await db.commit()
+        result.skipped += 1
+        log.info(
+            "notification closed", extra=_about(entry, note=SKIPPED_WEB_APP, recipient_id=notification.recipient_id)
+        )
         return True
     if clock() - entry.updated_at > MAX_AGE:
         log.error("notification expired", extra=_about(entry, attempts=entry.attempts))
@@ -249,6 +273,23 @@ def _about(entry: OutboxEntry, **more: object) -> dict[str, object]:
     message's ``channel_id`` and ``message_ts`` (Slack's ``ts``) match the line to the message."""
     fields = {"outbox_id": entry.id, "event_id": entry.event_id, "kind": entry.kind, **more}
     return {key: value for key, value in fields.items() if value is not None}
+
+
+async def _skipped(db: AsyncSession, entry: OutboxEntry, notification: Notification, switches: dict[int, bool]) -> bool:
+    """Whether ``notification`` is a direct message to skip because its member is on **Web app**
+    while their household has the web app on (spec 6.15). Channel posts and updates are never
+    skipped. ``switches`` caches each household's switch for the pass, so a pass with the
+    switch off reads one setting and nothing else."""
+    recipient = notification.recipient_id
+    if recipient is None or notification.is_update:
+        return False
+    household_id = entry.household_id
+    if household_id not in switches:
+        switches[household_id] = await web_app.web_app_enabled(db, household_id)
+    if not switches[household_id]:
+        return False
+    member = await MemberRepository(db).get(household_id, recipient)
+    return member is not None and web_app.slack_skips(member)
 
 
 async def _overtaken(db: AsyncSession, notification: Notification) -> str | None:

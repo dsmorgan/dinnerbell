@@ -15,6 +15,7 @@ from dinnerbell.domain.members import ColorMode
 from dinnerbell.services.assistant.runtime import AssistantConfig, available
 from dinnerbell.services.household import current_household
 from dinnerbell.services.stuck import StuckCall, for_admin
+from dinnerbell.services.web_app import web_app_enabled_for
 from dinnerbell.web import filters
 from dinnerbell.web.context import TEMPLATES, app_context
 
@@ -76,6 +77,21 @@ async def _assistant_link(request: Request) -> bool:
         return await available(db, config, principal.member)
 
 
+async def _web_app(request: Request) -> bool:
+    """Whether the household has the web app on (spec 6.15), so the page links the manifest and
+    the **Get the app** page. Only a whole page asks. Signed out, it's the install's household,
+    as the manifest's own route reads it. If the database can't say, it's off."""
+    if not _whole_page(request):
+        return False
+    principal = getattr(request.state, "principal", None)
+    try:
+        async with app_context(request).sessionmaker() as db:
+            return await web_app_enabled_for(db, principal.household.id if principal is not None else None)
+    except Exception:
+        log.warning("could not read the web app switch", exc_info=True)
+        return False
+
+
 def _fun_scene(request: Request) -> Scene | None:
     """The time of day and season for Dinnerbone's Den (#153), or None when the viewer has fun
     mode off or isn't signed in: then the page carries none of it and loads no fun assets."""
@@ -113,6 +129,8 @@ async def render(
         "assistant_admin": AssistantConfig.from_settings(settings).configured,
         # The member's Assistant page shows only when the assistant answers them (ADR 0009).
         "assistant_link": await _assistant_link(request),
+        # The manifest link and Get the app show only with Admin's Web app switch on (spec 6.15).
+        "web_app": await _web_app(request),
     }
     return TEMPLATES.TemplateResponse(request, template, base | (context or {}), status_code=status_code)
 

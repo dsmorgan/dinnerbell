@@ -47,10 +47,15 @@ render() {
 render "$static/logo-mark.svg" 32 "$static/favicon-32.png"
 # iOS fills transparency with black, so Home Screen and Slack icons get an opaque background.
 render "$static/logo.svg" 180 "$static/apple-touch-icon.png" --background "$BACKGROUND"
+# The web app's manifest icons (spec 6.15), opaque for the same reason.
+render "$static/logo.svg" 192 "$static/icon-192.png" --background "$BACKGROUND"
+render "$static/logo.svg" 512 "$static/icon-512.png" --background "$BACKGROUND"
 # Slack accepts 512 to 2000 px. Upload it in the production Slack app; see docs/setup.md.
 render "$static/logo.svg" 1024 deploy/slack-app-icon-1024.png --background "$BACKGROUND"
 
 # The test instance's mascot, shown when DINNERBELL_INSTANCE_LABEL is set.
 render "$static/logo-test-mark.svg" 32 "$static/favicon-test-32.png"
 render "$static/logo-test.svg" 180 "$static/apple-touch-icon-test.png" --background "$TEST_BACKGROUND"
+render "$static/logo-test.svg" 192 "$static/icon-test-192.png" --background "$TEST_BACKGROUND"
+render "$static/logo-test.svg" 512 "$static/icon-test-512.png" --background "$TEST_BACKGROUND"
 render "$static/logo-test.svg" 1024 deploy/slack-app-icon-test-1024.png --background "$TEST_BACKGROUND"

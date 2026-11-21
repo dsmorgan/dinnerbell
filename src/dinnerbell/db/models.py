@@ -69,6 +69,7 @@ class MemberRow(Base):
         UniqueConstraint("household_id", "slack_user_id"),
         CheckConstraint("role IN ('admin', 'member', 'guest')", name="role"),
         CheckConstraint("color_mode IN ('auto', 'light', 'dark')", name="color_mode"),
+        CheckConstraint("notify_via IN ('slack', 'web', 'both')", name="notify_via"),
         CheckConstraint(
             "(role = 'guest' AND email IS NULL) OR (role <> 'guest' AND email IS NOT NULL AND email <> '')",
             name="email",
@@ -106,6 +107,9 @@ class MemberRow(Base):
     deleting an award must not touch the member."""
     color_mode: Mapped[str] = mapped_column(String(5), default="auto", server_default=text("'auto'"))
     """Light or dark on the web (#231): ``auto`` (follow the device), ``light``, or ``dark``."""
+    notify_via: Mapped[str | None] = mapped_column(String(5))
+    """Slack, the web app, or both (spec 6.15): ``slack``, ``web``, or ``both``, as the member
+    chose, or null until they choose. ``Member.delivery`` computes the default from the Slack link."""
     away_first: Mapped[date | None] = mapped_column(Date)
     away_last: Mapped[date | None] = mapped_column(Date)
     """The member's away window (#196, FR-63): both days or neither, both included."""

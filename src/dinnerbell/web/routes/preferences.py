@@ -26,9 +26,18 @@ from starlette.responses import Response
 from dinnerbell.domain import labels
 from dinnerbell.domain.catalog import ItemKind, tags_by_kind
 from dinnerbell.domain.events import EventRuleViolation
-from dinnerbell.domain.members import Capabilities, ColorMode, InvalidMemberInput, Member
+from dinnerbell.domain.members import (
+    NOTIFY_VIA_LABELS,
+    Capabilities,
+    ColorMode,
+    InvalidMemberInput,
+    Member,
+    MemberRuleViolation,
+    NotifyVia,
+    notify_choices,
+)
 from dinnerbell.domain.preferences import LEVEL_LABELS, LEVELS, NEUTRAL, InvalidPreference, Stance, TargetType
-from dinnerbell.services import activity, away, guests
+from dinnerbell.services import activity, away, guests, web_app
 from dinnerbell.services import preferences as preference_service
 from dinnerbell.services.appearance import set_member_color_mode
 from dinnerbell.services.errors import NotFound
@@ -46,6 +55,7 @@ admin_router = APIRouter(prefix="/admin/members/{member_id}/preferences")
 Checkbox = Annotated[str | None, Form()]
 Needs = Annotated[list[str] | None, Form()]
 Day = Annotated[str, Form(max_length=10)]
+Via = Annotated[str, Form(max_length=5)]
 NOTICES = {
     "settings": "Settings saved.",
     "saved": "Preference saved.",
@@ -114,6 +124,13 @@ class Whose:
         else:
             await away.clear_my_away(db, actor, now=now)
 
+    async def set_notify_via(self, db: AsyncSession, context: AppContext, choice: NotifyVia) -> None:
+        actor, now = self.principal.member, context.clock()
+        if self.admin:
+            await web_app.set_member_notify_via(db, actor, self.member.id, choice, now=now)
+        else:
+            await web_app.set_my_notify_via(db, actor, choice, now=now)
+
     async def save_settings(
         self, db: AsyncSession, context: AppContext, settings: preference_service.MySettings
     ) -> None:
@@ -166,6 +183,10 @@ async def _page(
         "notice": NOTICES.get(notice),
         "fun_saved": notice == "fun",
         "color_saved": notice == "color",
+        "notify_action": f"{base}/notify",
+        "notify_member": whose.member,
+        "notify_choices": [(c.value, NOTIFY_VIA_LABELS[c]) for c in notify_choices(whose.member)],
+        "notify_saved": notice == "notify",
         "error": error,
         "dietary_tags": await guests.dietary_tags(db, principal.member),
         "today": today,
@@ -269,6 +290,23 @@ async def _save_away(
     return local_redirect("/preferences?notice=away#away")
 
 
+async def _save_notify_via(request: Request, whose: Whose, context: AppContext, db: AsyncSession, via: str) -> Response:
+    """Slack, the web app, or both (spec 6.15). Answers 404 while the switch is off, as the card
+    isn't there; a choice the member can't have, such as Slack without a Slack user, is refused."""
+    await web_app.require_web_app(db, whose.principal.household.id)
+    chosen = choice(NotifyVia, via)
+    try:
+        if chosen is None:
+            raise MemberRuleViolation("Choose Slack, Web app, or Both.")
+        await whose.set_notify_via(db, context, chosen)
+    except MemberRuleViolation as exc:
+        activity.refused(exc, str(exc), whose.principal.member, path=request.url.path)
+        return await _page(request, whose, context, db, error=str(exc), status_code=400)
+    if whose.admin:
+        return local_redirect("/admin/members/{}/preferences?notice=notify#notify-via", whose.member.id)
+    return local_redirect("/preferences?notice=notify#notify-via")
+
+
 # The signed-in member's own -------------------------------------------------------------------
 
 
@@ -306,6 +344,13 @@ async def save_away(
 async def clear_away(principal: CSRFChecked, context: Context, db: Database) -> Response:
     await _own(principal).clear_away(db, context)
     return RedirectResponse("/preferences?notice=back#away", status_code=303)
+
+
+@router.post("/notify")
+async def save_notify_via(
+    request: Request, principal: CSRFChecked, context: Context, db: Database, via: Via = ""
+) -> Response:
+    return await _save_notify_via(request, _own(principal), context, db, via)
 
 
 @router.post("/stance")
@@ -384,6 +429,14 @@ async def save_member_stance(
 ) -> Response:
     whose = await _theirs(principal, db, member_id)
     return await _save_stance(request, whose, context, db, target, level)
+
+
+@admin_router.post("/notify")
+async def save_member_notify_via(
+    request: Request, principal: AdminCSRFChecked, context: Context, db: Database, member_id: RowId, via: Via = ""
+) -> Response:
+    whose = await _theirs(principal, db, member_id)
+    return await _save_notify_via(request, whose, context, db, via)
 
 
 @admin_router.post("/needs")

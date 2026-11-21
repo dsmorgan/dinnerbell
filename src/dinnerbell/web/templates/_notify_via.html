@@ -1,0 +1,27 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{#- Slack, the web app, or both (spec 6.15), on Preferences only while Admin's Web app switch is
+    on. A member without a Slack user has only the web app, so there's nothing to choose. An
+    admin editing a member's preferences (#181) passes notify_action and notify_member. -#}
+{% set notify_now = notify_member.delivery.value %}
+<section class="card stack" id="notify-via" aria-labelledby="notify-via-heading">
+  <h2 id="notify-via-heading">Notifications</h2>
+  {% if notify_saved %}<p class="alert ok" role="status">Saved.</p>{% endif %}
+  {% if notify_choices|length > 1 %}
+  <form method="post" action="{{ notify_action }}" class="stack">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <fieldset class="field compact" aria-describedby="notify-via-about">
+      <legend>Reach me in</legend>
+      <p class="small muted" id="notify-via-about">On <strong>Web app</strong>, Dinnerbell sends no Slack direct messages; the household's channel still gets its posts. <strong>Both</strong> keeps Slack too.</p>
+      <div class="segments three">
+        {% for value, label in notify_choices %}
+        <label class="segment"><input type="radio" name="via" value="{{ value }}"{% if notify_now == value %} checked{% endif %}><span>{{ label }}</span></label>
+        {% endfor %}
+      </div>
+    </fieldset>
+    <button type="submit" class="button">Save</button>
+  </form>
+  {% else %}
+  <p class="small">Web app. Without a linked Slack account, Dinnerbell can reach {{ "them" if editing else "you" }} only in the web app.</p>
+  {% endif %}
+  <p class="small"><a href="/app">Get the app</a></p>
+</section>

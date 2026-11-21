@@ -47,6 +47,7 @@ from dinnerbell.web.routes import (
     preferences,
     schedule,
     stats,
+    web_app,
 )
 
 log = logging.getLogger(__name__)
@@ -101,6 +102,8 @@ def build_app(settings: Settings, lifespan: Lifespan) -> FastAPI:
         schedule.router,
         guest.router,
         stats.router,
+        web_app.router,
+        web_app.admin_router,
     ):
         app.include_router(router)
     _add_exception_handlers(app)

@@ -7,5 +7,6 @@
   <p class="lede">Who's eating, what we're eating, and who's getting it.</p>
   <a class="button primary block" href="/auth/login">{% if provider_is_slack %}Sign in with Slack{% else %}Sign in{% endif %}</a>
   <p class="muted small">Only people the household admin has invited can sign in.</p>
+  {% if web_app %}<p class="small"><a href="/app">Get the app</a></p>{% endif %}
 </section>
 {% endblock %}

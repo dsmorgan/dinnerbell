@@ -40,6 +40,20 @@ class ColorMode(StrEnum):
     DARK = "dark"
 
 
+class NotifyVia(StrEnum):
+    """Where a member gets what Dinnerbell sends them while the household's web app is on
+    (FR-53, spec 6.15): Slack, pushes from the web app, or both. ``Member.delivery`` is the one
+    that counts."""
+
+    SLACK = "slack"
+    WEB = "web"
+    BOTH = "both"
+
+
+NOTIFY_VIA_LABELS = {NotifyVia.SLACK: "Slack", NotifyVia.WEB: "Web app", NotifyVia.BOTH: "Both"}
+SLACK_LESS_CHOICE = "Without a Slack account, Dinnerbell can reach you only in the web app."
+
+
 class MemberStatus(StrEnum):
     INVITED = "invited"
     ACTIVE = "active"
@@ -92,6 +106,10 @@ class Member:
     """The newest badge award whose backflip the den has shown them (#153): later ones flip once."""
     color_mode: ColorMode = ColorMode.AUTO
     """Light or dark on the web (#231). Auto, the default, follows their device."""
+    notify_via: NotifyVia | None = None
+    """What they chose on Preferences while the web app was on (spec 6.15), or None if they
+    never chose. ``delivery`` is what counts: a member without a Slack user gets the web app
+    whatever is stored here, and gets this back once they're linked."""
     away: Away | None = None
     """Their away window (#196), as stored: it may have ended already. ``away_now`` is the one
     that counts."""
@@ -103,6 +121,19 @@ class Member:
     def away_on(self, day: date) -> bool:
         """Whether their window covers ``day``, so that day's calls answer them Out (FR-63)."""
         return self.away is not None and self.away.covers(day)
+
+    @property
+    def delivery(self) -> NotifyVia:
+        """Where they get notifications while the web app is on (spec 6.15). A member with a
+        Slack user gets their choice, Slack until they make one. A member without one gets the
+        web app, the only choice they have, so linking them to Slack later moves them to Slack
+        unless they chose otherwise while linked before. A guest stays on Slack: guests never
+        get pushes, and what Slack sends them doesn't change."""
+        if self.is_guest:
+            return NotifyVia.SLACK
+        if self.slack_user_id is None:
+            return NotifyVia.WEB
+        return self.notify_via or NotifyVia.SLACK
 
     @property
     def is_admin(self) -> bool:
@@ -214,3 +245,21 @@ def check_email_change(target: Member, new_email: str | None) -> None:
             "This member has already signed in, so their email can't change. "
             "Their sign-in is tied to their account, not their email."
         )
+
+
+def notify_choices(member: Member) -> tuple[NotifyVia, ...]:
+    """What ``member`` may choose on Preferences while the web app is on (spec 6.15): all three
+    with a Slack user, only the web app without one, and nothing for a guest."""
+    if member.is_guest:
+        return ()
+    if member.slack_user_id is None:
+        return (NotifyVia.WEB,)
+    return (NotifyVia.SLACK, NotifyVia.WEB, NotifyVia.BOTH)
+
+
+def check_notify_via(member: Member, choice: NotifyVia) -> None:
+    """Raise MemberRuleViolation unless ``member`` may choose ``choice``."""
+    if member.is_guest:
+        raise MemberRuleViolation("Guests get what Dinnerbell sends them in Slack.")
+    if choice not in notify_choices(member):
+        raise MemberRuleViolation(SLACK_LESS_CHOICE)
