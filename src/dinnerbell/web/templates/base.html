@@ -16,7 +16,9 @@
   <meta name="theme-color" content="#faf6f0" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#1c1714" media="(prefers-color-scheme: dark)">
   {%- endif %}
-  <meta name="apple-mobile-web-app-title" content="Dinnerbell">
+  {#- The installed app's name on a labeled instance, such as "Dinnerbell Test", as its manifest
+      says, only while the web app is on (spec 6.15). #}
+  <meta name="apple-mobile-web-app-title" content="Dinnerbell{% if web_app and instance_label %} {{ instance_label }}{% endif %}">
   {#- No eval, no inline styles, no script tags in swapped content, no history snapshots in
       localStorage. A request that takes over 15 seconds gives up, so app.js can say so. A swapped
       button with the same id starts from its old aria-current and aria-pressed, then settles to

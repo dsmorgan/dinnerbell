@@ -10,6 +10,8 @@
 
   var FALLBACK_TITLE = "Dinnerbell";
   var FALLBACK_BODY = "Open Dinnerbell to see what's new.";
+  // A labeled instance, such as test, is served this with its test mascot's icon instead.
+  var ICON = "/static/icon-192.png";
 
   self.addEventListener("install", function () {
     self.skipWaiting();
@@ -51,7 +53,7 @@
     var title = typeof note.title === "string" && note.title ? note.title : FALLBACK_TITLE;
     var options = {
       body: typeof note.body === "string" ? note.body : FALLBACK_BODY,
-      icon: "/static/icon-192.png",
+      icon: ICON,
       data: { url: samePage(typeof note.navigate === "string" ? note.navigate : "/") }
     };
     if (typeof note.tag === "string" && note.tag) {

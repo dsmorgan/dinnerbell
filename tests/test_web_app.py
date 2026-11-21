@@ -81,12 +81,21 @@ def test_off_by_default_nothing_exists(admin: TestClient, sam: int, migrated: Se
     assert MANIFEST_LINK not in home and 'href="/app"' not in home
 
 
-def test_off_pages_are_exactly_as_before(admin: TestClient) -> None:
-    """Turning it on and off again leaves every page as it was."""
-    before = {path: admin.get(path).text for path in ("/", "/preferences", "/catalog")}
+OFF_PAGES = ("/", "/preferences", "/catalog", "/history", "/stats", "/schedule", "/admin/members", "/admin/schedule")
+
+
+def test_off_pages_are_exactly_as_before(admin: TestClient, sam: int) -> None:
+    """Turning it on and off again leaves every page as it was, an admin's own included. (Only
+    Admin's tabs differ from a release without the web app: they list **Web app**.)"""
+    paths = (*OFF_PAGES, f"/admin/members/{sam}/preferences")
+    before = {path: admin.get(path).text for path in paths}
+    signed_out = TestClient(admin.app, base_url=BASE_URL, headers={"Origin": BASE_URL}, follow_redirects=False)
+    home = signed_out.get("/").text
     switch(admin, True)
+    assert {path: admin.get(path).text for path in paths} != before
     switch(admin, False)
-    assert {path: admin.get(path).text for path in before} == before
+    assert {path: admin.get(path).text for path in paths} == before
+    assert signed_out.get("/").text == home
 
 
 # Admin > Web app ---------------------------------------------------------------------------------
@@ -99,6 +108,9 @@ def test_the_admin_turns_it_on_and_off_and_each_change_is_audited(admin: TestCli
     assert settings_page.status_code == 200
     assert 'name="on" value="on" aria-describedby="web-app-about">' in settings_page.text  # unchecked
     assert inline_code(settings_page.text)[1] == []
+    warning = page(settings_page).split('id="not-built-yet">', 1)[1].split("</p>", 1)[0]
+    assert "Push notifications and signing in with a code aren't built yet." in warning
+    assert "get no direct messages at all" in warning
     switch(admin, True)
     on = page(admin.get("/admin/web-app?notice=on"))
     assert "The web app is on." in on and 'value="on" aria-describedby="web-app-about" checked>' in on
@@ -163,10 +175,20 @@ def test_the_manifest_names_dinnerbell_and_its_icons(admin: TestClient) -> None:
 
 
 @pytest.mark.parametrize("settings_overrides", [{"instance_label": "Test"}])
-def test_a_labeled_instance_gets_the_test_mascots_icons(admin: TestClient) -> None:
+def test_a_labeled_instance_has_its_label_and_the_test_mascot(admin: TestClient) -> None:
+    """On a phone with both installed, test and production differ by name and icon."""
+    title = '<meta name="apple-mobile-web-app-title" content="Dinnerbell">'
+    assert title in admin.get("/").text  # off: as before
     switch(admin, True)
-    icons = json.loads(admin.get("/manifest.webmanifest").text)["icons"]
-    assert [icon["src"].split("?")[0] for icon in icons] == ["/static/icon-test-192.png", "/static/icon-test-512.png"]
+    body = json.loads(admin.get("/manifest.webmanifest").text)
+    assert (body["name"], body["short_name"]) == ("Dinnerbell Test", "Dinnerbell Test")
+    assert [icon["src"].split("?")[0] for icon in body["icons"]] == [
+        "/static/icon-test-192.png",
+        "/static/icon-test-512.png",
+    ]
+    assert '<meta name="apple-mobile-web-app-title" content="Dinnerbell Test">' in admin.get("/").text
+    worker = admin.get("/sw.js").text
+    assert 'var ICON = "/static/icon-test-192.png";' in worker and "/static/icon-192.png" not in worker
 
 
 def test_signed_out_the_app_follows_the_installs_household(admin: TestClient) -> None:
@@ -199,6 +221,7 @@ def test_the_service_worker_has_its_own_policy_and_caches_nothing(admin: TestCli
     assert "service-worker-allowed" not in response.headers  # its scope is the root it's served from
     worker = response.text
     assert worker == WORKER_FILE.read_text()
+    assert 'var ICON = "/static/icon-192.png";' in worker
     assert worker.splitlines()[0] == "// SPDX-License-Identifier: AGPL-3.0-or-later"
     for handler in ('addEventListener("push"', 'addEventListener("notificationclick"', "openWindow"):
         assert handler in worker
@@ -328,3 +351,11 @@ def test_a_page_renders_without_the_app_when_the_switch_cant_be_read(
     response = admin.get("/catalog")
     assert response.status_code == 200 and MANIFEST_LINK not in response.text
     assert "could not read the web app switch" in caplog.text
+
+
+@pytest.mark.parametrize("value", ["", "yes", "1", "true", "On", "off"])
+def test_only_the_checkboxs_own_value_turns_it_on(admin: TestClient, migrated: Settings, value: str) -> None:
+    response = submit(admin, "/admin/web-app", {"on": value})
+    assert (response.status_code, response.headers["location"]) == (303, "/admin/web-app?notice=off")
+    assert admin.get("/app").status_code == 404
+    assert audits(migrated, "household.web_app_updated") == []
