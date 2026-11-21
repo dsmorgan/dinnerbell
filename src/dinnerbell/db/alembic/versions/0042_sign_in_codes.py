@@ -2,8 +2,10 @@
 """Sign in with a code, and Devices (#138, spec 6.15): ``sign_in_code``, and each session's
 ``public_id`` and ``device``.
 
-``sign_in_code`` holds one row per member: the SHA-256 hash of their newest code, who made it,
-when it expires, and when it was used. It starts empty.
+``sign_in_code`` holds one row per member: the keyed hash (HMAC-SHA256) of their newest code,
+who made it, when it expires, and when it was used. It starts empty. ``member.code_signed_in_at``,
+null for everyone, records when a member last signed in with a code, so one who signs in only
+that way shows as active.
 
 Every session gets a ``public_id``, the random name a page uses for it, such as to sign it out,
 which is never the token's hash; and a ``device`` label from the browser. A session that exists
@@ -12,7 +14,8 @@ asked. Nobody is signed out. SQLite can't add a NOT NULL column without a defaul
 columns are added empty, filled, and then made NOT NULL and unique in one batch rebuild of
 ``session``.
 
-The downgrade drops the table and both columns. Codes not yet used stop working; sessions stay.
+The downgrade drops the table and the three columns. Codes not yet used stop working; sessions
+stay; a member who signed in only with a code shows as invited again.
 
 Revision ID: 0042_sign_in_codes
 Revises: 0041_notify_via
@@ -62,6 +65,7 @@ def upgrade() -> None:
         sa.UniqueConstraint("code_hash", name=op.f("uq_sign_in_code_code_hash")),
         sa.UniqueConstraint("member_id", name=op.f("uq_sign_in_code_member_id")),
     )
+    op.add_column("member", sa.Column("code_signed_in_at", sa.DateTime(), nullable=True))
     op.add_column("session", sa.Column("public_id", sa.String(length=32), nullable=True))
     op.add_column("session", sa.Column("device", sa.String(length=40), nullable=True))
     connection = op.get_bind()
@@ -82,3 +86,5 @@ def downgrade() -> None:
         batch_op.drop_column("device")
         batch_op.drop_column("public_id")
     op.drop_table("sign_in_code")
+    with op.batch_alter_table("member") as batch_op:
+        batch_op.drop_column("code_signed_in_at")

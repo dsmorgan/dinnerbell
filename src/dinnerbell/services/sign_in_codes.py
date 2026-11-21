@@ -4,7 +4,10 @@
 An admin makes a code for any active member, admins included, on Admin > Members; a signed-in
 member makes one for themselves on Preferences. A new code replaces the member's old one,
 whoever made it. Guests and deactivated members never get one. The code is shown once and
-stored only as its SHA-256 hash; it never reaches a log, an audit row, or a URL.
+stored only as a keyed hash (HMAC-SHA256 with a key derived from ``DINNERBELL_SECRET_KEY`` for
+this purpose alone), so a copy of the database without the secret key can't test guesses at
+it. It never reaches a log, an audit row, or a URL. Signing a member out everywhere, or
+deactivating them, deletes their code.
 
 Redeeming has two steps on ``/auth/code``. ``peek`` finds whose code it is without using it, so
 the page can say "You're signing in as NAME". ``redeem`` uses it in one conditional UPDATE, so
@@ -47,9 +50,12 @@ NO_GUESTS = "Guests can't sign in with a code."
 REACTIVATE_FIRST = "Reactivate them first. A deactivated member can't sign in."
 
 
-def hash_code(code: str) -> str:
-    """The SHA-256 hex digest the database keeps in place of a normalized code."""
-    return hashlib.sha256(code.encode()).hexdigest()
+def hash_code(key: bytes, code: str) -> str:
+    """The HMAC-SHA256 hex digest the database keeps in place of a normalized code. ``key`` is
+    the install's sign-in code key (``derive_key(secret, "sign-in-code")``, made where the app
+    is put together): without it, a hash in a database copy can't be checked against a guess,
+    so the 49 bits of a code can't be searched offline."""
+    return hmac.new(key, code.encode(), hashlib.sha256).hexdigest()
 
 
 def new_code() -> str:
@@ -73,14 +79,16 @@ class CodeSignIn:
     token: str
 
 
-async def create_my_code(db: AsyncSession, actor: Member, *, now: datetime) -> IssuedCode:
+async def create_my_code(db: AsyncSession, actor: Member, *, key: bytes, now: datetime) -> IssuedCode:
     """A signed-in member's own code, on Preferences."""
     require_member(actor)
     await require_web_app(db, actor.household_id)
-    return await _issue(db, actor, actor, now=now)
+    return await _issue(db, actor, actor, key=key, now=now)
 
 
-async def create_member_code(db: AsyncSession, actor: Member, member_id: int, *, now: datetime) -> IssuedCode:
+async def create_member_code(
+    db: AsyncSession, actor: Member, member_id: int, *, key: bytes, now: datetime
+) -> IssuedCode:
     """An admin's code for any active member, admins and themselves included. Refused for a
     guest or a deactivated member."""
     require_admin(actor, ADMINS_ONLY)
@@ -92,15 +100,15 @@ async def create_member_code(db: AsyncSession, actor: Member, member_id: int, *,
         raise MemberRuleViolation(NO_GUESTS)
     if not member.active:
         raise MemberRuleViolation(REACTIVATE_FIRST)
-    return await _issue(db, actor, member, now=now)
+    return await _issue(db, actor, member, key=key, now=now)
 
 
-async def _issue(db: AsyncSession, actor: Member, member: Member, *, now: datetime) -> IssuedCode:
+async def _issue(db: AsyncSession, actor: Member, member: Member, *, key: bytes, now: datetime) -> IssuedCode:
     code = new_code()
     expires_at = now + CODE_LIFETIME
     async with write_transaction(db):
         await SignInCodeRepository(db).replace(
-            member=member, code_hash=hash_code(code), created_by=actor, now=now, expires_at=expires_at
+            member=member, code_hash=hash_code(key, code), created_by=actor, now=now, expires_at=expires_at
         )
         # SEC-9, and never the code or its hash.
         payload = {"expires_at": expires_at.isoformat()}
@@ -120,16 +128,15 @@ async def _household_id(db: AsyncSession) -> int:
     return household.id
 
 
-async def peek(db: AsyncSession, typed: str, *, now: datetime) -> Member | None:
+async def peek(db: AsyncSession, typed: str, *, key: bytes, now: datetime) -> Member | None:
     """Step 1: whose code ``typed`` is, without using it. None for every kind of failure."""
     household_id = await _household_id(db)
     code = normalize_code(typed)
     if code is None:
         return None
-    code_hash = hash_code(code)
-    stored = await SignInCodeRepository(db).usable(household_id, code_hash, now)
+    stored = await SignInCodeRepository(db).usable(household_id, hash_code(key, code), now)
     await db.rollback()  # reads only; end the read transaction
-    if stored is None or not hmac.compare_digest(stored.code_hash, code_hash):
+    if stored is None:
         return None
     if not stored.member.is_member:
         log.info("sign-in code refused", extra={"member_id": stored.member.id, "reason": "not an active member"})
@@ -138,7 +145,7 @@ async def peek(db: AsyncSession, typed: str, *, now: datetime) -> Member | None:
 
 
 async def redeem(
-    db: AsyncSession, typed: str, *, now: datetime, replaces_token: str | None, user_agent: str | None
+    db: AsyncSession, typed: str, *, key: bytes, now: datetime, replaces_token: str | None, user_agent: str | None
 ) -> CodeSignIn | None:
     """Step 2, **Continue**: use the code and sign the device in. None for every kind of
     failure. A code whose member was deactivated or made a guest since is used up all the same."""
@@ -147,7 +154,7 @@ async def redeem(
     if code is None:
         return None
     async with write_transaction(db):
-        used = await SignInCodeRepository(db).use(household_id, hash_code(code), now)
+        used = await SignInCodeRepository(db).use(household_id, hash_code(key, code), now)
         if used is None:
             return None
         _code_id, member_id = used
@@ -157,6 +164,8 @@ async def redeem(
             log.info("sign-in code refused", extra={"member_id": member_id, "reason": "not an active member"})
             return None
         token = await open_session(db, member, now=now, replaces_token=replaces_token, user_agent=user_agent)
+        # Signed in, though never linked to an OIDC subject: Admin > Members shows them active.
+        member = await MemberRepository(db).update(household_id, member.id, now, code_signed_in_at=now)
         payload = {"device": device_label(user_agent)}
         await audit(db, household_id, member, "member.signed_in_with_code", f"member:{member.id}", payload, now)
         await db.commit()
@@ -171,6 +180,9 @@ THROTTLE_WINDOW = timedelta(hours=1)
 THROTTLE_STEP_SECONDS = 0.05
 """Each wrong code past the threshold adds this much to the wait."""
 THROTTLE_MAX_SECONDS = 5.0
+MAX_SLEEPERS = 4
+"""At most this many attempts wait at once. Past that, an attempt is refused at once (429)
+instead of waiting, so a burst can't pile up requests."""
 Sleep = Callable[[float], Awaitable[None]]
 
 
@@ -185,9 +197,14 @@ class CodeThrottle:
     only lifts a delay. Writing each wrong code to the database would let anyone with a script
     make SQLite write as fast as they can post. Sixty buckets at most, so memory is bounded."""
 
-    def __init__(self, threshold: int = THROTTLE_THRESHOLD, sleep: Sleep = asyncio.sleep) -> None:
+    def __init__(
+        self, threshold: int = THROTTLE_THRESHOLD, sleep: Sleep = asyncio.sleep, max_sleepers: int = MAX_SLEEPERS
+    ) -> None:
         self.threshold = threshold
         self.sleep = sleep
+        self.max_sleepers = max_sleepers
+        self.sleeping = 0
+        """Attempts waiting right now."""
         self._buckets: deque[tuple[datetime, int]] = deque()
 
     def _prune(self, now: datetime) -> None:
@@ -223,9 +240,22 @@ class CodeThrottle:
         excess = self.failures(now) - self.threshold
         return 0.0 if excess <= 0 else min(THROTTLE_MAX_SECONDS, THROTTLE_STEP_SECONDS * excess)
 
-    async def wait(self, now: datetime) -> None:
-        """Wait out the delay before an attempt is checked."""
+    async def wait(self, now: datetime) -> bool:
+        """Wait out the delay before an attempt is checked. Returns False, without waiting, when
+        ``max_sleepers`` attempts are waiting already: the caller refuses this one at once.
+
+        The caller must hold no database connection while it waits, or a few waiting attempts
+        could take every connection in the pool."""
         seconds = self.delay(now)
-        if seconds:
+        if not seconds:
+            return True
+        if self.sleeping >= self.max_sleepers:
+            log.info("refused a sign-in code attempt: too many waiting", extra={"waiting": self.sleeping})
+            return False
+        self.sleeping += 1
+        try:
             log.debug("slowing a sign-in code attempt", extra={"delay_seconds": seconds})
             await self.sleep(seconds)
+        finally:
+            self.sleeping -= 1
+        return True

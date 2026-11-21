@@ -1449,7 +1449,7 @@ def test_0016_adds_contributions_and_badges_without_touching_a_row_and_downgrade
     after = _rows_outside_m4(settings)
     ours = {"household", "member", "response", "proposal"}
     assert {k: v for k, v in after.items() if k not in ours} == {k: v for k, v in before.items() if k not in ours}
-    assert [row[:-6] for row in after["member"]] == before["member"]  # 0022, 0023, 0027, 0030, 0041 add six, last
+    assert [row[:-7] for row in after["member"]] == before["member"]  # 0022, 0023, 0027, 0030, 0041, 0042 add seven
     assert [row[:-2] for row in after["response"]] == before["response"]  # 0025 and 0027 add two, last
     assert [row[:-1] for row in after["proposal"]] == before["proposal"]  # 0026 adds one, last
     (household,) = after["household"]
@@ -1511,7 +1511,7 @@ def test_0016_adds_contributions_and_badges_without_touching_a_row_and_downgrade
     assert {"contribution", "badge_award"} <= _tables(settings)
     again = _rows_outside_m4(settings)
     assert {k: v for k, v in again.items() if k not in ours} == {k: v for k, v in before.items() if k not in ours}
-    assert [row[:-6] for row in again["member"]] == before["member"]
+    assert [row[:-7] for row in again["member"]] == before["member"]
 
 
 # 0017: Slack badge art (#105) ------------------------------------------------------------------------
@@ -2865,9 +2865,10 @@ def _sessions(settings: Settings) -> list[tuple[object, ...]]:
 
 
 def test_0042_names_and_labels_every_session_and_downgrade_drops_codes(settings: Settings) -> None:
-    """Up adds ``sign_in_code``, empty, and gives every session a random public ID, never its
-    token hash, and the label "Unknown device", signing nobody out. Down drops both, and every
-    session stays as it was."""
+    """Up adds ``sign_in_code``, empty, and ``member.code_signed_in_at``, null for everyone, and
+    gives every session a random public ID, never its token hash, and the label "Unknown
+    device", signing nobody out. Down drops all of it, and every session and member stays as it
+    was."""
     _upgrade_to(settings, BEFORE_CODES)
     _populate_calls(settings)
     _execute(
@@ -2887,7 +2888,10 @@ def test_0042_names_and_labels_every_session_and_downgrade_drops_codes(settings:
     assert not {row[0] for row in after} & set(public_ids)
     assert [row[-1] for row in after] == ["Unknown device", "Unknown device"]
     rest = _rows_outside_m4(settings)
-    assert {k: v for k, v in rest.items() if k != "session"} == {k: v for k, v in before.items() if k != "session"}
+    assert [row[:-1] for row in rest["member"]] == before["member"]  # code_signed_in_at is last
+    assert [row[-1] for row in rest["member"]] == [None] * len(before["member"])
+    ours = {"session", "member"}
+    assert {k: v for k, v in rest.items() if k not in ours} == {k: v for k, v in before.items() if k not in ours}
     with pytest.raises(IntegrityError, match=r"session\.public_id"):
         _execute(settings, f"UPDATE session SET public_id = '{public_ids[0]}' WHERE id = '{'b' * 64}'")  # noqa: S608
     with pytest.raises(IntegrityError, match=r"session\.device"):
@@ -2904,8 +2908,10 @@ def test_0042_names_and_labels_every_session_and_downgrade_drops_codes(settings:
             "VALUES (1, 1, '" + "d" * 64 + "', :t, :t)",
         )
 
+    _execute(settings, "UPDATE member SET code_signed_in_at = :t WHERE id = 1")
     _downgrade_to(settings, BEFORE_CODES)
-    assert "sign_in_code" not in _tables(settings)
+    assert "sign_in_code" not in _tables(settings) and "code_signed_in_at" not in _member_schema(settings)
+    assert "ck_member_notify_via" in _member_schema(settings)
     assert _sessions(settings) == sessions_before
     assert _rows_outside_m4(settings) == before
     _upgrade_to(settings, CODES_REVISION)

@@ -122,6 +122,9 @@ class MemberRow(Base):
     notify_via: Mapped[str | None] = mapped_column(String(5))
     """Slack, the web app, or both (spec 6.15): ``slack``, ``web``, or ``both``, as the member
     chose, or null until they choose. ``Member.delivery`` computes the default from the Slack link."""
+    code_signed_in_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    """When the member last signed in with a one-time code (spec 6.15): Admin > Members shows a
+    member who signed in only this way as active. Never an OIDC link."""
     away_first: Mapped[date | None] = mapped_column(Date)
     away_last: Mapped[date | None] = mapped_column(Date)
     """The member's away window (#196, FR-63): both days or neither, both included."""
@@ -150,8 +153,9 @@ class SessionRow(Base):
 
 
 class SignInCodeRow(Base):
-    """A member's one-time sign-in code (spec 6.15). ``code_hash`` is the SHA-256 hex digest of
-    the code, never the code. One per member: a new code replaces the old one."""
+    """A member's one-time sign-in code (spec 6.15). ``code_hash`` is the code's HMAC-SHA256 hex
+    digest with a key derived from the secret key, never the code. One per member: a new code
+    replaces the old one."""
 
     __tablename__ = "sign_in_code"
 

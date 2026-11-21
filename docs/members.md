@@ -71,6 +71,10 @@ On Android:
 
 The app stays signed in for 90 days after you last use it, as a Slack sign-in does. Signing in with a code on a device that was signed in as someone else signs that session out.
 
+A member who has signed in with a code shows as **Active** on **Admin** > **Members**, even without a Slack link; until then they show as **Invited**. A code never links a Slack account, so their email stays editable, and signing in with Slack later links them by that email, as for anyone invited.
+
+Dinnerbell stores a code only as a keyed hash, made with a key from `DINNERBELL_SECRET_KEY`, so a copy of the database can't be searched for codes. Changing the secret key ends every unused code. Deactivating a member, or signing them out everywhere, deletes their unused code too.
+
 Making a code writes a `member.sign_in_code_created` audit row, and signing in with one writes `member.signed_in_with_code`; neither holds the code. Each address can try 20 sign-ins a minute. If more than 200 wrong codes arrive in an hour from all addresses together, every code sign-in waits a few seconds longer than the last, Dinnerbell logs a warning, and **Admin** > **Web app** says someone may be guessing. Nobody is locked out, and the wait ends an hour after the wrong codes stop.
 
 ### Devices
@@ -78,7 +82,7 @@ Making a code writes a `member.sign_in_code_created` audit row, and signing in w
 **Preferences** > **Devices** lists each device you're signed in on, such as "iPhone · Safari", with when it signed in and when it was last seen. **This device** marks the one you're using. Devices that signed in before this list existed show "Unknown device".
 
 - To sign a device out, such as a lost phone, select **Sign out** on its row. Signing out **This device** signs you out here.
-- An admin can sign a member out of every device: on **Admin** > **Members**, select **Sign out everywhere** on their row. It writes a `member.signed_out_everywhere` audit row. To sign yourself out everywhere, use **Devices** on your own **Preferences**.
+- An admin can sign a member out of every device: on **Admin** > **Members**, select **Sign out everywhere** on their row. It also deletes any code of theirs not used yet, so a lost phone's code can't sign in afterward. It writes a `member.signed_out_everywhere` audit row. To sign yourself out everywhere, use **Devices** on your own **Preferences**.
 
 ## The Assistant page
 

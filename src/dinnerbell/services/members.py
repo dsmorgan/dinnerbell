@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.events import EventRepository
 from dinnerbell.db.repositories import MemberRepository, SessionRepository
+from dinnerbell.db.sign_in_codes import SignInCodeRepository
 from dinnerbell.domain.members import (
     Capabilities,
     Member,
@@ -154,6 +155,8 @@ async def set_member_active(db: AsyncSession, actor: Member, member_id: int, act
     await _ensure_an_admin_remains(db, actor.household_id)
     if not active:
         await SessionRepository(db).delete_for_member(target.id)
+        # Reactivated within 15 minutes, they still couldn't use a code made before (spec 6.15).
+        await SignInCodeRepository(db).delete_for_member(target.id)
         await _stop_coordinating(db, actor, target, now)
     action = "member.reactivated" if active else "member.deactivated"
     await audit(db, actor.household_id, actor, action, f"member:{updated.id}", {}, now)

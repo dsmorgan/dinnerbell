@@ -20,6 +20,7 @@ from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.repositories import MemberRepository, SessionRepository
+from dinnerbell.db.sign_in_codes import SignInCodeRepository
 from dinnerbell.domain.members import Member
 from dinnerbell.services.common import audit, require_admin, require_member
 from dinnerbell.services.errors import NotFound
@@ -76,15 +77,18 @@ async def sign_out_device(db: AsyncSession, actor: Member, public_id: str, curre
 
 
 async def sign_out_everywhere(db: AsyncSession, actor: Member, member_id: int, *, now: datetime) -> Member:
-    """An admin signs a member out of every device. Audited as ``member.signed_out_everywhere``
-    with how many sessions ended."""
+    """An admin signs a member out of every device, and deletes their unused sign-in code, in
+    one transaction. Audited as ``member.signed_out_everywhere`` with how many sessions ended
+    and codes went."""
     require_admin(actor, ADMINS_ONLY)
     await require_web_app(db, actor.household_id)
     member = await MemberRepository(db).get(actor.household_id, member_id)
     if member is None:
         raise NotFound("No such member.")
     ended = await SessionRepository(db).delete_for_member(member.id)
-    payload = {"sessions": ended}
+    # A lost phone and an unused code mustn't sign in again afterward.
+    codes = await SignInCodeRepository(db).delete_for_member(member.id)
+    payload = {"sessions": ended, "codes": codes}
     await audit(db, actor.household_id, actor, "member.signed_out_everywhere", f"member:{member.id}", payload, now)
     await db.commit()
     log.info("member signed out everywhere", extra={"member_id": member.id, "actor_id": actor.id, "sessions": ended})

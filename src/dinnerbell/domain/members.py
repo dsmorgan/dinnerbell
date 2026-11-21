@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
@@ -113,6 +113,10 @@ class Member:
     away: Away | None = None
     """Their away window (#196), as stored: it may have ended already. ``away_now`` is the one
     that counts."""
+    code_signed_in_at: datetime | None = None
+    """When they last signed in with a one-time code (spec 6.15), or None if they never have.
+    It never links an OIDC subject: a member without Slack signs in only this way, and can still
+    link Slack later by signing in with it."""
 
     def away_now(self, today: date) -> Away | None:
         """Their away window, while it's upcoming or under way on ``today`` (FR-63)."""
@@ -167,7 +171,9 @@ class Member:
     def status(self) -> MemberStatus:
         if not self.active:
             return MemberStatus.DEACTIVATED
-        return MemberStatus.ACTIVE if self.is_linked else MemberStatus.INVITED
+        # A member who has signed in with a code is as active as one who signed in with Slack.
+        signed_in = self.is_linked or self.code_signed_in_at is not None
+        return MemberStatus.ACTIVE if signed_in else MemberStatus.INVITED
 
 
 def _has_control_characters(value: str) -> bool:
