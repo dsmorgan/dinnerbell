@@ -6,7 +6,8 @@ against the per-address limit. The code travels only in POST bodies, never a URL
 reach the access log, the browser's history, or a referrer. Every failure gets one message,
 and every wrong code also counts toward ``CodeThrottle``, which slows every attempt once more
 than 200 wrong codes from all addresses arrive in an hour. A waiting attempt holds no database
-connection, and past ``MAX_SLEEPERS`` waiting, the next is refused with 429 at once.
+connection. An address with an attempt waiting already, or any attempt past ``MAX_SLEEPERS``
+waiting in all, is refused with 429 at once.
 
 A device signing in has no session yet to bind a CSRF token to, so ``OriginCheckMiddleware``
 protects these forms: a POST from another site is refused before it gets here. A device that
@@ -30,6 +31,7 @@ from dinnerbell.services import sign_in_codes, web_app
 from dinnerbell.web.auth import Context, CSRFCheckedIfSignedIn, Database, MaybePrincipal, session_cookie_header
 from dinnerbell.web.context import AppContext
 from dinnerbell.web.middleware import TOO_MANY_SIGN_INS as TOO_MANY
+from dinnerbell.web.ratelimit import client_key
 from dinnerbell.web.render import render
 
 router = APIRouter(prefix="/auth")
@@ -52,15 +54,17 @@ async def code_page(request: Request, principal: MaybePrincipal, db: Database) -
     return await _form(request)
 
 
-async def _wait_turn(context: AppContext, db: AsyncSession) -> Response | None:
+async def _wait_turn(request: Request, context: AppContext, db: AsyncSession) -> Response | None:
     """Wait out the throttle's delay, if any, holding no database connection: the switch check
     and the session lookup have used this request's session, so it's closed first, and the
-    service opens a new connection afterward. A 429 when too many attempts are waiting."""
+    service opens a new connection afterward. A 429 when this address already has an attempt
+    waiting, keyed as the per-address limit keys it, so ``trusted_proxies`` counts here too."""
     throttle = context.code_throttle
     if not throttle.delay(context.clock()):
         return None
     await db.close()
-    if await throttle.wait(context.clock()):
+    address = client_key(getattr(request.state, "client_ip", "unknown"))
+    if await throttle.wait(context.clock(), address):
         return None
     retry_after = int(throttle.delay(context.clock())) + 1
     return PlainTextResponse(TOO_MANY, status_code=429, headers={"Retry-After": str(retry_after)})
@@ -72,7 +76,7 @@ async def check_code(
 ) -> Response:
     """Step 1: say whose code it is, without using it."""
     await web_app.require_web_app(db, _household_id(principal))
-    if refused := await _wait_turn(context, db):
+    if refused := await _wait_turn(request, context, db):
         return refused
     member = await sign_in_codes.peek(db, code, key=context.code_key, now=context.clock())
     if member is None:
@@ -87,7 +91,7 @@ async def use_code(
 ) -> Response:
     """Step 2, **Continue**: use the code and sign this device in."""
     await web_app.require_web_app(db, _household_id(principal))
-    if refused := await _wait_turn(context, db):
+    if refused := await _wait_turn(request, context, db):
         return refused
     signed_in = await sign_in_codes.redeem(
         db,

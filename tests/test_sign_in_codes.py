@@ -203,10 +203,10 @@ def test_the_throttle_waits_with_the_sleep_it_was_given() -> None:
 
     clock = FakeClock()
     throttle = CodeThrottle(threshold=1, sleep=sleep)
-    asyncio.run(throttle.wait(clock()))
+    asyncio.run(throttle.wait(clock(), "ip:192.0.2.1"))
     throttle.failed(clock())
     throttle.failed(clock())
-    asyncio.run(throttle.wait(clock()))
+    asyncio.run(throttle.wait(clock(), "ip:192.0.2.1"))
     assert slept == [throttle.delay(clock())] and slept[0] > 0
 
 
@@ -782,7 +782,7 @@ def test_the_confirm_page_is_never_cached(on: TestClient, sam: int) -> None:
     assert confirm.headers["referrer-policy"] == "same-origin"
 
 
-def test_the_throttle_lets_only_so_many_wait() -> None:
+def test_the_throttle_lets_one_attempt_per_address_wait_and_bounds_the_total() -> None:
     gate = asyncio.Event()
 
     async def sleep(_seconds: float) -> None:
@@ -790,26 +790,34 @@ def test_the_throttle_lets_only_so_many_wait() -> None:
 
     async def run() -> list[bool]:
         clock = FakeClock()
-        throttle = CodeThrottle(threshold=0, sleep=sleep, max_sleepers=2)
+        throttle = CodeThrottle(threshold=0, sleep=sleep, max_sleepers=3)
         throttle.failed(clock())
-        waiting = [asyncio.create_task(throttle.wait(clock())) for _ in range(2)]
+        addresses = ("ip:192.0.2.1", "ip:192.0.2.2", "ip:192.0.2.3")
+        waiting = [asyncio.create_task(throttle.wait(clock(), a)) for a in addresses[:2]]
         for _ in range(100):  # each task starts waiting at its first await
             if throttle.sleeping == 2:
                 break
             await asyncio.sleep(0)
-        refused = await throttle.wait(clock())
+        same_address = await throttle.wait(clock(), addresses[0])
+        waiting.append(asyncio.create_task(throttle.wait(clock(), addresses[2])))  # another address waits
+        for _ in range(100):
+            if throttle.sleeping == 3:
+                break
+            await asyncio.sleep(0)
+        past_the_bound = await throttle.wait(clock(), "ip:192.0.2.4")
         gate.set()
-        return [refused, *await asyncio.gather(*waiting), throttle.sleeping == 0]
+        return [same_address, past_the_bound, *await asyncio.gather(*waiting), throttle.sleeping == 0]
 
-    assert asyncio.run(run()) == [False, True, True, True]
+    assert asyncio.run(run()) == [False, False, True, True, True, True]
 
 
-def test_waiting_attempts_hold_no_connection_and_a_burst_past_them_gets_429(
-    on: TestClient, clock: FakeClock, migrated: Settings
+def test_waiting_attempts_hold_no_connection_and_one_address_cant_lock_out_another(
+    on: TestClient, sam: int, clock: FakeClock, migrated: Settings
 ) -> None:
-    """While throttled, a burst of code attempts, signed in or not, waits without a database
-    connection, so a request that needs the database still runs; past four waiting, the next is
-    refused at once with Retry-After."""
+    """While throttled, attempts from four addresses, one signed in, wait without a database
+    connection, so a request that needs the database still runs. A second attempt from an
+    address already waiting gets 429 at once, with Retry-After; an attempt from another address
+    still waits, and a valid code then signs in."""
     import httpx
 
     from tests.conftest import csrf_from
@@ -819,22 +827,31 @@ def test_waiting_attempts_hold_no_connection_and_a_burst_past_them_gets_429(
     pool = context.sessionmaker.kw["bind"].sync_engine.pool
     for _ in range(300):
         throttle.failed(clock())
+    code = admin_code(on, sam)
     token, cookie = csrf_from(on), on.cookies[SESSION_COOKIE]
 
-    async def burst() -> tuple[int, int, httpx.Response, httpx.Response, list[int]]:
+    async def burst() -> tuple[int, int, httpx.Response, httpx.Response, list[int], httpx.Response]:
         gate = asyncio.Event()
 
         async def sleep(_seconds: float) -> None:
             await gate.wait()
 
         throttle.sleep = sleep
-        transport = httpx.ASGITransport(app=on.app)
-        async with httpx.AsyncClient(transport=transport, base_url=BASE_URL, headers={"Origin": BASE_URL}) as http:
-            signed_in = {"Cookie": f"{SESSION_COOKIE}={cookie}"}
+
+        def at(address: str) -> httpx.AsyncClient:
+            transport = httpx.ASGITransport(app=on.app, client=(address, 4321))
+            return httpx.AsyncClient(transport=transport, base_url=BASE_URL, headers={"Origin": BASE_URL})
+
+        clients = [at(f"192.0.2.{n}") for n in range(1, 6)]
+        try:
+            first, *others = clients[:4]
             attempts = [
-                http.post("/auth/code", data={"code": "ABCDE-FGHJK", "csrf_token": token}, headers=signed_in),
-                *(http.post(path, data={"code": "ABCDE-FGHJK"}) for path in ("/auth/code", "/auth/code/continue")),
-                http.post("/auth/code/continue", data={"code": "ABCDE-FGHJK"}),
+                first.post(
+                    "/auth/code",
+                    data={"code": "ABCDE-FGHJK", "csrf_token": token},
+                    headers={"Cookie": f"{SESSION_COOKIE}={cookie}"},
+                ),
+                *(c.post("/auth/code/continue", data={"code": "ABCDE-FGHJK"}) for c in others),
             ]
             waiting = [asyncio.create_task(a) for a in attempts]
             deadline = asyncio.get_running_loop().time() + 10
@@ -842,18 +859,28 @@ def test_waiting_attempts_hold_no_connection_and_a_burst_past_them_gets_429(
                 assert asyncio.get_running_loop().time() < deadline, "the attempts never started waiting"
                 await asyncio.sleep(0.01)
             held = pool.checkedout()
-            refused = await asyncio.wait_for(http.post("/auth/code", data={"code": "ABCDE-FGHJK"}), 10)
-            health = await asyncio.wait_for(http.get("/healthz"), 10)
+            refused = await asyncio.wait_for(others[0].post("/auth/code", data={"code": code}), 10)
+            health = await asyncio.wait_for(first.get("/healthz"), 10)
+            newcomer = asyncio.create_task(clients[4].post("/auth/code/continue", data={"code": code}))
+            while throttle.sleeping < 5:
+                assert asyncio.get_running_loop().time() < deadline, "the other address never started waiting"
+                await asyncio.sleep(0.01)
             gate.set()
             done = await asyncio.gather(*waiting)
-        return held, len(waiting), refused, health, [r.status_code for r in done]
+            signed_in = await asyncio.wait_for(newcomer, 10)
+        finally:
+            for c in clients:
+                await c.aclose()
+        return held, len(waiting), refused, health, [r.status_code for r in done], signed_in
 
-    held, waited, refused, health, statuses = on.portal.call(burst)  # type: ignore[attr-defined]
+    held, waited, refused, health, statuses, signed_in = on.portal.call(burst)  # type: ignore[attr-defined]
     assert waited == 4 and held == 0  # four waiting, and no connection checked out
     assert refused.status_code == 429 and int(refused.headers["retry-after"]) >= 1
     assert refused.text == "Too many sign-in attempts. Wait a minute and try again."
     assert health.json()["database"] == "ok"
     assert statuses == [400, 400, 400, 400]
+    assert (signed_in.status_code, signed_in.headers["location"]) == (303, "/")
+    assert len(sessions_of(migrated, sam)) == 1
     assert throttle.failures(clock()) == 304  # the refused one isn't a wrong code
 
 

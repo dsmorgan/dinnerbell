@@ -75,7 +75,7 @@ A member who has signed in with a code shows as **Active** on **Admin** > **Memb
 
 Dinnerbell stores a code only as a keyed hash, made with a key from `DINNERBELL_SECRET_KEY`, so a copy of the database can't be searched for codes. Changing the secret key ends every unused code. Deactivating a member, or signing them out everywhere, deletes their unused code too.
 
-Making a code writes a `member.sign_in_code_created` audit row, and signing in with one writes `member.signed_in_with_code`; neither holds the code. Each address can try 20 sign-ins a minute. If more than 200 wrong codes arrive in an hour from all addresses together, every code sign-in waits a few seconds longer than the last, Dinnerbell logs a warning, and **Admin** > **Web app** says someone may be guessing. Nobody is locked out, and the wait ends an hour after the wrong codes stop.
+Making a code writes a `member.sign_in_code_created` audit row, and signing in with one writes `member.signed_in_with_code`; neither holds the code. Each address can try 20 sign-ins a minute. If more than 200 wrong codes arrive in an hour from all addresses together, every code sign-in waits a few seconds longer than the last, Dinnerbell logs a warning, and **Admin** > **Web app** says someone may be guessing. Each address can have one attempt waiting; another from the same address while it waits gets "Too many sign-in attempts" straight away. Nobody is locked out, and the wait ends an hour after the wrong codes stop.
 
 ### Devices
 
