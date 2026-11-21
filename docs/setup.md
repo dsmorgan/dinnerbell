@@ -398,7 +398,7 @@ By default, the four secrets (`DINNERBELL_SECRET_KEY`, `DINNERBELL_OIDC_CLIENT_S
      done )
    ```
 
-   The `sed` removes one pair of enclosing quotes and nothing else. If a value has a trailing `# comment` or an escape inside double quotes, write its file by hand with `printf '%s' '<value>' >secrets/<name>`, with a space before the command to keep it out of your shell history. Every file must exist; an empty one is fine for a Slack token you don't use.
+   The `sed` removes one pair of enclosing quotes and nothing else. If a value has a trailing `# comment` or an escape inside double quotes, write its file by hand with `printf '%s' '<value>' >secrets/<name>`, after `unset HISTFILE`, so the value stays out of your shell history. Every file must exist; an empty one is fine for a Slack token you don't use.
 
 2. Compare the files with `.env`. The check prints `match` or `differs` for each secret, never a value, and reports a missing file, a wrong mode, or a placeholder key. Every line must say `match`.
 

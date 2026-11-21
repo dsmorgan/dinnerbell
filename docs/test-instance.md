@@ -52,7 +52,7 @@ To keep test's secrets in files, follow [Keep secrets in files](setup.md#keep-se
 
 To keep test's [Anthropic API key](configuration.md#the-assistant) in a file too, create `secrets-test/DINNERBELL_ANTHROPIC_API_KEY`. The file is optional and works with or without the four: when it exists, `deploy/dinnerbell-test` adds `deploy/compose.test-anthropic.yaml`, which mounts it read-only at `/run/secrets/DINNERBELL_ANTHROPIC_API_KEY`. Test never reads production's `secrets/DINNERBELL_ANTHROPIC_API_KEY`, and doesn't need the `compose.override.yaml` that production uses for its key.
 
-1. Write the key into the file, owner-only and with no trailing newline. Type a space before the command to keep the key out of your shell history.
+1. Write the key into the file, owner-only and with no trailing newline. To keep the key out of your shell history, run `unset HISTFILE` first, or type a space before the command if your shell ignores such lines (`HISTCONTROL=ignorespace` in bash, `setopt HIST_IGNORE_SPACE` in zsh).
 
    ```sh
    ( umask 077 && mkdir -p secrets-test && printf '%s' '<test key>' >secrets-test/DINNERBELL_ANTHROPIC_API_KEY )
