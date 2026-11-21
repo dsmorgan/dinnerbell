@@ -12,7 +12,8 @@ Delivery is in outbox order per event, with two kinds of holding back:
 
 While a household has the web app on (spec 6.15), a direct message to a member on **Web app**
 is closed as skipped, unsent, before the channel sees it: skipped, not failed, so it never
-counts in ``/healthz``'s failures. With the switch off, nothing is skipped.
+counts in ``/healthz``'s failures. With the switch off, nothing is skipped, and if the switch
+or the member can't be read, the message goes to the channel as if it were off.
 
 A row is claimed and committed before the channel is called, and no transaction is held open
 during the call, so two drainers never deliver the same row and a slow channel never blocks
@@ -32,6 +33,7 @@ from dinnerbell.db.events import EventRepository
 from dinnerbell.db.outbox import OutboxEntry, OutboxRepository
 from dinnerbell.db.repositories import MemberRepository
 from dinnerbell.domain.events import EventState
+from dinnerbell.domain.members import Member
 from dinnerbell.domain.notifications import (
     CALL_OFF_SUPERSEDES,
     STEP_BOUND,
@@ -146,7 +148,7 @@ async def drain(
     async with sessionmaker() as db:
         repo = OutboxRepository(db)
         blocked: set[int] = set()
-        switches: dict[int, bool] = {}  # each household's web app switch, read once a pass
+        switched_off: set[int] = set()  # households whose web app switch this pass found off
         for entry in await repo.due(limit, clock()):
             if not await _may_send(repo, entry, blocked, clock()):
                 continue
@@ -158,7 +160,7 @@ async def drain(
             # attempt; a correction may still trim a badge post, which a retry reads anew.
             current = await repo.get(entry.id) if claimed else None
             await db.commit()
-            settled = current is not None and await _deliver(db, channel, current, token, clock, result, switches)
+            settled = current is not None and await _deliver(db, channel, current, token, clock, result, switched_off)
             if result.stopped:
                 break
             if not settled and entry.creates_message and entry.event_id is not None:
@@ -187,7 +189,7 @@ async def _deliver(
     token: str,
     clock: Clock,
     result: DrainResult,
-    switches: dict[int, bool],
+    switched_off: set[int],
 ) -> bool:
     """Deliver one claimed row. True once it's settled: delivered, superseded, skipped, or given up."""
     repo = OutboxRepository(db)
@@ -214,13 +216,14 @@ async def _deliver(
         result.superseded += 1
         log.info("notification closed", extra=_about(entry, note=overtaken))
         return True
-    if await _skipped(db, entry, notification, switches):
+    on_web_app = await _skipped(db, entry, notification, switched_off)
+    if on_web_app is not None:
         await repo.delivered(entry.id, token, now=clock(), ref=None, note=SKIPPED_WEB_APP)
         await db.commit()
         result.skipped += 1
-        log.info(
-            "notification closed", extra=_about(entry, note=SKIPPED_WEB_APP, recipient_id=notification.recipient_id)
-        )
+        # A member nobody has linked to Slack may not know they get nothing outside the web pages.
+        level = logging.WARNING if on_web_app.slack_user_id is None else logging.INFO
+        log.log(level, "notification closed", extra=_about(entry, note=SKIPPED_WEB_APP, recipient_id=on_web_app.id))
         return True
     if clock() - entry.updated_at > MAX_AGE:
         log.error("notification expired", extra=_about(entry, attempts=entry.attempts))
@@ -275,21 +278,36 @@ def _about(entry: OutboxEntry, **more: object) -> dict[str, object]:
     return {key: value for key, value in fields.items() if value is not None}
 
 
-async def _skipped(db: AsyncSession, entry: OutboxEntry, notification: Notification, switches: dict[int, bool]) -> bool:
-    """Whether ``notification`` is a direct message to skip because its member is on **Web app**
-    while their household has the web app on (spec 6.15). Channel posts and updates are never
-    skipped. ``switches`` caches each household's switch for the pass, so a pass with the
-    switch off reads one setting and nothing else."""
+async def _skipped(
+    db: AsyncSession, entry: OutboxEntry, notification: Notification, switched_off: set[int]
+) -> Member | None:
+    """The member ``notification`` is a direct message to, when it's to skip because they're on
+    **Web app** while their household has the web app on (spec 6.15); otherwise None. Channel
+    posts and updates are never skipped.
+
+    A switch found off stays off for the rest of the pass (``switched_off``), so a pass with it
+    off reads one setting and nothing else. A switch found on is read again for each message, so
+    turning it off mid-pass sends the rest. If either read fails, the message goes to the channel,
+    as if the switch were off: a lost reminder is worse than a Slack message the member didn't
+    want."""
     recipient = notification.recipient_id
-    if recipient is None or notification.is_update:
-        return False
     household_id = entry.household_id
-    if household_id not in switches:
-        switches[household_id] = await web_app.web_app_enabled(db, household_id)
-    if not switches[household_id]:
-        return False
-    member = await MemberRepository(db).get(household_id, recipient)
-    return member is not None and web_app.slack_skips(member)
+    if recipient is None or notification.is_update or household_id in switched_off:
+        return None
+    try:
+        if not await web_app.web_app_enabled(db, household_id):
+            switched_off.add(household_id)
+            return None
+        member = await MemberRepository(db).get(household_id, recipient)
+    except Exception:
+        log.warning(
+            "web app switch or member unreadable; sending as if it were off",
+            extra=_about(entry, recipient_id=recipient),
+            exc_info=True,
+        )
+        await db.rollback()
+        return None
+    return member if member is not None and web_app.slack_skips(member) else None
 
 
 async def _overtaken(db: AsyncSession, notification: Notification) -> str | None:

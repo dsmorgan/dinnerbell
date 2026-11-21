@@ -6,8 +6,10 @@ member on the web app. The pages are in ``test_web_app``."""
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import date
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from sqlalchemy import select, text
@@ -16,7 +18,7 @@ from dinnerbell.config import Settings
 from dinnerbell.db.models import AuditRow
 from dinnerbell.db.outbox import OutboxRepository
 from dinnerbell.domain import notifications as note
-from dinnerbell.domain.events import EventState
+from dinnerbell.domain.events import AssignmentRole, EventState
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import (
     Capabilities,
@@ -31,9 +33,10 @@ from dinnerbell.services import outbox, web_app
 from dinnerbell.services.database import Database, open_database
 from dinnerbell.services.errors import Forbidden, NotFound
 from dinnerbell.services.health import outbox_backlog, outbox_oldest_age
-from tests.support.calls import House, furnish, make_house
+from tests.support.calls import House, RecordingChannel, furnish, make_house
 from tests.support.clock import FakeClock
 from tests.support.slack import Slack, link, wire
+from tests.test_outbox import roles_to_choose
 
 pytestmark = pytest.mark.anyio
 
@@ -303,3 +306,107 @@ async def test_switched_on_channel_posts_and_a_deactivated_members_dms_go_as_bef
     assert (result.delivered, result.failed, result.skipped) == (2, 0, 0)
     assert slack.conn.channel.state is not None and slack.conn.channel.state.dms_dropped_inactive == 1
     assert [c.args["channel"] for c in slack.fake.of("chat.postMessage")] == [slack.conn.channel.channel_id]
+
+
+async def test_a_switch_that_cant_be_read_sends_through_slack(
+    house: House, slack: Slack, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Fail open: a database hiccup reading the switch must never lose a reminder."""
+    await switch(house, True)
+    async with house.sessionmaker() as db:
+        await web_app.set_my_notify_via(db, house["Kim"], NotifyVia.WEB, now=house.clock())
+    event = await a_call(house)
+    await remind(house, event, "Kim", "Alex")
+
+    async def unreadable(*_: object) -> bool:
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(web_app, "web_app_enabled", unreadable)
+    result = await outbox.drain(house.sessionmaker, slack.conn.channel, house.clock)
+    assert (result.delivered, result.failed, result.skipped, result.stopped) == (2, 0, 0, False)
+    assert sorted(c.args["channel"] for c in slack.fake.of("chat.postMessage")) == ["U01ALEX", "U03KIM"]
+    warnings = [r for r in caplog.records if r.getMessage().startswith("web app switch or member unreadable")]
+    assert {r.levelname for r in warnings} == {"WARNING"}
+    assert sorted(r.recipient_id for r in warnings) == sorted([house["Kim"].id, house["Alex"].id])  # type: ignore[attr-defined]
+    assert "Kim" not in caplog.text and "kim@example.com" not in caplog.text
+
+
+@dataclass
+class SwitchesOffMidPass(RecordingChannel):
+    """Turns the household's web app off while delivering the first message."""
+
+    house: House | None = None
+
+    async def deliver(self, notification: note.Notification, *, thread: note.MessageRef | None = None) -> Any:
+        if not self.sent and self.house is not None:
+            await switch(self.house, False)
+        return await super().deliver(notification, thread=thread)
+
+
+async def test_turning_it_off_mid_pass_sends_the_rest(house: House) -> None:
+    """A switch read as on is read again for each message, so none is skipped after it's off."""
+    await link(house, "Sam", "U02SAM")
+    await link(house, "Kim", "U03KIM")
+    await switch(house, True)
+    async with house.sessionmaker() as db:
+        await web_app.set_my_notify_via(db, house["Kim"], NotifyVia.WEB, now=house.clock())
+    event = await a_call(house)
+    await remind(house, event, "Sam", "Kim")
+    channel = SwitchesOffMidPass(house=house)
+    result = await outbox.drain(house.sessionmaker, channel, house.clock)
+    assert (result.delivered, result.skipped) == (2, 0)
+    assert [s.recipient for s in channel.sent] == [house["Sam"].id, house["Kim"].id]
+
+
+async def test_an_update_is_never_skipped(house: House) -> None:
+    """No update has a recipient today; if one ever does, it edits a message already sent."""
+    await switch(house, True)
+    entry = SimpleNamespace(household_id=house.household.id)
+    edit = SimpleNamespace(kind="call_updated", is_update=True, recipient_id=house["Lee"].id)
+    message = SimpleNamespace(kind="response_reminder", is_update=False, recipient_id=house["Lee"].id)
+    async with house.sessionmaker() as db:
+        assert await outbox._skipped(db, entry, edit, set()) is None  # type: ignore[arg-type]
+        skipped = await outbox._skipped(db, entry, message, set())  # type: ignore[arg-type]
+    assert skipped is not None and skipped.id == house["Lee"].id
+
+
+async def test_a_guests_message_goes_by_the_inviters_choice(house: House, slack: Slack) -> None:
+    """A guest without Slack has their messages sent to the member who invited them (``via``),
+    so that member's choice decides, never the guest's."""
+    await link(house, "Sam", "U02SAM")
+    await switch(house, True)
+    async with house.sessionmaker() as db:
+        await web_app.set_my_notify_via(db, house["Kim"], NotifyVia.WEB, now=house.clock())
+    event = await a_call(house)
+    decision = roles_to_choose().decision
+    pat = note.PersonInfo(999, "Pat")
+    async with house.sessionmaker() as db:
+        for assignment_id, inviter in ((1, "Kim"), (2, "Sam")):
+            via = note.PersonInfo(house[inviter].id, inviter)
+            made = note.AssignmentMade(event, assignment_id, pat, (AssignmentRole.PICKUP,), decision, via=via)
+            assert made.recipient_id == house[inviter].id
+            await OutboxRepository(db).enqueue(house.household.id, event.id, made, house.clock())
+        await db.commit()
+    result = await outbox.drain(house.sessionmaker, slack.conn.channel, house.clock)
+    assert (result.delivered, result.skipped, result.failed) == (1, 1, 0)
+    assert [c.args["channel"] for c in slack.fake.of("chat.postMessage")] == ["U02SAM"]
+
+
+async def test_skipping_a_member_nobody_linked_to_slack_is_a_warning(
+    house: House, slack: Slack, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A member without Slack on the web app gets nothing outside the pages until push exists,
+    so each skip for one is logged where an operator looks; a linked member's choice isn't."""
+    await switch(house, True)
+    async with house.sessionmaker() as db:
+        await web_app.set_my_notify_via(db, house["Kim"], NotifyVia.WEB, now=house.clock())
+    event = await a_call(house)
+    await remind(house, event, "Lee", "Kim")
+    caplog.set_level("INFO", logger="dinnerbell.services.outbox")
+    await outbox.drain(house.sessionmaker, slack.conn.channel, house.clock)
+    closed_lines = {
+        r.recipient_id: r.levelname  # type: ignore[attr-defined]
+        for r in caplog.records
+        if r.getMessage() == "notification closed"
+    }
+    assert closed_lines == {house["Lee"].id: "WARNING", house["Kim"].id: "INFO"}
