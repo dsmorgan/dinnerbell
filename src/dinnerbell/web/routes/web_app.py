@@ -21,7 +21,6 @@ from starlette.responses import Response
 from dinnerbell.domain.push import InvalidSubscription
 from dinnerbell.services import push, web_app
 from dinnerbell.web.auth import AdminCSRFChecked, AdminPrincipal, Context, CSRFChecked, Database, MaybePrincipal
-from dinnerbell.web.context import app_context
 from dinnerbell.web.render import render
 
 router = APIRouter()

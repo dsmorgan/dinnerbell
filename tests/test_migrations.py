@@ -2924,6 +2924,10 @@ def test_0042_names_and_labels_every_session_and_downgrade_drops_codes(settings:
 # 0043: web push (#138) -----------------------------------------------------------------------------
 
 PUSH_REVISION, BEFORE_PUSH = "0043_web_push", "0042_sign_in_codes"
+SESSION_ROW = (
+    "INSERT INTO session (id, household_id, member_id, created_at, expires_at, last_seen, public_id, device) "
+    "VALUES ('{id}', 1, 1, :t, :t, :t, '{public}', 'iPhone · Safari')"
+)
 """The push tables' revision and the one before it. If another revision lands first, renumber the
 file and change these two names; nothing else here names a revision."""
 
@@ -2949,10 +2953,7 @@ def test_0043_adds_empty_push_tables_that_follow_their_rows_and_downgrade_drops_
             c.execute(text("PRAGMA foreign_keys = ON"))
             assert c.execute(text("SELECT count(*) FROM push_subscription")).scalar() == 0
             c.execute(
-                text(
-                    "INSERT INTO session (id, household_id, member_id, created_at, expires_at, last_seen) "
-                    "VALUES ('s1', 1, 1, :t, :t, :t)"
-                ),
+                text(SESSION_ROW.format(id="s1", public="p1")),
                 {"t": STAMP},
             )
             c.execute(
@@ -2984,3 +2985,65 @@ def test_0043_adds_empty_push_tables_that_follow_their_rows_and_downgrade_drops_
         engine.dispose()
     assert not names & PUSH_TABLES
     _upgrade_to(settings, PUSH_REVISION)
+
+
+def _push_rows(settings: Settings) -> dict[str, list[tuple[object, ...]]]:
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.connect() as c:
+            return {t: [tuple(r) for r in c.execute(text(f"SELECT * FROM {t} ORDER BY id"))] for t in PUSH_TABLES}  # noqa: S608
+    finally:
+        engine.dispose()
+
+
+def test_a_rebuild_of_session_keeps_every_push_device_and_its_cascade(settings: Settings) -> None:
+    """0042 rebuilds ``session`` in batch mode, and a later revision may again. Rebuilt the way
+    migrations run (foreign keys off), the table that ``push_subscription.session_id`` refers to
+    is the new ``session``: every device and push stays, nothing dangles, and signing out still
+    deletes the device and its pushes."""
+    from alembic.operations import Operations
+
+    _upgrade_to(settings, PUSH_REVISION)
+    _populate_calls(settings)
+    _execute(
+        settings,
+        SESSION_ROW.format(id="s1", public="p1"),
+        SESSION_ROW.format(id="s2", public="p2"),
+        "INSERT INTO outbox (id, household_id, event_id, kind, payload, idempotency_key, created_at, updated_at, "
+        "available_at, attempts) VALUES (99, 1, NULL, 'guest_joined', '{}', 'join:9:admin1', :t, :t, :t, 0)",
+        "INSERT INTO push_subscription (id, household_id, member_id, session_id, endpoint, p256dh, auth, created_at) "
+        "VALUES (1, 1, 1, 's1', 'https://fcm.googleapis.com/fcm/send/a', 'k', 'a', :t), "
+        "(2, 1, 1, 's2', 'https://fcm.googleapis.com/fcm/send/b', 'k', 'a', :t)",
+        "INSERT INTO push_queue (household_id, outbox_id, subscription_id, member_id, created_at, available_at, "
+        "attempts) VALUES (1, 99, 1, 1, :t, :t, 0), (1, 99, 2, 1, :t, :t, 0)",
+    )
+    before = _rows_outside_m4(settings)
+    pushes_before = _push_rows(settings)
+    assert len(pushes_before["push_subscription"]) == 2 and len(pushes_before["push_queue"]) == 2
+
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.connect() as c:
+            c.exec_driver_sql("PRAGMA foreign_keys = OFF")
+            with Operations(MigrationContext.configure(c)).batch_alter_table("session", recreate="always"):
+                pass
+            c.commit()
+        with engine.begin() as c:
+            c.exec_driver_sql("PRAGMA foreign_keys = ON")
+            assert c.exec_driver_sql("PRAGMA foreign_key_check").all() == []
+            refers = c.exec_driver_sql("SELECT sql FROM sqlite_master WHERE name = 'push_subscription'").scalar_one()
+            assert 'REFERENCES "session"' in refers or "REFERENCES session" in refers
+    finally:
+        engine.dispose()
+    assert _rows_outside_m4(settings) == before
+    assert _push_rows(settings) == pushes_before
+
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.begin() as c:
+            c.exec_driver_sql("PRAGMA foreign_keys = ON")
+            c.exec_driver_sql("DELETE FROM session WHERE id = 's1'")
+            assert c.exec_driver_sql("SELECT id FROM push_subscription").all() == [(2,)]
+            assert c.exec_driver_sql("SELECT subscription_id FROM push_queue").all() == [(2,)]
+    finally:
+        engine.dispose()
