@@ -66,7 +66,8 @@ SECRET_SHAPES = re.compile(
     r"|1234\.5678\.trigger"  # the test trigger_id, which opens a modal for that person
     r"|[?&](code|state)=|__Host-"  # an OIDC code or state, or a session cookie
     r"|subject-admin"  # the test OIDC subject
-    r"|fcm\.googleapis\.com|push\.apple\.com|push\.services\.mozilla\.com|notify\.windows\.com"  # a push endpoint
+    # a push endpoint: a push service's host with its path, which identifies the device
+    r"|(fcm\.googleapis\.com|jmt17\.google\.com|push\.apple\.com|push\.services\.mozilla\.com|notify\.windows\.com)[:/]"
     rf"|{MEMBER_TEXT}"
 )
 """What no log line in the suite may contain (SEC-5, #75)."""

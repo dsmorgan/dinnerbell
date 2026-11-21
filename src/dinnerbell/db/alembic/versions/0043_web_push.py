@@ -94,11 +94,13 @@ def upgrade() -> None:
     )
     op.create_index(op.f("ix_push_queue_household_id"), "push_queue", ["household_id"], unique=False)
     op.create_index(op.f("ix_push_queue_subscription_id"), "push_queue", ["subscription_id"], unique=False)
+    op.create_index(op.f("ix_push_queue_member_id"), "push_queue", ["member_id"], unique=False)
     op.create_index("ix_push_queue_pending", "push_queue", ["closed_at", "sent_at", "available_at"], unique=False)
 
 
 def downgrade() -> None:
     op.drop_index("ix_push_queue_pending", table_name="push_queue")
+    op.drop_index(op.f("ix_push_queue_member_id"), table_name="push_queue")
     op.drop_index(op.f("ix_push_queue_subscription_id"), table_name="push_queue")
     op.drop_index(op.f("ix_push_queue_household_id"), table_name="push_queue")
     op.drop_table("push_queue")

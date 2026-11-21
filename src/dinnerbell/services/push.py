@@ -12,8 +12,10 @@ identifies the device.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import secrets
+from collections.abc import Awaitable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -48,6 +50,7 @@ NOT_WANTED = "skipped: the member doesn't get pushes now"
 EXPIRED = "expired: queued more than 24 hours ago, not sent late"
 UNKNOWN_SERVICE = "refused: not a known push service"
 NOT_THEIR_DEVICE = "skipped: the device belongs to someone else now"
+GAVE_UP = "gave up: its claims kept running out"
 GUESTS_DONT = "Guests can't turn on notifications."
 
 
@@ -63,7 +66,16 @@ async def subscribe(
     isn't a known push service's or keys that can't work. Returns the subscription's ID."""
     require_member(actor, GUESTS_DONT)
     await require_web_app(db, actor.household_id)
-    keys = push.check_subscription(endpoint, p256dh, auth)
+    try:
+        keys = push.check_subscription(endpoint, p256dh, auth)
+    except push.InvalidSubscription as exc:
+        # The host only, never the path, which identifies the device: so a push service
+        # Dinnerbell doesn't know yet can be found and added to the allowlist.
+        extra = {"member_id": actor.id, "host": push.endpoint_host(endpoint), "reason": "keys"}
+        if str(exc) == push.NOT_A_PUSH_SERVICE:
+            extra["reason"] = "host"
+        log.info("push subscription refused", extra=extra)
+        raise
     async with write_transaction(db):
         subscription_id = await PushRepository(db).subscribe(actor.household_id, actor.id, session_id, keys, now)
         await db.commit()
@@ -76,6 +88,8 @@ async def unsubscribe(db: AsyncSession, actor: Member, endpoint: str) -> bool:
     whether there was one. NotFound while the switch is off."""
     require_member(actor, GUESTS_DONT)
     await require_web_app(db, actor.household_id)
+    if len(endpoint) > push.MAX_ENDPOINT_LENGTH:
+        return False  # never stored
     removed = await PushRepository(db).unsubscribe(actor.household_id, actor.id, endpoint)
     await db.commit()
     if removed:
@@ -94,6 +108,21 @@ async def switched_off(db: AsyncSession, household_id: int) -> None:
         log.info("push subscriptions deleted", extra={"devices": devices, "pushes": pushes})
 
 
+HTTPS_SUBJECT = (
+    "The web app is on, but DINNERBELL_BASE_URL isn't https://. Apple refuses pushes signed with a "
+    "VAPID subject that isn't an https URL, so iPhones and iPads won't get notifications."
+)
+
+
+async def check_base_url(db: AsyncSession, household_id: int, base_url: str) -> bool:
+    """At startup: warn when the web app is on and the base URL, the VAPID ``sub``, isn't
+    https. Returns whether it warned."""
+    if base_url.startswith("https://") or not await web_app_enabled(db, household_id):
+        return False
+    log.warning(HTTPS_SUBJECT)
+    return True
+
+
 @dataclass(frozen=True, slots=True)
 class PushStatus:
     devices: int
@@ -110,6 +139,11 @@ async def status(db: AsyncSession, household_id: int, now: datetime) -> PushStat
 
 # Draining ---------------------------------------------------------------------------------------
 
+PARALLEL = 4
+"""Pushes in flight at once, so one slow push service doesn't hold up the others."""
+SEND_DEADLINE = 15.0
+"""Seconds one push may take in all, past httpx's own timeouts, before it counts as failed."""
+
 
 @dataclass
 class PushDrainResult:
@@ -121,6 +155,18 @@ class PushDrainResult:
     devices_deleted: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class _Ready:
+    """A claimed push, checked and built, waiting for its batch to go out."""
+
+    queued: QueuedPush
+    token: str
+    body: bytes
+    ttl: int
+    urgency: str
+    topic: str | None
+
+
 async def drain(
     sessionmaker: async_sessionmaker[AsyncSession],
     sender: PushSender,
@@ -128,25 +174,36 @@ async def drain(
     base_url: str,
     *,
     limit: int = BATCH,
+    deadline: float = SEND_DEADLINE,
 ) -> PushDrainResult:
-    """Send the pushes that are due, oldest first. Safe to run beside itself: each row is
-    claimed with a conditional UPDATE before it's sent."""
+    """Send the pushes that are due, oldest first, ``PARALLEL`` at a time. Safe to run beside
+    itself: each row is claimed with a conditional UPDATE before it's sent. Any error with one
+    row retries or closes that row and never ends the pass; a row whose claim is lost to a crash
+    comes back after ``LEASE``, its attempt counted, and closes after ``MAX_ATTEMPTS``."""
     result = PushDrainResult()
     async with sessionmaker() as db:
         repo = PushRepository(db)
         due = await repo.due(limit, clock())
         await db.rollback()
-        for push_id in due:
-            token = secrets.token_hex(16)
-            now = clock()
-            queued = await repo.claim(push_id, token, now=now, until=now + LEASE)
-            await db.commit()
-            if queued is not None:
-                await _send(db, sender, queued, token, clock, base_url, result)
-        if due:
-            await repo.purge(clock() - PURGE_AFTER)
-            await db.commit()
+        for start in range(0, len(due), PARALLEL):
+            ready: list[_Ready] = []
+            for push_id in due[start : start + PARALLEL]:
+                prepared = await _prepare(db, push_id, clock, base_url, result)
+                if prepared is not None:
+                    ready.append(prepared)
+            answers = await asyncio.gather(*(_post(sender, item, deadline) for item in ready))
+            for item, answer in zip(ready, answers, strict=True):
+                await _guarded(db, item.queued, item.token, clock, result, _settle(db, item, answer, clock, result))
     return result
+
+
+async def purge(sessionmaker: async_sessionmaker[AsyncSession], now: datetime) -> int:
+    """Delete pushes that ended more than ``PURGE_AFTER`` ago. The scheduler runs this hourly,
+    whether or not anything is due; the outbox rows keep the record."""
+    async with sessionmaker() as db:
+        removed = await PushRepository(db).purge(now - PURGE_AFTER)
+        await db.commit()
+    return removed
 
 
 def _about(queued: QueuedPush, **more: object) -> dict[str, object]:
@@ -161,13 +218,89 @@ def _about(queued: QueuedPush, **more: object) -> dict[str, object]:
     return {key: value for key, value in fields.items() if value is not None}
 
 
+async def _guarded(
+    db: AsyncSession, queued: QueuedPush, token: str, clock: Clock, result: PushDrainResult, step: Awaitable[None]
+) -> None:
+    """Run one row's ``step``. On any error, retry the row, or close it once it has used up its
+    attempts, logging the error's type and the IDs only: its text can carry the endpoint."""
+    try:
+        await step
+    except Exception as exc:
+        await db.rollback()
+        try:
+            if isinstance(exc, PayloadError):  # a row nothing can read won't read on a retry
+                await PushRepository(db).close(queued.id, token, clock(), f"undeliverable: {type(exc).__name__}")
+                await db.commit()
+                result.failed += 1
+                log.error("push undeliverable", extra=_about(queued))
+                return
+            await _retry(db, queued, token, clock, result, type(exc).__name__, timedelta(0))
+        except Exception:
+            await db.rollback()
+            log.exception("push could not be settled; its claim runs out", extra=_about(queued))
+
+
+async def _prepare(
+    db: AsyncSession, push_id: int, clock: Clock, base_url: str, result: PushDrainResult
+) -> _Ready | None:
+    """Claim a push, check it, and build its request, or settle it here. None unless it's to go."""
+    token = secrets.token_hex(16)
+    now = clock()
+    try:
+        queued = await PushRepository(db).claim(push_id, token, now=now, until=now + LEASE)
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        log.exception("push could not be claimed", extra={"push_id": push_id})
+        return None
+    if queued is None:
+        return None
+    built: list[_Ready] = []
+
+    async def check_and_build() -> None:
+        reason = await _stale(db, queued, clock())
+        if reason is not None:
+            await PushRepository(db).close(queued.id, token, clock(), reason)
+            await db.commit()
+            result.closed += 1
+            log.info("push closed", extra=_about(queued, note=reason))
+            return
+        notification = from_payload(queued.kind, queued.payload)
+        at = clock()
+        body = push.message(notification, at).payload(base_url)
+        built.append(
+            _Ready(
+                queued, token, body, push.ttl(notification, at), push.urgency(queued.kind), push.topic_for(notification)
+            )
+        )
+
+    await _guarded(db, queued, token, clock, result, check_and_build())
+    await db.rollback()  # no transaction open while the batch is out
+    return built[0] if built else None
+
+
+async def _post(sender: PushSender, item: _Ready, deadline: float) -> push.PushResponse | Exception:
+    """Send one push, with a deadline for the whole request. Returns the answer or the error."""
+    try:
+        async with asyncio.timeout(deadline):
+            return await sender.send(
+                item.queued.target, item.body, ttl=item.ttl, urgency=item.urgency, topic=item.topic
+            )
+    except Exception as exc:
+        return exc
+
+
 async def _stale(db: AsyncSession, queued: QueuedPush, now: datetime) -> str | None:
-    """Why ``queued`` closes unsent, or None to send it."""
+    """Why ``queued`` closes unsent, or None to send it. Reads the device's owner again, just
+    before sending."""
+    if queued.attempts > MAX_ATTEMPTS:  # claims a crash or a hang ran out on
+        return GAVE_UP
     if not await web_app_enabled(db, queued.household_id):
         return SWITCHED_OFF
     if not push.known_push_service(queued.target.endpoint):  # stored before the allowlist changed
         return UNKNOWN_SERVICE
-    if queued.owner_id != queued.member_id:  # signed in as someone else since it was queued
+    owner = await PushRepository(db).owner(queued.target.subscription_id)
+    if owner != queued.member_id:  # signed in as someone else since it was queued
         return NOT_THEIR_DEVICE
     member = await MemberRepository(db).get(queued.household_id, queued.member_id)
     if member is None or not push.wants_push(member, queued.kind):
@@ -188,46 +321,19 @@ async def _stale(db: AsyncSession, queued: QueuedPush, now: datetime) -> str | N
     return EXPIRED if now - queued.created_at > MAX_AGE else None
 
 
-async def _send(
-    db: AsyncSession,
-    sender: PushSender,
-    queued: QueuedPush,
-    token: str,
-    clock: Clock,
-    base_url: str,
-    result: PushDrainResult,
+async def _settle(
+    db: AsyncSession, item: _Ready, answer: push.PushResponse | Exception, clock: Clock, result: PushDrainResult
 ) -> None:
-    repo = PushRepository(db)
-    try:
-        reason = await _stale(db, queued, clock())
-    except PayloadError as exc:
-        await repo.close(queued.id, token, clock(), str(exc))
+    queued, token = item.queued, item.token
+    if isinstance(answer, push.UndeliverableKeys):
+        await PushRepository(db).delete_subscription(queued.target.subscription_id)
         await db.commit()
-        result.failed += 1
-        log.error("push undeliverable", extra=_about(queued))
-        return
-    if reason is not None:
-        await repo.close(queued.id, token, clock(), reason)
-        await db.commit()
-        result.closed += 1
-        log.info("push closed", extra=_about(queued, note=reason))
-        return
-    notification = from_payload(queued.kind, queued.payload)
-    now = clock()
-    body = push.message(notification, now).payload(base_url)
-    try:
-        response = await sender.send(
-            queued.target,
-            body,
-            ttl=push.ttl(notification, now),
-            urgency=push.urgency(queued.kind),
-            topic=push.topic_for(notification),
-        )
-    except Exception as exc:
-        # Never the message: an HTTP error's text can carry the endpoint.
-        await _retry(db, queued, token, clock, result, type(exc).__name__, timedelta(0))
-        return
-    await _answer(db, queued, token, clock, result, response)
+        result.devices_deleted += 1
+        log.warning("push subscription had keys that can't work; deleted", extra=_about(queued))
+    elif isinstance(answer, Exception):
+        await _retry(db, queued, token, clock, result, type(answer).__name__, timedelta(0))
+    else:
+        await _answer(db, queued, token, clock, result, answer)
 
 
 async def _answer(
@@ -272,8 +378,8 @@ async def _answer(
         result.failed += 1
         log.error("push failed", extra=_about(queued, status=status))
     else:
-        wait = timedelta(seconds=response.retry_after or 0)
-        await _retry(db, queued, token, clock, result, f"status {status}", wait)
+        asked = min(response.retry_after or 0.0, outbox.LONGEST_RETRY.total_seconds())
+        await _retry(db, queued, token, clock, result, f"status {status}", timedelta(seconds=asked))
 
 
 async def _retry(

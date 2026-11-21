@@ -628,7 +628,7 @@ class PushRow(Base):
     household_id: Mapped[int] = mapped_column(ForeignKey("household.id", ondelete="CASCADE"), index=True)
     outbox_id: Mapped[int] = mapped_column(ForeignKey("outbox.id", ondelete="CASCADE"))
     subscription_id: Mapped[int] = mapped_column(ForeignKey("push_subscription.id", ondelete="CASCADE"), index=True)
-    member_id: Mapped[int] = mapped_column(ForeignKey("member.id", ondelete="CASCADE"))
+    member_id: Mapped[int] = mapped_column(ForeignKey("member.id", ondelete="CASCADE"), index=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime())
     available_at: Mapped[datetime] = mapped_column(UTCDateTime())
     claim_token: Mapped[str | None] = mapped_column(String(32))

@@ -46,8 +46,6 @@ class QueuedPush:
     created_at: datetime
     attempts: int
     target: PushTarget
-    owner_id: int
-    """Who the device belongs to now. A push for anyone else never goes to it."""
 
 
 def _subscription(row: PushSubscriptionRow) -> Subscription:
@@ -155,8 +153,7 @@ class PushRepository:
                         "session_id": session_id,
                         "p256dh": keys.p256dh,
                         "auth": keys.auth,
-                        "auth_failures": 0,
-                    },
+                    },  # not auth_failures: push.js sends the same subscription again often
                 )
                 .returning(PushSubscriptionRow.id)
             )
@@ -190,6 +187,13 @@ class PushRepository:
             .order_by(PushSubscriptionRow.id)
         )
         return [_subscription(row) for row in rows]
+
+    async def owner(self, subscription_id: int) -> int | None:
+        """The member a device belongs to now, or None if it's gone."""
+        found: int | None = await self._session.scalar(
+            select(PushSubscriptionRow.member_id).where(PushSubscriptionRow.id == subscription_id)
+        )
+        return found
 
     async def delete_subscription(self, subscription_id: int) -> bool:
         """Delete a device and, with it, every push queued for it."""
@@ -291,7 +295,6 @@ class PushRepository:
             row.created_at,
             row.attempts,
             target,
-            device.member_id,
         )
 
     async def sent(self, push_id: int, token: str, now: datetime) -> bool:

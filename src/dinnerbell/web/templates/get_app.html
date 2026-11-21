@@ -1,9 +1,6 @@
 {#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
 {% extends "base.html" %}
 {% block title %}Get the app{% endblock %}
-{% block scripts %}
-  <script src="/static/push.js?v={{ version|urlencode }}" defer></script>
-{% endblock %}
 {% block content %}
 <h1>Get the app</h1>
 {#- Inside the installed app (display-mode standalone), app.css shows .in-app and hides
@@ -15,8 +12,8 @@
 {#- Turn on notifications (spec 6.15, "The installable app"): the tap iOS requires. Hidden until
     push.js finds push here: on iPhone and iPad only inside the installed app, elsewhere wherever
     the browser has PushManager. Signed-in members only: guests never get pushes. -#}
-{% if principal and not principal.member.is_guest and vapid_key %}
-<section class="card stack" id="notifications" aria-labelledby="notifications-heading" data-key="{{ vapid_key }}" hidden>
+{% if principal and not principal.member.is_guest and push_key %}
+<section class="card stack" id="notifications" aria-labelledby="notifications-heading" hidden>
   <h2 id="notifications-heading">Notifications</h2>
   <p id="push-state" role="status">Checking this device…</p>
   <p class="push-actions">

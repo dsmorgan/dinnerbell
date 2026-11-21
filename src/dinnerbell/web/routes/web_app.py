@@ -18,7 +18,7 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import PlainTextResponse, RedirectResponse
 from starlette.responses import Response
 
-from dinnerbell.domain.push import MAX_ENDPOINT_LENGTH, InvalidSubscription
+from dinnerbell.domain.push import InvalidSubscription
 from dinnerbell.services import push, web_app
 from dinnerbell.web.auth import AdminCSRFChecked, AdminPrincipal, Context, CSRFChecked, Database, MaybePrincipal
 from dinnerbell.web.context import app_context
@@ -122,18 +122,19 @@ async def get_the_app(request: Request, principal: MaybePrincipal, db: Database)
     """**Get the app**: the Add to Home Screen steps for iPhone and Android. Open signed out
     too, since a member without Slack installs the app before they can sign in."""
     await web_app.require_web_app(db, _household_id(principal))
-    return await render(request, "get_app.html", {"vapid_key": app_context(request).vapid_public_key})
+    return await render(request, "get_app.html")
 
 
 # Turn on notifications (spec 6.15) ---------------------------------------------------------------
 
-Endpoint = Annotated[str, Form(max_length=MAX_ENDPOINT_LENGTH)]
-Key = Annotated[str, Form(max_length=200)]
+# No max_length: FastAPI would answer a long field with the HTML error page, and push.js shows
+# the 400's sentence instead. The service checks every length; the body limit caps the request.
+Field = Annotated[str, Form()]
 
 
 @router.post("/app/notifications")
 async def turn_on(
-    principal: CSRFChecked, context: Context, db: Database, endpoint: Endpoint, p256dh: Key, auth: Key
+    principal: CSRFChecked, context: Context, db: Database, endpoint: Field = "", p256dh: Field = "", auth: Field = ""
 ) -> Response:
     """Save this device's push subscription, from push.js. 204, or 400 with what to do."""
     try:
@@ -144,7 +145,7 @@ async def turn_on(
 
 
 @router.post("/app/notifications/off")
-async def turn_off(principal: CSRFChecked, db: Database, endpoint: Endpoint) -> Response:
+async def turn_off(principal: CSRFChecked, db: Database, endpoint: Field = "") -> Response:
     """Forget this device's push subscription: 204 whether or not Dinnerbell had it."""
     await push.unsubscribe(db, principal.member, endpoint)
     return Response(status_code=204)

@@ -3,8 +3,10 @@
 // site, and only while Admin's Web app switch is on. Its own CSP lets it reach this origin only.
 //
 // It shows pushes on Android and on iOS before 18.4, which don't show a Declarative Web Push by
-// themselves: the same {"web_push": 8030, "notification": {title, body, navigate}} payload, with
-// this site's icon. It opens a push's page when it's tapped. It has no fetch handler and uses no
+// themselves: the same {"web_push": 8030, "notification": {title, body, navigate, tag}} payload,
+// with this site's icon. A tag, which a call's channel posts share, replaces the older
+// notification on the lock screen; a direct message has none, so each one stays. It opens a
+// push's page when it's tapped. It has no fetch handler and uses no
 // cache: every page comes from the server, as in the browser.
 (function () {
   "use strict";
