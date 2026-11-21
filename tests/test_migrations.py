@@ -2930,7 +2930,7 @@ file and change these two names; nothing else here names a revision."""
 
 def test_0043_adds_empty_push_tables_that_follow_their_rows_and_downgrade_drops_them(settings: Settings) -> None:
     """Up adds ``push_subscription`` and ``push_queue``, empty, and touches no other row. A push
-    goes with its outbox row, its device, and its member; a device goes with its member. Down
+    goes with its outbox row, its device, and its member; a device goes with its session. Down
     drops both and changes no other row."""
     _upgrade_to(settings, BEFORE_PUSH)
     _populate_calls(settings)
@@ -2950,8 +2950,15 @@ def test_0043_adds_empty_push_tables_that_follow_their_rows_and_downgrade_drops_
             assert c.execute(text("SELECT count(*) FROM push_subscription")).scalar() == 0
             c.execute(
                 text(
-                    "INSERT INTO push_subscription (id, household_id, member_id, endpoint, p256dh, auth, created_at) "
-                    "VALUES (1, 1, 1, 'https://fcm.googleapis.com/fcm/send/a', 'k', 'a', :t)"
+                    "INSERT INTO session (id, household_id, member_id, created_at, expires_at, last_seen) "
+                    "VALUES ('s1', 1, 1, :t, :t, :t)"
+                ),
+                {"t": STAMP},
+            )
+            c.execute(
+                text(
+                    "INSERT INTO push_subscription (id, household_id, member_id, session_id, endpoint, p256dh, auth, "
+                    "created_at) VALUES (1, 1, 1, 's1', 'https://fcm.googleapis.com/fcm/send/a', 'k', 'a', :t)"
                 ),
                 {"t": STAMP},
             )
@@ -2964,7 +2971,7 @@ def test_0043_adds_empty_push_tables_that_follow_their_rows_and_downgrade_drops_
                 c.execute(text(push), {"t": STAMP})  # one push per outbox row and device
             c.execute(text("DELETE FROM outbox WHERE id = 99"))
             assert c.execute(text("SELECT count(*) FROM push_queue")).scalar() == 0
-            c.execute(text("DELETE FROM member WHERE id = 1"))
+            c.execute(text("DELETE FROM session WHERE id = 's1'"))  # signing out ends the device's pushes
             assert c.execute(text("SELECT count(*) FROM push_subscription")).scalar() == 0
     finally:
         engine.dispose()

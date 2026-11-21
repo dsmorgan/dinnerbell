@@ -137,7 +137,7 @@ async def turn_on(
 ) -> Response:
     """Save this device's push subscription, from push.js. 204, or 400 with what to do."""
     try:
-        await push.subscribe(db, principal.member, endpoint, p256dh, auth, now=context.clock())
+        await push.subscribe(db, principal.member, principal.session_hash, endpoint, p256dh, auth, now=context.clock())
     except InvalidSubscription as exc:
         return PlainTextResponse(str(exc), status_code=400)
     return Response(status_code=204)

@@ -169,9 +169,17 @@ async def lived_in(house: House) -> int:
             )
         )
         db.add(ShownPlaceRow(household_id=household_id, event_id=event_id, run=1, item_id=tacos, shuffle=0))
+        expires = now + timedelta(days=30)
+        db.add(
+            SessionRow(
+                id="a" * 64, household_id=household_id, member_id=kim, created_at=now, expires_at=expires, last_seen=now
+            )
+        )
+        await db.flush()  # the session first: the device refers to it
         device = PushSubscriptionRow(
             household_id=household_id,
             member_id=kim,
+            session_id="a" * 64,
             endpoint="https://fcm.googleapis.com/fcm/send/lived-in",
             p256dh="k",
             auth="a",
@@ -190,12 +198,6 @@ async def lived_in(house: House) -> int:
                 available_at=now,
                 attempts=1,
                 sent_at=now,
-            )
-        )
-        expires = now + timedelta(days=30)
-        db.add(
-            SessionRow(
-                id="a" * 64, household_id=household_id, member_id=kim, created_at=now, expires_at=expires, last_seen=now
             )
         )
         db.add(
