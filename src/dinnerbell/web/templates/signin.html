@@ -5,7 +5,18 @@
 <section class="card hero">
   <h1>{{ household_name }}</h1>
   <p class="lede">Who's eating, what we're eating, and who's getting it.</p>
-  <a class="button primary block" href="/auth/login">{% if provider_is_slack %}Sign in with Slack{% else %}Sign in{% endif %}</a>
+  {#- While the web app is on (spec 6.15), a code is the other way in. Inside the installed app,
+      app.css puts it first and makes it the primary button, since a Slack sign-in started
+      there can finish in the browser instead. -#}
+  {% set provider_link %}<a class="button primary block{% if web_app %} signin-provider{% endif %}" href="/auth/login">{% if provider_is_slack %}Sign in with Slack{% else %}Sign in{% endif %}</a>{% endset %}
+  {% if web_app %}
+  <div class="signin-options">
+    {{ provider_link }}
+    <a class="button block signin-code" href="/auth/code">Sign in with a code</a>
+  </div>
+  {% else %}
+  {{ provider_link }}
+  {% endif %}
   <p class="muted small">Only people the household admin has invited can sign in.</p>
   {% if web_app %}<p class="small"><a href="/app">Get the app</a></p>{% endif %}
 </section>

@@ -14,10 +14,11 @@ from typing import Any
 from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dinnerbell.db.models import AuditRow, HouseholdRow, MemberRow, SessionRow
+from dinnerbell.db.models import AuditRow, HouseholdRow, MemberRow, SessionRow, new_public_id
 from dinnerbell.domain.away import Away
 from dinnerbell.domain.household import Household
 from dinnerbell.domain.members import Capabilities, ColorMode, Member, NotifyVia, Role
+from dinnerbell.domain.sessions import UNKNOWN_DEVICE
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +27,18 @@ class StoredSession:
     member: Member
     household: Household
     expires_at: datetime
+    last_seen: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class DeviceSession:
+    """One of a member's sessions as Preferences lists it (spec 6.15). ``token_hash`` stays in
+    the services layer, which only compares it with the current session's."""
+
+    public_id: str
+    device: str
+    token_hash: str
+    created_at: datetime
     last_seen: datetime
 
 
@@ -261,7 +274,16 @@ class SessionRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def add(self, *, token_hash: str, member: Member, now: datetime, expires_at: datetime) -> None:
+    async def add(
+        self,
+        *,
+        token_hash: str,
+        member: Member,
+        now: datetime,
+        expires_at: datetime,
+        device: str = UNKNOWN_DEVICE,
+    ) -> None:
+        """Add a session with a new random public ID, never derived from the token."""
         self._session.add(
             SessionRow(
                 id=token_hash,
@@ -270,9 +292,48 @@ class SessionRepository:
                 created_at=now,
                 expires_at=expires_at,
                 last_seen=now,
+                public_id=new_public_id(),
+                device=device,
             )
         )
         await self._session.flush()
+
+    async def for_member(self, household_id: int, member_id: int, now: datetime) -> list[DeviceSession]:
+        """The member's unexpired sessions, the most recently seen first."""
+        result = await self._session.scalars(
+            select(SessionRow)
+            .where(
+                SessionRow.household_id == household_id,
+                SessionRow.member_id == member_id,
+                SessionRow.expires_at > now,
+            )
+            .order_by(SessionRow.last_seen.desc(), SessionRow.created_at.desc(), SessionRow.public_id)
+        )
+        return [
+            DeviceSession(
+                public_id=row.public_id,
+                device=row.device,
+                token_hash=row.id,
+                created_at=row.created_at,
+                last_seen=row.last_seen,
+            )
+            for row in result
+        ]
+
+    async def delete_device(self, household_id: int, member_id: int, public_id: str) -> str | None:
+        """Delete the member's session named ``public_id``. Returns its token hash, or None if the
+        member has no such session."""
+        result = await self._session.execute(
+            delete(SessionRow)
+            .where(
+                SessionRow.household_id == household_id,
+                SessionRow.member_id == member_id,
+                SessionRow.public_id == public_id,
+            )
+            .returning(SessionRow.id)
+        )
+        token_hash = result.scalar_one_or_none()
+        return None if token_hash is None else str(token_hash)
 
     async def get(self, token_hash: str) -> StoredSession | None:
         result = await self._session.execute(
@@ -301,8 +362,10 @@ class SessionRepository:
     async def delete(self, token_hash: str) -> None:
         await self._session.execute(delete(SessionRow).where(SessionRow.id == token_hash))
 
-    async def delete_for_member(self, member_id: int) -> None:
-        await self._session.execute(delete(SessionRow).where(SessionRow.member_id == member_id))
+    async def delete_for_member(self, member_id: int) -> int:
+        """Delete every session of the member. Returns how many there were."""
+        result = await self._session.execute(delete(SessionRow).where(SessionRow.member_id == member_id))
+        return int(getattr(result, "rowcount", 0) or 0)
 
     async def delete_expired(self, now: datetime) -> int:
         result = await self._session.execute(delete(SessionRow).where(SessionRow.expires_at <= now))

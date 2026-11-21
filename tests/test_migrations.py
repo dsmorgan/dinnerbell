@@ -28,6 +28,7 @@ M7_TABLES = {"stance_edit"}
 M6_TABLES = {"assistant_usage", "assistant_conversation"}
 M6_DRAFT_TABLES = {"assistant_draft"}
 SHUFFLE_TABLES = {"shown_place"}
+CODE_TABLES = {"sign_in_code"}
 
 
 def test_migrates_an_empty_database(settings: Settings) -> None:
@@ -37,7 +38,7 @@ def test_migrates_an_empty_database(settings: Settings) -> None:
     try:
         inspector = inspect(engine)
         everything = M0_TABLES | M1_TABLES | M2_TABLES | M3_TABLES | M4_TABLES | M6_TABLES | M6_DRAFT_TABLES | M7_TABLES
-        everything |= SHUFFLE_TABLES
+        everything |= SHUFFLE_TABLES | CODE_TABLES
         assert set(inspector.get_table_names()) == everything | {"alembic_version"}
         for table in everything - {"household"}:
             assert "household_id" in {c["name"] for c in inspector.get_columns(table)}, table
@@ -1420,6 +1421,7 @@ def _rows_outside_m4(settings: Settings) -> dict[str, list[object]]:
                     "assistant_draft",
                     "shown_place",
                     "stance_edit",
+                    "sign_in_code",
                     "alembic_version",
                 }
             }
@@ -2845,3 +2847,66 @@ def test_0041_leaves_everyone_unchosen_refuses_other_values_and_downgrade_drops_
     assert _rows_outside_m4(settings) == before
     _upgrade_to(settings, "0041_notify_via")
     assert _notify_via(settings) == [(1, None), (2, None)]
+
+
+# 0042: Sign in with a code, and Devices (#138) -------------------------------------------------
+# If another revision lands first, renumber these two and nothing else.
+CODES_REVISION = "0042_sign_in_codes"
+BEFORE_CODES = "0041_notify_via"
+
+
+def _sessions(settings: Settings) -> list[tuple[object, ...]]:
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.connect() as c:
+            return [tuple(r) for r in c.execute(text("SELECT * FROM session ORDER BY id"))]
+    finally:
+        engine.dispose()
+
+
+def test_0042_names_and_labels_every_session_and_downgrade_drops_codes(settings: Settings) -> None:
+    """Up adds ``sign_in_code``, empty, and gives every session a random public ID, never its
+    token hash, and the label "Unknown device", signing nobody out. Down drops both, and every
+    session stays as it was."""
+    _upgrade_to(settings, BEFORE_CODES)
+    _populate_calls(settings)
+    _execute(
+        settings,
+        "INSERT INTO session (id, household_id, member_id, created_at, expires_at, last_seen) "
+        "VALUES ('" + "a" * 64 + "', 1, 1, :t, :t, :t), ('" + "b" * 64 + "', 1, 1, :t, :t, :t)",
+    )
+    before = _rows_outside_m4(settings)
+    sessions_before = _sessions(settings)
+
+    _upgrade_to(settings, CODES_REVISION)
+    assert "sign_in_code" in _tables(settings)
+    after = _sessions(settings)
+    assert [row[:-2] for row in after] == sessions_before  # the two new columns are last
+    public_ids = [row[-2] for row in after]
+    assert len(set(public_ids)) == 2 and all(isinstance(p, str) and len(p) == 22 for p in public_ids)
+    assert not {row[0] for row in after} & set(public_ids)
+    assert [row[-1] for row in after] == ["Unknown device", "Unknown device"]
+    rest = _rows_outside_m4(settings)
+    assert {k: v for k, v in rest.items() if k != "session"} == {k: v for k, v in before.items() if k != "session"}
+    with pytest.raises(IntegrityError, match=r"session\.public_id"):
+        _execute(settings, f"UPDATE session SET public_id = '{public_ids[0]}' WHERE id = '{'b' * 64}'")  # noqa: S608
+    with pytest.raises(IntegrityError, match=r"session\.device"):
+        _execute(settings, "UPDATE session SET device = NULL")
+    _execute(
+        settings,
+        "INSERT INTO sign_in_code (household_id, member_id, code_hash, created_by, created_at, expires_at) "
+        "VALUES (1, 1, '" + "c" * 64 + "', 1, :t, :t)",
+    )
+    with pytest.raises(IntegrityError, match=r"sign_in_code\.member_id"):
+        _execute(
+            settings,
+            "INSERT INTO sign_in_code (household_id, member_id, code_hash, created_at, expires_at) "
+            "VALUES (1, 1, '" + "d" * 64 + "', :t, :t)",
+        )
+
+    _downgrade_to(settings, BEFORE_CODES)
+    assert "sign_in_code" not in _tables(settings)
+    assert _sessions(settings) == sessions_before
+    assert _rows_outside_m4(settings) == before
+    _upgrade_to(settings, CODES_REVISION)
+    assert [row[:-2] for row in _sessions(settings)] == sessions_before

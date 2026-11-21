@@ -127,9 +127,14 @@ async def get_the_app(request: Request, principal: MaybePrincipal, db: Database)
 
 
 @admin_router.get("/web-app")
-async def admin_page(request: Request, principal: AdminPrincipal, db: Database, notice: str = "") -> Response:
+async def admin_page(
+    request: Request, principal: AdminPrincipal, context: Context, db: Database, notice: str = ""
+) -> Response:
     on = await web_app.web_app_enabled(db, principal.member.household_id)
-    return await render(request, "admin_web_app.html", {"on": on, "notice": NOTICES.get(notice)})
+    # Over 200 wrong sign-in codes in the last hour, from every address (spec 6.15).
+    throttled = context.code_throttle.busy(context.clock())
+    page = {"on": on, "notice": NOTICES.get(notice), "code_throttle": throttled}
+    return await render(request, "admin_web_app.html", page)
 
 
 @admin_router.post("/web-app")

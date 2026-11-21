@@ -18,6 +18,18 @@
   <div class="member-actions">
     <a class="button small" href="/admin/members/{{ m.id }}">Edit</a>
     <a class="button small" href="{{ '/preferences' if m.id == me.id else '/admin/members/%d/preferences'|format(m.id) }}">Preferences</a>
+    {% if codes_on and m.active and not m.is_guest %}
+    <form method="post" action="/admin/members/{{ m.id }}/sign-in-code" class="inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit" class="button small">Sign-in code</button>
+    </form>
+    {% endif %}
+    {% if codes_on and m.id != me.id %}
+    <form method="post" action="/admin/members/{{ m.id }}/sign-out" class="inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit" class="button small">Sign out everywhere</button>
+    </form>
+    {% endif %}
     {% if m.id != me.id %}
     {% set action = "reactivate" if not m.active else "deactivate" %}
     <form method="post" action="/admin/members/{{ m.id }}/{{ action }}"

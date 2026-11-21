@@ -1,0 +1,30 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{#- Sign in with a code (spec 6.15). Step 1 types the code and shows whose it is; step 2,
+    Continue, uses it. The code only ever travels in a POST body. A device that's signed in
+    already sends its CSRF token too. -#}
+{% extends "base.html" %}
+{% block title %}Sign in with a code{% endblock %}
+{% block content %}
+<section class="card hero stack" id="sign-in-code">
+  {% if member %}
+  <h1>You're signing in as {{ member.display_name }}</h1>
+  <p class="lede">If that isn't you, don't continue. Ask for your own code instead.</p>
+  <form method="post" action="/auth/code/continue" class="stack">
+    {% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}
+    <input type="hidden" name="code" value="{{ code }}">
+    <button type="submit" class="button primary block">Continue</button>
+  </form>
+  <p class="small"><a href="/auth/code">That's not me</a></p>
+  {% else %}
+  <h1>Sign in with a code</h1>
+  <p class="lede">Type the code from Preferences on a device where you're signed in, or the one the household admin gave you.</p>
+  {% if error %}<p class="alert error" role="alert">{{ error }}</p>{% endif %}
+  <form method="post" action="/auth/code" class="stack">
+    {% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}
+    <label class="field"><span>Code</span><input type="text" name="code" class="code-input" maxlength="32" autocomplete="one-time-code" autocapitalize="characters" autocorrect="off" spellcheck="false" required></label>
+    <button type="submit" class="button primary block">Next</button>
+  </form>
+  <p class="small muted">A code works once, for 15 minutes.</p>
+  {% endif %}
+</section>
+{% endblock %}

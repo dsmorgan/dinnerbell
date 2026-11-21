@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.repositories import AuditRepository, HouseholdRepository, MemberRepository, SessionRepository
+from dinnerbell.db.sign_in_codes import SignInCodeRepository
 from dinnerbell.domain import sessions as rules
 from dinnerbell.domain.household import Household
 from dinnerbell.domain.identity import Allow, IdentityClaims, Refuse, decide_sign_in
@@ -51,6 +52,7 @@ async def sign_in(
     now: datetime,
     replaces_token: str | None = None,
     slack_sign_in: bool = False,
+    user_agent: str | None = None,
 ) -> SignedIn | Refuse:
     """Apply the sign-in rules to verified claims and, if allowed, open a new session."""
     household = await HouseholdRepository(db).first()
@@ -74,15 +76,32 @@ async def sign_in(
         await _record_refusal(db, household.id, claims, decision, now)
         return decision
     member = await _link(db, decision, claims, now)
-    if replaces_token:
-        await SessionRepository(db).delete(hash_token(replaces_token))
-    token = secrets.token_urlsafe(TOKEN_BYTES)
-    await SessionRepository(db).add(
-        token_hash=hash_token(token), member=member, now=now, expires_at=rules.new_expiry(now)
-    )
+    token = await open_session(db, member, now=now, replaces_token=replaces_token, user_agent=user_agent)
     await db.commit()
     log.info("member signed in", extra={"member_id": member.id})
     return SignedIn(member=member, token=token)
+
+
+async def open_session(
+    db: AsyncSession, member: Member, *, now: datetime, replaces_token: str | None, user_agent: str | None
+) -> str:
+    """Open a new session for ``member`` in the caller's transaction and return its token. Every
+    way of signing in comes through here (OIDC, and a code, spec 6.15), so each gets the same
+    ordinary session: 90 days, renewing with use. The session the device had, if any, is
+    deleted first, so a token planted before sign-in is never the one signed in (session
+    fixation). The session records a label from ``user_agent``, never the User-Agent itself."""
+    sessions = SessionRepository(db)
+    if replaces_token:
+        await sessions.delete(hash_token(replaces_token))
+    token = secrets.token_urlsafe(TOKEN_BYTES)
+    await sessions.add(
+        token_hash=hash_token(token),
+        member=member,
+        now=now,
+        expires_at=rules.new_expiry(now),
+        device=rules.device_label(user_agent),
+    )
+    return token
 
 
 async def _by_email(members: MemberRepository, household_id: int, email: str | None) -> Member | None:
@@ -215,6 +234,9 @@ async def sign_out(db: AsyncSession, token: str) -> None:
 
 
 async def purge_expired_sessions(db: AsyncSession, *, now: datetime) -> int:
+    """The hourly cleanup: expired sessions, and sign-in codes that were used or expired (spec
+    6.15). Returns how many sessions it deleted."""
     removed = await SessionRepository(db).delete_expired(now)
+    await SignInCodeRepository(db).delete_spent(now)
     await db.commit()
     return removed
