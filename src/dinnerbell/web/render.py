@@ -131,6 +131,7 @@ async def render(
         "assistant_link": await _assistant_link(request),
         # The manifest link and Get the app show only with Admin's Web app switch on (spec 6.15).
         "web_app": await _web_app(request),
+        "push_key": app_context(request).vapid_public_key,
     }
     return TEMPLATES.TemplateResponse(request, template, base | (context or {}), status_code=status_code)
 

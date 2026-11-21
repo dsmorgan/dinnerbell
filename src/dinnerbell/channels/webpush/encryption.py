@@ -2,7 +2,7 @@
 """Message encryption for Web Push (RFC 8291), in the aes128gcm content coding (RFC 8188).
 
 One record of up to 4,096 bytes, so the payload is at most 3,993 bytes. Each push gets a fresh
-key pair and salt; tests pass the RFC's to check its example.
+key pair and salt.
 """
 
 from __future__ import annotations
@@ -40,19 +40,23 @@ def encrypt(
     p256dh: str,
     auth: str,
     *,
-    salt: bytes | None = None,
-    private_key: ec.EllipticCurvePrivateKey | None = None,
+    _salt: bytes | None = None,
+    _private_key: ec.EllipticCurvePrivateKey | None = None,
 ) -> bytes:
     """The request body for a push of ``plaintext`` to the browser whose public key is
-    ``p256dh`` and authentication secret is ``auth`` (both base64url)."""
+    ``p256dh`` and authentication secret is ``auth`` (both base64url). Raises ValueError for
+    keys that can't work.
+
+    ``_salt`` and ``_private_key`` are for tests only, to check RFC 8291's example. Every real
+    push must get a fresh salt and key pair, so never pass them outside a test."""
     if len(plaintext) > MAX_PLAINTEXT:
         raise ValueError(f"a push holds at most {MAX_PLAINTEXT} bytes")
     ua_public = b64decode(p256dh)
     auth_secret = b64decode(auth)
     receiver = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), ua_public)
-    sender = private_key or ec.generate_private_key(ec.SECP256R1())
+    sender = _private_key or ec.generate_private_key(ec.SECP256R1())
     as_public = _point(sender.public_key())
-    salt = salt if salt is not None else os.urandom(16)
+    salt = _salt if _salt is not None else os.urandom(16)
     # RFC 8291 section 3.4: combine the shared secret with the authentication secret.
     ecdh_secret = sender.exchange(ec.ECDH(), receiver)
     prk_key = _hmac(auth_secret, ecdh_secret)

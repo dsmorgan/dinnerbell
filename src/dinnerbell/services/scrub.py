@@ -11,6 +11,8 @@ Run it with test stopped, after restoring the backup. In one transaction it:
   abandoned and finishing it would write to the meal log;
 - deletes the outbox, pending rows and the message refs of delivered posts alike, so test never
   sends production's queue or edits production's messages;
+- deletes every web push device and queued push, and the push rejection warning (spec 6.15), so
+  test can never push to production's phones;
 - deletes all feedback on meals, which says how each member rated them (FR-49), and the counts and badges
   that come from it, so test, where testers act as other people, never holds production's feedback or
   counts;
@@ -53,6 +55,7 @@ from dinnerbell.db.events import EventRepository, ShownPlaceRepository
 from dinnerbell.db.feedback import FeedbackRepository
 from dinnerbell.db.meals import household_settings
 from dinnerbell.db.outbox import OutboxRepository
+from dinnerbell.db.push import PushRepository, without_push_settings
 from dinnerbell.db.repositories import AuditRepository, HouseholdRepository, MemberRepository, SessionRepository
 from dinnerbell.db.sign_in_codes import SignInCodeRepository
 from dinnerbell.db.types import UTCDateTime
@@ -183,6 +186,8 @@ class ScrubSummary:
     conversations_deleted: int = 0
     drafts_deleted: int = 0
     shown_places_deleted: int = 0
+    push_devices_deleted: int = 0
+    pushes_deleted: int = 0
 
     def lines(self) -> list[str]:
         return [
@@ -199,7 +204,15 @@ class ScrubSummary:
             f"Badges not yet announced, now quiet: {self.badges_quieted}",
             f"Places shown on calls, forgotten: {self.shown_places_deleted}",
             *self._assistant_lines(),
+            *self._push_lines(),
         ]
+
+    def _push_lines(self) -> list[str]:
+        """Only when there were devices or pushes, so an install without the web app reads
+        nothing about it."""
+        if not (self.push_devices_deleted or self.pushes_deleted):
+            return []
+        return [f"Push devices deleted: {self.push_devices_deleted} ({self.pushes_deleted} pushes)"]
 
     def _assistant_lines(self) -> list[str]:
         """Only when the scrub changed something, so an install without the assistant reads
@@ -249,6 +262,9 @@ async def _scrub(db: AsyncSession, *, instance_label: str, keep: Iterable[str], 
         raise ScrubRefused("Keep at least one active admin, or nobody can manage test. Nothing changed.")
 
     kept_ids = {m.id for m in kept}
+    # First, so a signed-out member's devices count too: test must never push to production's
+    # phones, a kept member's included (spec 6.15).
+    push_devices, push_rows = await PushRepository(db).clear(household.id)
     deactivated = unlinked = guests = 0
     sessions = SessionRepository(db)
     codes = SignInCodeRepository(db)
@@ -326,7 +342,7 @@ async def _scrub(db: AsyncSession, *, instance_label: str, keep: Iterable[str], 
     # stay quiet, and the month's recap (due now, if it is) counts as posted.
     quieted = await BadgeRepository(db).skip_all_pending(household.id)
     last_recap = month_key(previous_month(now.astimezone(ZoneInfo(household.timezone)).date()))
-    settings = await household_settings(db, household.id)
+    settings = without_push_settings(await household_settings(db, household.id))
     await HouseholdRepository(db).update_settings(household.id, settings | {RECAP_KEY: last_recap})
 
     summary = ScrubSummary(
@@ -346,6 +362,8 @@ async def _scrub(db: AsyncSession, *, instance_label: str, keep: Iterable[str], 
         conversations_deleted=forgotten.conversations,
         drafts_deleted=forgotten.drafts,
         shown_places_deleted=shown_deleted,
+        push_devices_deleted=push_devices,
+        pushes_deleted=push_rows,
     )
     summary_payload = {"kept_member_ids": sorted(kept_ids), "instance_label": instance_label} | asdict(summary)
     target = f"household:{household.id}"

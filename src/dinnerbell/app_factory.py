@@ -26,6 +26,7 @@ from dinnerbell.config import Settings
 from dinnerbell.scheduler.runner import CANCEL_UNWIND_SECONDS, JobContext, build_scheduler, stop_scheduler
 from dinnerbell.services import catalog as catalog_service
 from dinnerbell.services import contributions
+from dinnerbell.services import push as push_service
 from dinnerbell.services.assistant.anthropic_client import AnthropicModelClient
 from dinnerbell.services.assistant.client import ModelClient
 from dinnerbell.services.assistant.conversation import Assistant
@@ -81,6 +82,7 @@ def create_app(
                 )
                 await catalog_service.seed_from_file(db, household, settings.seed_file, now=clock())
                 await contributions.ensure_backfilled(db, household.id, now=clock())
+                await push_service.check_base_url(db, household.id, settings.base_url)
             http = httpx.AsyncClient(transport=oidc_transport, timeout=OIDC_TIMEOUT_SECONDS, follow_redirects=False)
             stack.push_async_callback(http.aclose)
             secret = settings.secret_key.get_secret_value()

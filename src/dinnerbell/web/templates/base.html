@@ -36,7 +36,12 @@
   <link rel="stylesheet" href="/static/app.css?v={{ version|urlencode }}">
   <script src="/static/{{ htmx_file }}" defer></script>
   <script src="/static/app.js?v={{ version|urlencode }}" defer></script>
-  {%- block scripts %}{% endblock %}
+  {#- Web push (spec 6.15): on every page for a member while the web app is on, so the installed
+      app gives Dinnerbell its subscription again after a new sign-in. #}
+  {%- if web_app and push_key and principal and not principal.member.is_guest %}
+  <meta name="dinnerbell-push-key" content="{{ push_key }}">
+  <script src="/static/push.js?v={{ version|urlencode }}" defer></script>
+  {%- endif %}
   {#- Fun mode (#153): only for a viewer who has it on. Off, the page is exactly as without it. #}
   {%- if fun %}
   <link rel="stylesheet" href="/static/fun.css?v={{ version|urlencode }}">

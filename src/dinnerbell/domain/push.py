@@ -16,7 +16,10 @@ from typing import Protocol
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
+from cryptography.hazmat.primitives.asymmetric import ec
+
 from dinnerbell.domain import notifications as note
+from dinnerbell.domain.catalog import Mode
 from dinnerbell.domain.events import AssignmentRole, EventState
 from dinnerbell.domain.members import Member, NotifyVia
 
@@ -33,6 +36,11 @@ DIRECT_PUSHES = frozenset(
         note.ResponseReminder.kind,  # reminders
         note.FeedbackReminder.kind,
         note.GuestJoined.kind,  # the admin's guest-join notices
+        note.PlaceChanged.kind,  # changes to the member's own plan
+        note.MaybeResolved.kind,
+        note.LateJoinChanged.kind,
+        note.StartedCallCancelled.kind,  # call-offs that tell the member themselves
+        note.AssignmentCancelled.kind,
     }
 )
 """Direct messages that push to a member on **Web app** or **Both** (spec 6.15, "What pushes")."""
@@ -57,14 +65,8 @@ NOT_PUSHED_KINDS = frozenset(
         note.OfferPosted.kind,
         note.PicksShuffled.kind,
         note.ScheduleChanged.kind,
-        # Direct messages spec 6.15 doesn't name. A call-off pushes to everyone in, so the
-        # assignees' own call-off message would only repeat it.
-        note.MaybeResolved.kind,
-        note.AssignmentCancelled.kind,
-        note.StartedCallCancelled.kind,
-        note.PlaceChanged.kind,
+        # Direct messages about offers, which aren't calls a phone acts on.
         note.OfferFull.kind,
-        note.LateJoinChanged.kind,
         note.LinkNeeded.kind,  # about Slack accounts
         note.GuestInvited.kind,  # to a guest, and guests never get pushes
     }
@@ -87,9 +89,12 @@ def audience(notification: note.Notification) -> tuple[int, ...]:
     but not whoever called it off."""
     if notification.kind not in PUSHED_KINDS:
         return ()
-    if notification.recipient_id is not None:
-        return (notification.recipient_id,)
-    people: tuple[note.PersonInfo, ...] = ()
+    if notification.kind in DIRECT_PUSHES:
+        recipient = notification.recipient_id
+        if recipient is None:  # pragma: no cover - every direct message has a recipient
+            raise ValueError(f"{notification.kind} has no recipient")
+        return (recipient,)
+    people: tuple[note.PersonInfo, ...]
     if isinstance(notification, note.CallOpened):
         people = notification.mentions
     elif isinstance(notification, note.ProposalsReady):
@@ -100,6 +105,8 @@ def audience(notification: note.Notification) -> tuple[int, ...]:
         by = notification.cancelled_by.id if notification.cancelled_by else None
         everyone = notification.audience if notification.audience is not None else notification.participants
         people = tuple(p for p in everyone if p.id != by)
+    else:  # pragma: no cover - CHANNEL_PUSHES names only the four above
+        raise ValueError(f"no audience for {notification.kind}")
     return tuple(dict.fromkeys(p.id for p in people))
 
 
@@ -141,9 +148,10 @@ def channel_post_stale(kind: str, event: note.EventInfo, state: EventState | Non
 MAX_SUBSCRIPTIONS = 10
 """Devices per member. A new one past this replaces their oldest."""
 MAX_ENDPOINT_LENGTH = 1024
-PUSH_HOSTS = frozenset({"fcm.googleapis.com", "updates.push.services.mozilla.com"})
-"""Push services by exact host: Chrome and other Chromium browsers on Android and desktop (FCM),
-and Firefox (Mozilla's autopush)."""
+PUSH_HOSTS = frozenset({"fcm.googleapis.com", "jmt17.google.com", "updates.push.services.mozilla.com"})
+"""Push services by exact host: Chrome and other Chromium browsers on Android and desktop (FCM,
+and ``jmt17.google.com``, which some Chrome builds have used), and Firefox (Mozilla's
+autopush)."""
 PUSH_HOST_SUFFIXES = (".push.apple.com", ".notify.windows.com")
 """Push services by domain: Safari on iPhone, iPad, and Mac (``web.push.apple.com``), and Edge
 on Windows (WNS, such as ``wns2-par02p.notify.windows.com``)."""
@@ -191,17 +199,39 @@ class SubscriptionKeys:
     """The browser's 16-byte authentication secret, base64url."""
 
 
+MAX_KEY_LENGTH = 200
+
+
 def check_subscription(endpoint: str, p256dh: str, auth: str) -> SubscriptionKeys:
-    """What the browser sent, checked, or InvalidSubscription."""
+    """What the browser sent, checked, or InvalidSubscription: a known push service's endpoint,
+    a P-256 public key that is a point on the curve, and a 16-byte authentication secret."""
     if not known_push_service(endpoint):
         raise InvalidSubscription(NOT_A_PUSH_SERVICE)
+    if len(p256dh) > MAX_KEY_LENGTH or len(auth) > MAX_KEY_LENGTH:
+        raise InvalidSubscription(BAD_KEYS)
     try:
         point, secret = _b64decode(p256dh), _b64decode(auth)
+        if len(point) != 65 or point[0] != 4 or len(secret) != 16:
+            raise ValueError("wrong length")
+        ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), point)  # refuses a point off the curve
     except ValueError:
         raise InvalidSubscription(BAD_KEYS) from None
-    if len(point) != 65 or point[0] != 4 or len(secret) != 16:
-        raise InvalidSubscription(BAD_KEYS)
     return SubscriptionKeys(endpoint, p256dh.rstrip("="), auth.rstrip("="))
+
+
+def endpoint_host(endpoint: str) -> str:
+    """The host of an endpoint Dinnerbell refused, for its log line: never the path, which
+    identifies the device. At most 100 characters, and "?" when there's none to read."""
+    try:
+        host = urlsplit(endpoint).hostname or ""
+    except ValueError:
+        host = ""
+    host = "".join(c for c in host if c.isascii() and c.isprintable())[:100]
+    return host or "?"
+
+
+class UndeliverableKeys(Exception):
+    """A stored subscription's keys can't encrypt a push. Retrying can't help: delete it."""
 
 
 BAD_KEYS = "The browser sent keys Dinnerbell can't use. Turn notifications off and on again."
@@ -240,6 +270,9 @@ class PushMessage:
     body: str
     path: str
     """The page a tap opens, relative to the base URL."""
+    tag: str | None = None
+    """For a channel post's push, the call's ``topic``: a newer one replaces it on the lock
+    screen. None for a direct message, so a device keeps every one."""
 
     def payload(self, base_url: str) -> bytes:
         """Declarative Web Push (WebKit): iOS 18.4 and later shows it without the service worker,
@@ -247,13 +280,18 @@ class PushMessage:
         navigate = base_url.rstrip("/") + self.path
         body = self.body
         while True:
-            data = {
-                "web_push": 8030,
-                "notification": {"title": self.title, "body": body, "navigate": navigate, "lang": "en", "dir": "ltr"},
+            shown: dict[str, str] = {
+                "title": self.title,
+                "body": body,
+                "navigate": navigate,
+                "lang": "en",
+                "dir": "ltr",
             }
-            encoded = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode()
-            if len(encoded) <= MAX_PAYLOAD_BYTES or not body:
-                return encoded
+            if self.tag:
+                shown["tag"] = self.tag
+            encoded = json.dumps({"web_push": 8030, "notification": shown}, ensure_ascii=False, separators=(",", ":"))
+            if len(encoded.encode()) <= MAX_PAYLOAD_BYTES or not body:
+                return encoded.encode()
             body = body[: len(body) // 2].rstrip() + "…" if len(body) > 2 else ""
 
 
@@ -268,17 +306,21 @@ def _roles(roles: tuple[AssignmentRole, ...]) -> str:
     return " and ".join(words) if len(words) <= 2 else ", ".join(words[:-1]) + ", and " + words[-1]
 
 
+_WAYS = {Mode.COOK: "Cooked at home", Mode.PICKUP: "Picked up", Mode.DELIVERY: "Ordered for delivery"}
+
+
 def message(notification: note.Notification, now: datetime) -> PushMessage:
     """What a push of ``notification`` says: the meal, the time, and what to do, and never
-    another member's answer or anything a member wrote. A tap opens the call's page."""
+    another member's answer or anything a member wrote. A tap opens the call's page. Every kind
+    in ``PUSHED_KINDS`` has its own words; any other raises ValueError."""
     if isinstance(notification, note.GuestJoined):
         return PushMessage(
             "A guest joined", f"{notification.guest.name} joined. Keep or remove them.", "/admin/members"
         )
-    if isinstance(
+    if notification.kind not in PUSHED_KINDS or isinstance(
         notification, note.ScheduleChanged | note.BadgesEarned | note.MonthlyRecap | note.LinkNeeded
-    ):  # pragma: no cover - never pushed
-        raise ValueError(notification.kind)
+    ):
+        raise ValueError(f"{notification.kind} doesn't push")
     event = notification.event
     zone = ZoneInfo(event.timezone)
     meal = event.slot.value.capitalize()
@@ -287,7 +329,9 @@ def message(notification: note.Notification, now: datetime) -> PushMessage:
     def at(when: datetime | None) -> str:
         return _clock(when, zone, now) if when is not None else ""
 
-    title, body = f"{meal}", "Open Dinnerbell to see what's next."
+    def whose(via: note.PersonInfo | None) -> str:
+        return "your guest is" if via is not None else "you're"
+
     if isinstance(notification, note.CallOpened | note.ResponseReminder):
         title, body = f"{meal}: are you in?", f"Answer by {at(event.respond_deadline)}."
     elif isinstance(notification, note.ProposalsReady):
@@ -300,8 +344,7 @@ def message(notification: note.Notification, now: datetime) -> PushMessage:
         title, body = f"{meal} is called off", f"There's no {lower} call now."
     elif isinstance(notification, note.AssignmentMade):
         decision = notification.decision
-        who = "your guest is" if notification.via is not None else "you're"
-        title = f"{meal}: {who} {_roles(notification.roles)}"
+        title = f"{meal}: {whose(notification.via)} {_roles(notification.roles)}"
         body = f"{decision.proposal.item.name}, at {at(decision.meal_time)}."
     elif isinstance(notification, note.RolesToChoose):
         title, body = f"{meal}: choose who does it", f"Assign the roles by {at(notification.due_at)}."
@@ -310,11 +353,34 @@ def message(notification: note.Notification, now: datetime) -> PushMessage:
     elif isinstance(notification, note.CoordinatorPicked | note.CoordinatingGiven):
         title, body = f"{meal}: you're coordinating", "You can hand it off on the call's page."
     elif isinstance(notification, note.AssignmentEnded):
-        who = "Your guest is" if notification.via is not None else "You're"
-        title, body = f"{meal}: plans changed", f"{who} no longer {_roles(notification.roles)}."
+        title = f"{meal}: plans changed"
+        body = f"{whose(notification.via).capitalize()} no longer {_roles(notification.roles)}."
     elif isinstance(notification, note.FeedbackReminder):
         title, body = f"How was {lower}?", f"Tell the household about {notification.item} by {notification.closes:%A}."
-    return PushMessage(title, body, event.path)
+    elif isinstance(notification, note.PlaceChanged):
+        decision = notification.decision
+        title = f"{meal} moved to {decision.proposal.item.name}"
+        body = f"{_WAYS[decision.proposal.mode]}, at {at(decision.meal_time)}."
+        if notification.ended_roles:
+            body += f" {whose(notification.via).capitalize()} no longer {_roles(notification.ended_roles)}."
+    elif isinstance(notification, note.MaybeResolved):
+        title = f"{meal}: you're out for now"
+        late = f" before {at(event.vote_deadline)}" if event.vote_deadline else ""
+        body = f"Your maybe turned to out when answers closed. Join late{late} if you can make it."
+    elif isinstance(notification, note.LateJoinChanged):
+        if notification.taking_part:
+            title, body = f"{meal}: you're back in", "The coordinator put you back in this call."
+        else:
+            title, body = f"{meal}: you're out this time", "The coordinator took you off this call."
+    elif isinstance(notification, note.StartedCallCancelled):
+        title, body = f"{meal} is called off", "Someone called off the call you started. You can start it again."
+    elif isinstance(notification, note.AssignmentCancelled):
+        title = f"{meal} is called off"
+        body = f"{whose(notification.via).capitalize()} no longer {_roles(notification.roles)}."
+    else:  # pragma: no cover - a test builds every pushed kind
+        raise ValueError(f"no push text for {notification.kind}")
+    tag = topic_for(notification)
+    return PushMessage(title, body, event.path, tag)
 
 
 def next_deadline(notification: note.Notification, now: datetime) -> datetime | None:
@@ -347,8 +413,7 @@ def urgency(kind: str) -> str:
 
 
 def topic(household_id: int, event_id: int | None, run: int) -> str | None:
-    """RFC 8030 ``Topic``, shared by every push about one run of one call, so a newer one waiting
-    at the push service replaces the older. None for a push about no call."""
+    """RFC 8030 ``Topic`` for one run of one call: 24 characters of base64url. None for no call."""
     if event_id is None:
         return None
     digest = hashlib.sha256(f"dinnerbell:{household_id}:{event_id}:{run}".encode()).digest()
@@ -356,8 +421,14 @@ def topic(household_id: int, event_id: int | None, run: int) -> str | None:
 
 
 def topic_for(notification: note.Notification) -> str | None:
+    """The ``Topic`` and notification ``tag`` of a channel post's push, shared by one call's
+    opening, voting, decision, and call off, so a newer one replaces the older both at the push
+    service and on the lock screen. None for a direct message, so an offline device keeps every
+    one that asks something of the member."""
+    if notification.kind not in CHANNEL_PUSHES:
+        return None
     event = getattr(notification, "event", None)
-    if not isinstance(event, note.EventInfo) or notification.event_id is None:
+    if not isinstance(event, note.EventInfo):  # pragma: no cover - every channel post has an event
         return None
     return topic(event.household_id, event.id, event.run)
 

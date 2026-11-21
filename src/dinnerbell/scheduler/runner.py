@@ -207,6 +207,17 @@ async def drain_push(ctx: JobContext) -> None:
             log.exception("push drain failed")
 
 
+async def purge_pushes(ctx: JobContext) -> None:
+    """Delete pushes that ended a week ago, hourly, whether or not anything was due."""
+    try:
+        removed = await push.purge(ctx.sessionmaker, ctx.clock())
+    except Exception:
+        log.exception("push purge failed")
+        return
+    if removed:
+        log.info("old pushes removed", extra={"count": removed})
+
+
 async def stop_scheduler(
     scheduler: AsyncIOScheduler, ctx: JobContext, *, grace: float = SHUTDOWN_GRACE_SECONDS
 ) -> None:
@@ -280,5 +291,8 @@ def build_scheduler(ctx: JobContext) -> AsyncIOScheduler:
         args=[ctx],
         id="drain_push",
         next_run_time=start,
+    )
+    scheduler.add_job(
+        _tracked(purge_pushes), IntervalTrigger(hours=1), args=[ctx], id="purge_pushes", next_run_time=start
     )
     return scheduler

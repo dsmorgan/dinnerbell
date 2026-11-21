@@ -259,6 +259,61 @@ async def test_scrub_deletes_the_places_calls_showed(house: House) -> None:
     assert row.payload["shown_places_deleted"] == 2
 
 
+async def test_scrub_deletes_every_push_device_and_push(house: House) -> None:
+    """A test copy must never push to production's phones, kept members' included (spec 6.15)."""
+    from dinnerbell.db.models import PushRow, PushSubscriptionRow
+    from dinnerbell.db.push import rejected_burst
+    from dinnerbell.services import web_app
+
+    async with house.sessionmaker() as db:
+        await web_app.set_web_app(db, house["Alex"], True, now=house.clock())
+    devices = []
+    for name in ("Alex", "Kim"):  # Alex is kept
+        async with house.sessionmaker() as db:
+            token_hash = f"{name.lower():0>64}"
+            now = house.clock()
+            await SessionRepository(db).add(
+                token_hash=token_hash, member=house[name], now=now, expires_at=now + timedelta(days=1)
+            )
+            device = PushSubscriptionRow(
+                household_id=house.household.id,
+                member_id=house[name].id,
+                session_id=token_hash,
+                endpoint=f"https://fcm.googleapis.com/fcm/send/{name.lower()}",
+                p256dh="k",
+                auth="a",
+                created_at=now,
+            )
+            db.add(device)
+            await db.flush()
+            devices.append(device.id)
+            await db.commit()
+    async with house.sessionmaker() as db:
+        outbox_id = (await OutboxRepository(db).for_household(house.household.id))[0].id
+        for subscription_id, name in zip(devices, ("Alex", "Kim"), strict=True):
+            now = house.clock()
+            db.add(
+                PushRow(
+                    household_id=house.household.id, outbox_id=outbox_id, subscription_id=subscription_id,
+                    member_id=house[name].id, created_at=now, available_at=now, attempts=0,
+                )
+            )  # fmt: skip
+        await rejected_burst(db, house.household.id, house.clock())
+        await db.commit()
+
+    summary = await scrub(house)
+
+    assert (summary.push_devices_deleted, summary.pushes_deleted) == (2, 2)
+    assert "Push devices deleted: 2 (2 pushes)" in summary.lines()
+    async with house.sessionmaker() as db:
+        assert list(await db.scalars(select(PushSubscriptionRow))) == []
+        assert list(await db.scalars(select(PushRow))) == []
+        settings = await household_settings(db, house.household.id)
+    assert "push_rejections" not in settings and "push_rejected_at" not in settings
+    (row,) = await house.audits("instance.")
+    assert row.payload["push_devices_deleted"] == 2
+
+
 async def test_a_second_run_changes_nothing(house: House) -> None:
     await scrub(house)
     house.clock.now += timedelta(minutes=5)

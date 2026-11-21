@@ -57,7 +57,7 @@ def test_every_kind_is_classified_on_purpose() -> None:
     for kind in push.DIRECT_PUSHES:
         cls = note.NOTIFICATION_TYPES[kind]
         assert "recipient_id" in dir(cls) and kind not in push.CHANNEL_PUSHES, kind
-    for kind in ("badges_earned", "monthly_recap", "call_updated", "guest_invited"):
+    for kind in ("badges_earned", "monthly_recap", "call_updated", "guest_invited", "offer_full", "link_needed"):
         assert not push.pushes(kind)
 
 
@@ -67,7 +67,7 @@ def test_a_direct_message_pushes_to_its_recipient_and_a_guests_to_the_inviter() 
     pat = note.PersonInfo(99, "Pat")
     made = note.AssignmentMade(EVENT, 1, pat, (AssignmentRole.PICKUP,), DECISION, via=SAM)
     assert push.audience(made) == (SAM.id,)  # the member answering for the guest, as Slack's
-    assert push.audience(note.MaybeResolved(EVENT, KIM)) == ()  # not a kind that pushes
+    assert push.audience(note.OfferFull(EVENT, KIM, OFFER)) == ()  # not a kind that pushes
 
 
 def test_channel_posts_push_to_the_members_they_concern() -> None:
@@ -125,6 +125,7 @@ AUTH = "BTBZMqHH6r4Tts7J_aSIgg"
 
 KNOWN = (
     "https://fcm.googleapis.com/fcm/send/abc:APA91b",
+    "https://jmt17.google.com/fcm/send/abc",
     "https://fcm.googleapis.com/wp/abc",
     "https://updates.push.services.mozilla.com/wpush/v2/gAAAA",
     "https://web.push.apple.com/QGuQyavXutnMH",
@@ -176,7 +177,76 @@ def test_keys_that_cant_work_are_refused(p256dh: str, auth: str) -> None:
         push.check_subscription(KNOWN[0], p256dh, auth)
 
 
+def test_a_key_off_the_curve_or_too_long_is_refused() -> None:
+    off_curve = base64.urlsafe_b64encode(b"\x04" + b"\x01" * 64).rstrip(b"=").decode()
+    for p256dh, auth in ((off_curve, AUTH), ("A" * 300, AUTH), (P256DH, "A" * 300)):
+        with pytest.raises(push.InvalidSubscription, match="keys"):
+            push.check_subscription(KNOWN[0], p256dh, auth)
+
+
+def test_a_refused_endpoints_host_is_all_that_is_logged() -> None:
+    assert push.endpoint_host("https://push.example.net/device/secret-path") == "push.example.net"
+    assert push.endpoint_host("not a url") == "?" and push.endpoint_host("https://[bad") == "?"
+
+
 # What a push says -------------------------------------------------------------------------------
+
+
+OFFER = note.OfferInfo(KIM, ITEM, Mode.PICKUP, NOW, 3, 0)
+PAT = note.PersonInfo(9, "Pat")
+SAMPLES: dict[str, note.Notification] = {
+    n.kind: n
+    for n in (
+        note.CallOpened(EVENT, (KIM, SAM)),
+        note.ProposalsReady(EVENT, (PICK,), participants=(KIM,)),
+        note.DecisionMade(EVENT, DECISION),
+        note.EventCancelled(EVENT, (KIM,), audience=(KIM,)),
+        note.ResponseReminder(EVENT, KIM),
+        note.FeedbackReminder(EVENT, KIM, "Siam Garden", date(2026, 10, 29)),
+        note.AssignmentMade(EVENT, 1, KIM, (AssignmentRole.COOK,), DECISION),
+        note.RolesToChoose(EVENT, KIM, DECISION, NOW + timedelta(minutes=15)),
+        note.RoleVacated(EVENT, KIM, PAT, (AssignmentRole.COOK,)),
+        note.CoordinatorPicked(EVENT, KIM),
+        note.CoordinatingGiven(EVENT, KIM, SAM, NOW),
+        note.AssignmentEnded(EVENT, KIM, (AssignmentRole.PICKUP,), SAM, NOW),
+        note.GuestJoined(1, KIM, PAT, "web"),
+        note.PlaceChanged(EVENT, KIM, "Taqueria", DECISION, SAM, NOW),
+        note.MaybeResolved(EVENT, KIM),
+        note.LateJoinChanged(EVENT, KIM, False, SAM, NOW),
+        note.StartedCallCancelled(EVENT, KIM, SAM),
+        note.AssignmentCancelled(EVENT, KIM, (AssignmentRole.COOK,), DECISION, cancelled_by=SAM),
+    )
+}
+"""One of each kind that pushes."""
+
+
+def test_every_pushed_kind_has_an_audience_and_its_own_words() -> None:
+    assert set(SAMPLES) == push.PUSHED_KINDS
+    titles = {}
+    for kind, notification in SAMPLES.items():
+        assert push.audience(notification) == (
+            (KIM.id, SAM.id) if kind in ("call_opened", "decision_made") else (KIM.id,)
+        ), kind
+        shown = push.message(notification, NOW)
+        assert shown.title and shown.body and "Open Dinnerbell" not in shown.body, kind
+        titles[kind] = (shown.title, shown.body)
+    same = {titles["call_opened"], titles["coordinator_picked"]}  # each shares its words with one other kind
+    assert len(set(titles.values())) == len(titles) - 2 and titles["response_reminder"] in same
+    with pytest.raises(ValueError, match="doesn't push"):
+        push.message(note.OfferFull(EVENT, KIM, OFFER), NOW)
+
+
+def test_the_new_direct_messages_say_what_happened_to_the_member() -> None:
+    assert push.message(SAMPLES["maybe_resolved"], NOW).body == (
+        "Your maybe turned to out when answers closed. Join late before 5:15 PM if you can make it."
+    )
+    assert push.message(SAMPLES["late_join_changed"], NOW).title == "Dinner: you're out this time"
+    back = note.LateJoinChanged(EVENT, KIM, True, SAM, NOW)
+    assert push.message(back, NOW).title == "Dinner: you're back in"
+    assert push.message(SAMPLES["assignment_cancelled"], NOW).body == "You're no longer cooking."
+    guest = note.AssignmentCancelled(EVENT, PAT, (AssignmentRole.PICKUP,), DECISION, via=KIM)
+    assert push.audience(guest) == (KIM.id,) and push.message(guest, NOW).body == "Your guest is no longer picking up."
+    assert "called off" in push.message(SAMPLES["started_call_cancelled"], NOW).title
 
 
 def payload(notification: note.Notification, now: datetime = NOW) -> dict[str, object]:
@@ -194,6 +264,7 @@ def test_a_push_names_the_meal_the_time_and_what_to_do_and_opens_the_call() -> N
         "navigate": "https://dinnerbell.test/events/7",
         "lang": "en",
         "dir": "ltr",
+        "tag": push.topic(1, 7, 2),  # a newer post about the call replaces it on the lock screen
     }
     assert payload(note.ProposalsReady(EVENT, ()))["body"] == "Voting closes at 5:15 PM."
     assert payload(note.DecisionMade(EVENT, DECISION))["body"] == "Siam Garden, at 6:30 PM."
@@ -203,6 +274,16 @@ def test_a_push_names_the_meal_the_time_and_what_to_do_and_opens_the_call() -> N
     assert tomorrow["body"] == "Answer by Thursday 4:30 PM."
     joined = payload(note.GuestJoined(1, KIM, note.PersonInfo(9, "Pat"), "web"))
     assert joined["navigate"] == "https://dinnerbell.test/admin/members"
+    assert "tag" not in payload(note.ResponseReminder(EVENT, KIM))  # a device keeps every direct message
+    moved = payload(note.PlaceChanged(EVENT, KIM, "Taqueria", DECISION, SAM, NOW, ended_roles=(AssignmentRole.COOK,)))
+    assert (moved["title"], moved["body"]) == (
+        "Dinner moved to Siam Garden",
+        "Picked up, at 6:30 PM. You're no longer cooking.",
+    )
+    home = replace(DECISION, proposal=replace(PICK, mode=Mode.COOK))
+    assert payload(note.PlaceChanged(EVENT, KIM, "X", home, SAM, NOW))["body"] == "Cooked at home, at 6:30 PM."
+    delivery = replace(DECISION, proposal=replace(PICK, mode=Mode.DELIVERY))
+    assert payload(note.PlaceChanged(EVENT, KIM, "X", delivery, SAM, NOW))["body"].startswith("Ordered for delivery")
 
 
 def test_a_push_never_names_anyones_answer_or_note() -> None:
@@ -248,8 +329,10 @@ def test_urgency_and_one_topic_per_call_run() -> None:
     assert topic is not None and len(topic) <= 32
     assert set(topic) <= set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
     assert push.topic_for(note.EventCancelled(EVENT)) == topic  # a call off replaces "are you in?"
+    assert push.topic_for(note.ProposalsReady(EVENT, ())) == topic == push.topic_for(note.DecisionMade(EVENT, DECISION))
     assert push.topic_for(note.CallOpened(replace(EVENT, run=3), ())) != topic
-    assert push.topic_for(note.GuestJoined(1, KIM, KIM, "web")) is None
+    for direct in push.DIRECT_PUSHES:  # an offline device keeps every one that asks something
+        assert push.topic_for(SAMPLES[direct]) is None, direct
 
 
 @pytest.mark.parametrize(
@@ -283,8 +366,8 @@ def test_encryption_matches_the_rfc_8291_example() -> None:
         b"When I grow up, I want to be a watermelon",
         P256DH,
         AUTH,
-        salt=encryption.b64decode("DGv6ra1nlYgDCS1FRnbzlw"),
-        private_key=server,
+        _salt=encryption.b64decode("DGv6ra1nlYgDCS1FRnbzlw"),
+        _private_key=server,
     )
     header = (
         "DGv6ra1nlYgDCS1FRnbzlwAAEABBBP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27ml"
@@ -422,6 +505,13 @@ async def test_the_sender_never_follows_a_redirect_or_posts_off_the_allowlist() 
         )
     assert seen == [target.endpoint]
     await client.aclose()
+
+
+def test_retry_after_is_ascii_seconds_or_a_date_and_at_most_a_day() -> None:
+    assert sender.retry_after("99999999999999999999", NOW) == sender.LONGEST_WAIT
+    assert sender.retry_after("\u0663\u0660", NOW) is None  # Arabic-Indic digits aren't seconds
+    assert sender.retry_after("Fri, 01 Jan 2100 00:00:00 GMT", NOW) == sender.LONGEST_WAIT
+    assert sender.retry_after("Thu, 99 Oct 99999 99:99:99 GMT", NOW) is None
 
 
 def test_retry_after_is_seconds_or_a_date() -> None:

@@ -122,12 +122,12 @@ While **Admin** > **Web app** is on, Dinnerbell sends push notifications to the 
 
 | Host | For |
 |---|---|
-| `fcm.googleapis.com` | Chrome, Edge on Android, and other Chromium browsers |
+| `fcm.googleapis.com`, `jmt17.google.com` | Chrome, Edge on Android, and other Chromium browsers |
 | `updates.push.services.mozilla.com` | Firefox |
 | `*.push.apple.com`, such as `web.push.apple.com` | Safari on iPhone, iPad, and Mac |
 | `*.notify.windows.com` | Edge on Windows |
 
-Dinnerbell posts only to these hosts, so a browser can't point it anywhere else, and never follows a redirect. The push key comes from `DINNERBELL_SECRET_KEY`: changing the secret key ends every device's notifications, and each member taps **Turn on notifications** again. While the switch is off, Dinnerbell connects to none of these hosts.
+Dinnerbell posts only to these hosts, so a browser can't point it anywhere else, and never follows a redirect. The push key comes from `DINNERBELL_SECRET_KEY`: changing the secret key ends every device's notifications, and each member taps **Turn on notifications** again. While the switch is off, Dinnerbell connects to none of these hosts. A browser whose push service isn't listed gets "That browser's push service isn't one Dinnerbell knows.", and the log line `push subscription refused` names its host. Set `DINNERBELL_BASE_URL` to an https URL: Apple refuses pushes otherwise, and Dinnerbell logs a warning at startup.
 
 ## The sign-in rate limit
 

@@ -1,20 +1,26 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Turn on notifications, on the Get the app page (spec 6.15). Loaded from /static, so the CSP
-// needs no inline code.
+// Web push in the browser (spec 6.15). Loaded from /static on a member's pages while the web app
+// is on, so the CSP needs no inline code.
 //
-// The card stays hidden unless this browser can take pushes: on iPhone and iPad only inside the
-// installed app, elsewhere wherever PushManager exists. Turning on asks for permission (iOS needs
-// the tap), registers /sw.js for the whole site if it isn't already, drops a subscription made
-// with a different key (a changed secret key, say), subscribes, and sends the subscription to
-// Dinnerbell with the page's CSRF token. A subscription found when the page opens is sent again,
-// so a device Dinnerbell forgot, such as after the web app was off, comes back on its own.
+// On Get the app, it runs the Notifications card. The card stays hidden unless this browser can
+// take pushes: on iPhone and iPad only inside the installed app, elsewhere wherever PushManager
+// exists. Turning on asks for permission (iOS needs the tap), registers /sw.js for the whole site
+// if it isn't already, drops a subscription made with a different key (a changed secret key, say),
+// subscribes, and sends the subscription to Dinnerbell with the page's CSRF token. Turn off
+// unsubscribes and tells Dinnerbell.
+//
+// Dinnerbell ties a subscription to the sign-in that sent it, and forgets it when that session
+// ends. So on every other page inside the installed app, an existing subscription is sent again
+// (one POST, and none when this session sent it in the last 10 minutes): after a new sign-in, the
+// device's notifications come back on their own.
 (function () {
   "use strict";
 
-  var card = document.getElementById("notifications");
-  if (!card) {
+  var meta = document.querySelector('meta[name="dinnerbell-push-key"]');
+  if (!meta) {
     return;
   }
+  var card = document.getElementById("notifications");
   var ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
   var installed = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
   if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window) || (ios && !installed)) {
@@ -27,9 +33,9 @@
     blocked: "Notifications are blocked for Dinnerbell. Allow them in your device's settings, then open this page again.",
     error: "That didn't work. Check your connection and try again."
   };
-  var state = document.getElementById("push-state");
-  var onButton = document.getElementById("push-on");
-  var offButton = document.getElementById("push-off");
+  var state = card && document.getElementById("push-state");
+  var onButton = card && document.getElementById("push-on");
+  var offButton = card && document.getElementById("push-off");
 
   function show(name, text) {
     state.textContent = text || STATES[name];
@@ -47,7 +53,7 @@
     return bytes;
   }
 
-  var KEY = keyBytes(card.getAttribute("data-key") || "");
+  var KEY = keyBytes(meta.getAttribute("content") || "");
 
   function sameKey(buffer) {
     if (!buffer) {
@@ -97,9 +103,56 @@
       });
   }
 
+  var SAVED = "dinnerbell-push-saved";
+  var RESAVE_MS = 10 * 60 * 1000;
+
+  // What this session last sent, so browsing the app doesn't send it on every page. The CSRF
+  // token changes with the session, so a new sign-in always sends it again.
+  function stamp(subscription) {
+    return csrfToken() + " " + subscription.endpoint;
+  }
+
+  function savedRecently(subscription) {
+    try {
+      var saved = JSON.parse(window.localStorage.getItem(SAVED) || "{}");
+      return saved.stamp === stamp(subscription) && Date.now() - saved.at < RESAVE_MS;
+    } catch (e) {
+      return false;
+    }
+  }
+
   function save(subscription) {
     var keys = subscription.toJSON().keys || {};
-    return post("/app/notifications", { endpoint: subscription.endpoint, p256dh: keys.p256dh || "", auth: keys.auth || "" });
+    var fields = { endpoint: subscription.endpoint, p256dh: keys.p256dh || "", auth: keys.auth || "" };
+    return post("/app/notifications", fields).then(function () {
+      try {
+        window.localStorage.setItem(SAVED, JSON.stringify({ stamp: stamp(subscription), at: Date.now() }));
+      } catch (e) {
+        // private browsing: it sends again next page
+      }
+    });
+  }
+
+  // Every page but Get the app, inside the installed app: send an existing subscription again.
+  if (!card) {
+    if (!installed || Notification.permission !== "granted") {
+      return;
+    }
+    navigator.serviceWorker
+      .getRegistration("/")
+      .then(function (reg) {
+        return reg ? reg.pushManager.getSubscription() : null;
+      })
+      .then(function (subscription) {
+        if (subscription && sameKey(subscription.options.applicationServerKey) && !savedRecently(subscription)) {
+          return save(subscription);
+        }
+        return null;
+      })
+      .catch(function () {
+        // the next page tries again
+      });
+    return;
   }
 
   function registration() {

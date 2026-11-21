@@ -5,6 +5,7 @@ turning the switch off, and the pages. The rules themselves are in ``test_push_d
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 from collections.abc import AsyncIterator
@@ -305,7 +306,7 @@ async def test_only_the_kinds_that_push_queue_pushes(house: House) -> None:
     await enqueue(
         house,
         note.CallUpdated(event),
-        note.MaybeResolved(event, kim),
+        note.PicksShuffled(event, kim, 1, 1),
         note.CallAbandoned(event, note.EndReason.TOO_FEW),  # type: ignore[attr-defined]
         note.ResponseReminder(event, kim),
     )
@@ -592,6 +593,146 @@ async def test_logs_name_the_device_never_its_endpoint(house: House, caplog: pyt
     assert lines and {getattr(r, "subscription_id", None) for r in lines} == {kims}
 
 
+# One row never stops the rest --------------------------------------------------------------------
+
+
+async def test_a_row_that_raises_retries_alone_and_gives_up_after_its_attempts(
+    house: House, clock: FakeClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await switch(house, True)
+    await device(house, "Kim")
+    event = await a_call(house)
+    await enqueue(house, note.CallOpened(event, who(house, "Kim")), note.ResponseReminder(event, who(house, "Kim")[0]))
+    real = rules.message
+
+    def poison(notification: note.Notification, now: datetime) -> rules.PushMessage:
+        if notification.kind == "response_reminder":
+            raise RuntimeError("bad row")
+        return real(notification, now)
+
+    monkeypatch.setattr(rules, "message", poison)
+    sender = FakeSender()
+    first = await drain(house, sender)
+    assert (first.sent, first.retrying) == (1, 1) and len(sender.sent) == 1
+    for _ in range(push.MAX_ATTEMPTS - 1):
+        clock.advance(outbox.LONGEST_RETRY)
+        await set_event(house, respond_deadline=sql_time(clock() + timedelta(hours=1)))  # keep it current
+        await drain(house, sender)
+    states = {n: (e, sent, closed) for n, (_, _, e, sent, closed) in enumerate(await queued(house))}
+    assert states == {0: (None, True, False), 1: ("gave up: RuntimeError", False, True)}
+    assert len(sender.sent) == 1
+
+
+async def test_a_push_whose_claims_keep_running_out_closes(house: House) -> None:
+    """A drainer that died mid-send leaves its claim to run out; the attempt still counts."""
+    await one_push(house)
+    async with house.sessionmaker() as db:
+        await db.execute(text("UPDATE push_queue SET attempts = :a"), {"a": push.MAX_ATTEMPTS})
+        await db.commit()
+    sender = FakeSender()
+    assert (await drain(house, sender)).closed == 1 and sender.sent == []
+    assert [e for _, _, e, *_ in await queued(house)] == [push.GAVE_UP]
+
+
+@dataclass
+class GatedSender(FakeSender):
+    """Holds each send until ``together`` are in flight, so only parallel sends finish."""
+
+    together: int = 4
+    in_flight: int = 0
+    most: int = 0
+    gate: asyncio.Event = field(default_factory=asyncio.Event)
+    hang: set[int] = field(default_factory=set)
+
+    async def send(
+        self, target: PushTarget, payload: bytes, *, ttl: int, urgency: str, topic: str | None
+    ) -> PushResponse:
+        if target.subscription_id in self.hang:
+            await asyncio.Event().wait()  # a push service that never answers
+        self.in_flight += 1
+        self.most = max(self.most, self.in_flight)
+        if self.in_flight >= self.together:
+            self.gate.set()
+        await self.gate.wait()
+        self.in_flight -= 1
+        return await super().send(target, payload, ttl=ttl, urgency=urgency, topic=topic)
+
+
+async def test_pushes_go_four_at_a_time(house: House) -> None:
+    await switch(house, True)
+    for n in range(4):
+        await device(house, "Kim", n)
+    event = await a_call(house)
+    await enqueue(house, note.CallOpened(event, who(house, "Kim")))
+    sender = GatedSender()
+    result = await push.drain(house.sessionmaker, sender, house.clock, BASE_URL, deadline=10.0)
+    assert result.sent == 4 and sender.most == push.PARALLEL
+
+
+async def test_a_push_service_that_hangs_holds_up_only_its_own_push(house: House) -> None:
+    await switch(house, True)
+    stuck = await device(house, "Kim", 1)
+    await device(house, "Kim", 2)
+    event = await a_call(house)
+    await enqueue(house, note.CallOpened(event, who(house, "Kim")))
+    sender = GatedSender(together=1, hang={stuck})
+    result = await push.drain(house.sessionmaker, sender, house.clock, BASE_URL, deadline=0.2)
+    assert (result.sent, result.retrying) == (1, 1)
+    assert sorted((sid, e) for _, sid, e, *_ in await queued(house)) == [(stuck, "TimeoutError"), (stuck + 1, None)]
+
+
+async def test_a_huge_retry_after_waits_an_hour_at_most(house: House, clock: FakeClock) -> None:
+    await one_push(house)
+    assert (await drain(house, FakeSender(answers=[PushResponse(429, retry_after=1e20)]))).retrying == 1
+    async with house.sessionmaker() as db:
+        row = (await db.scalars(select(PushRow))).one()
+    assert row.available_at == clock() + outbox.LONGEST_RETRY
+
+
+async def test_keys_that_cant_encrypt_delete_the_device(house: House) -> None:
+    await one_push(house)
+    result = await drain(house, FakeSender(answers=[rules.UndeliverableKeys("subscription 1")]))
+    assert result.devices_deleted == 1 and await devices(house) == []
+
+
+async def test_ended_pushes_are_purged_after_a_week_even_with_nothing_due(house: House, clock: FakeClock) -> None:
+    await one_push(house)
+    await drain(house, FakeSender())
+    clock.advance(push.PURGE_AFTER - timedelta(minutes=1))
+    assert await push.purge(house.sessionmaker, clock()) == 0
+    clock.advance(timedelta(minutes=2))
+    assert await push.purge(house.sessionmaker, clock()) == 1
+    assert await queued(house) == []
+
+
+async def test_a_refused_subscription_logs_its_host_and_never_its_path(
+    house: House, caplog: pytest.LogCaptureFixture
+) -> None:
+    await switch(house, True)
+    caplog.set_level(logging.INFO, logger="dinnerbell.services.push")
+    async with house.sessionmaker() as db:
+        with pytest.raises(rules.InvalidSubscription):
+            await push.subscribe(
+                db, house["Kim"], await signed_in(house, "Kim"), "https://push.example.net/d/Zq9path", P256DH, AUTH,
+                now=house.clock(),
+            )  # fmt: skip
+    (line,) = [r for r in caplog.records if r.getMessage() == "push subscription refused"]
+    assert (line.host, line.reason) == ("push.example.net", "host")  # type: ignore[attr-defined]
+    assert "Zq9path" not in caplog.text
+
+
+async def test_startup_warns_when_the_web_app_is_on_without_https(
+    house: House, caplog: pytest.LogCaptureFixture
+) -> None:
+    async with house.sessionmaker() as db:
+        assert not await push.check_base_url(db, house.household.id, "http://localhost:8000")  # off: quiet
+    await switch(house, True)
+    async with house.sessionmaker() as db:
+        assert not await push.check_base_url(db, house.household.id, BASE_URL)
+        assert await push.check_base_url(db, house.household.id, "http://localhost:8000")
+    assert push.HTTPS_SUBJECT in caplog.text
+
+
 # The outbox, unchanged ----------------------------------------------------------------------------
 
 
@@ -668,6 +809,11 @@ def test_the_routes_need_the_switch_and_a_csrf_token(admin: TestClient, migrated
     assert subscriptions(migrated) == [FORM["endpoint"]]
     bad = submit(admin, "/app/notifications", FORM | {"endpoint": "https://169.254.169.254/latest"})
     assert bad.status_code == 400 and "push service" in bad.text
+    for data in (FORM | {"endpoint": endpoint("Alex") + "x" * 2000}, {}, FORM | {"p256dh": "A" * 5000}):
+        refused = submit(admin, "/app/notifications", data)  # a sentence push.js shows, never the HTML page
+        assert refused.status_code == 400 and refused.headers["content-type"].startswith("text/plain"), data.keys()
+        assert "<html" not in refused.text
+    assert submit(admin, "/app/notifications/off", {"endpoint": "x" * 5000}).status_code == 204
     assert submit(admin, "/app/notifications/off", {"endpoint": FORM["endpoint"]}).status_code == 204
     assert subscriptions(migrated) == []
     assert submit(admin, "/app/notifications", FORM).status_code == 204
@@ -684,10 +830,13 @@ def test_get_the_app_offers_notifications_to_a_signed_in_member(admin: TestClien
     assert problems == [] and any(s.startswith("/static/push.js") for s in scripts)
     card = html.split('id="notifications"', 1)[1].split("</section>", 1)[0]
     assert "hidden" in card.split(">", 1)[0] and "Turn on notifications" in card and "Turn off" in card
-    key = card.split('data-key="', 1)[1].split('"', 1)[0]
+    key = html.split('<meta name="dinnerbell-push-key" content="', 1)[1].split('"', 1)[0]
     assert key == admin.app.state.dinnerbell.vapid_public_key and len(key) == 87  # type: ignore[attr-defined]
     signed_out = TestClient(admin.app, base_url=BASE_URL, headers={"Origin": BASE_URL}, follow_redirects=False)
     assert 'id="notifications"' not in signed_out.get("/app").text
+    today = admin.get("/").text  # every page sends the subscription again, inside the installed app
+    assert 'name="dinnerbell-push-key"' in today and "/static/push.js" in today
+    assert inline_code(today)[1] == []
     js = admin.get("/static/push.js")
     assert js.status_code == 200 and "applicationServerKey" in js.text and "X-CSRF-Token" in js.text
 
@@ -699,6 +848,7 @@ def test_the_service_worker_keeps_its_policy_and_icon_line(admin: TestClient) ->
     worker = admin.get("/sw.js")
     assert worker.headers["content-security-policy"] == WORKER_CONTENT_SECURITY_POLICY
     assert WORKER_ICON in worker.text and "showNotification" in worker.text and "navigate" in worker.text
+    assert "options.tag = note.tag" in worker.text  # a call's posts replace each other on the lock screen
 
 
 def test_admin_shows_devices_and_warns_after_a_burst_of_refusals(admin: TestClient, migrated: Settings) -> None:
@@ -723,17 +873,30 @@ def test_admin_shows_devices_and_warns_after_a_burst_of_refusals(admin: TestClie
 
 
 def test_every_use_case_queues_notifications_through_the_push_hook() -> None:
-    """Only ``db/outbox.py`` calls ``enqueue`` itself; everything else calls ``enqueue_with_push``,
-    so a new kind that pushes can't be queued without its pushes (spec 6.15)."""
+    """Only ``db/outbox.py`` calls ``enqueue`` or inserts an ``OutboxRow``; everything else calls
+    ``enqueue_with_push``, so a kind that pushes can't be queued without its pushes (spec 6.15)."""
+    import ast
     from pathlib import Path
 
     package = Path(__file__).resolve().parents[1] / "src" / "dinnerbell"
-    direct = sorted(
-        str(path.relative_to(package))
-        for path in package.rglob("*.py")
-        if ".enqueue(" in path.read_text() and path.name != "outbox.py"
-    )
-    assert direct == []
-    assert ".enqueue(" not in (package / "services" / "outbox.py").read_text()
-    users = {p.name for p in package.rglob("*.py") if ".enqueue_with_push(" in p.read_text()}
+    outbox_module = package / "db" / "outbox.py"
+    enqueues: list[str] = []
+    inserts: list[str] = []
+    users: set[str] = set()
+    for path in package.rglob("*.py"):
+        where = str(path.relative_to(package))
+        for node in ast.walk(ast.parse(path.read_text())):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = func.attr if isinstance(func, ast.Attribute) else func.id if isinstance(func, ast.Name) else ""
+            if name == "enqueue_with_push":
+                users.add(path.name)
+            if name == "enqueue" and path != outbox_module:
+                enqueues.append(f"{where}:{node.lineno}")
+            mentions_row = any(isinstance(a, ast.Name) and a.id == "OutboxRow" for a in node.args)
+            if (name == "OutboxRow" or (name == "insert" and mentions_row)) and path != outbox_module:
+                inserts.append(f"{where}:{node.lineno}")
+    assert enqueues == []
+    assert inserts == []
     assert {"call_context.py", "guests.py", "recap.py", "discard.py", "schedule.py", "announcements.py"} <= users
