@@ -225,15 +225,21 @@ class InvalidLocation(ValueError):
     """A postal code or country that can't be one. The message is for the admin."""
 
 
+def normalize_country(country: str) -> str:
+    """Two capital letters (ISO 3166-1), US when blank, or ``InvalidLocation``."""
+    country = country.strip().upper() or DEFAULT_COUNTRY
+    if not _COUNTRY.fullmatch(country):
+        raise InvalidLocation("Enter the country as two letters, such as US or CA.")
+    return country
+
+
 def normalize_location(postal_code: str, country: str) -> tuple[str, str]:
     """The postal code and country as Dinnerbell stores and sends them, or ``InvalidLocation``.
 
     The country is two letters (ISO 3166-1), US when blank. A US ZIP code is 5 digits; ZIP+4
     is accepted and sent as its first 5. Elsewhere, 2 to 10 letters, digits, spaces, or hyphens,
     in capitals."""
-    country = country.strip().upper() or DEFAULT_COUNTRY
-    if not _COUNTRY.fullmatch(country):
-        raise InvalidLocation("Enter the country as two letters, such as US or CA.")
+    country = normalize_country(country)
     code = " ".join(postal_code.split()).upper()
     if not code:
         raise InvalidLocation("Enter a ZIP or postal code to show local weather.")
@@ -301,16 +307,23 @@ def check_content_type(value: str | None) -> None:
 
 REFRESH_MIN = timedelta(hours=1)
 REFRESH_MAX = timedelta(hours=3)
+"""The most time between two fetches, as they happen: the drawn wait plus up to one check."""
+CHECK_INTERVAL = timedelta(minutes=5)
+"""How often the scheduler looks for households that are due (``scheduler.runner``). A fetch
+happens at the first check at or after its time, so up to this much later."""
+DRAW_MAX = REFRESH_MAX - CHECK_INTERVAL
+"""The longest wait drawn, so the fetch, at the first check after it, is never past REFRESH_MAX."""
 FRESH_FOR = timedelta(hours=6)
 """How long an answer stays good: past this, the den falls back to the seasonal weather."""
 
 
 def next_fetch(now: datetime, draw: float) -> datetime:
-    """When to ask next, ``draw`` (from 0 to 1) of the way from 1 to 3 hours after ``now``, to
-    the second, so households' requests never line up on the clock."""
+    """When to ask next, ``draw`` (from 0 to 1) of the way from ``REFRESH_MIN`` to ``DRAW_MAX``
+    after ``now``, to the second, so households' requests never line up on the clock. With
+    checks every ``CHECK_INTERVAL`` from ``now``, the fetch happens 1 to 3 hours later."""
     if not 0.0 <= draw <= 1.0:
         raise ValueError("draw must be from 0 to 1")
-    seconds = REFRESH_MIN.total_seconds() + draw * (REFRESH_MAX - REFRESH_MIN).total_seconds()
+    seconds = REFRESH_MIN.total_seconds() + draw * (DRAW_MAX - REFRESH_MIN).total_seconds()
     return now + timedelta(seconds=round(seconds))
 
 

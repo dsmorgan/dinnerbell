@@ -13,6 +13,9 @@ Run it with test stopped, after restoring the backup. In one transaction it:
   sends production's queue or edits production's messages;
 - deletes every web push device and queued push, and the push rejection warning (spec 6.15), so
   test can never push to production's phones;
+- deletes Dinnerbone's local weather setting, with its postal code, place, coordinates, and
+  answers (ADR 0011), so test never holds production's location or asks for its weather; an
+  admin on test turns it on again with a code of their choosing;
 - deletes all feedback on meals, which says how each member rated them (FR-49), and the counts and badges
   that come from it, so test, where testers act as other people, never holds production's feedback or
   counts;
@@ -53,6 +56,7 @@ from dinnerbell.db.contributions import BadgeRepository, ContributionRepository
 from dinnerbell.db.engine import write_transaction
 from dinnerbell.db.events import EventRepository, ShownPlaceRepository
 from dinnerbell.db.feedback import FeedbackRepository
+from dinnerbell.db.local_weather import LocalWeatherRepository
 from dinnerbell.db.meals import household_settings
 from dinnerbell.db.outbox import OutboxRepository
 from dinnerbell.db.push import PushRepository, without_push_settings
@@ -168,6 +172,9 @@ class ScrubRefused(Exception):
     """The scrub didn't run. The message says why and never includes an email."""
 
 
+WEATHER_CLEARED = "Local weather turned off, and its postal code and place deleted"
+
+
 @dataclass(frozen=True, slots=True)
 class ScrubSummary:
     members_kept: int
@@ -188,6 +195,7 @@ class ScrubSummary:
     shown_places_deleted: int = 0
     push_devices_deleted: int = 0
     pushes_deleted: int = 0
+    local_weather_cleared: bool = False
 
     def lines(self) -> list[str]:
         return [
@@ -205,6 +213,7 @@ class ScrubSummary:
             f"Places shown on calls, forgotten: {self.shown_places_deleted}",
             *self._assistant_lines(),
             *self._push_lines(),
+            *([WEATHER_CLEARED] if self.local_weather_cleared else []),
         ]
 
     def _push_lines(self) -> list[str]:
@@ -334,6 +343,7 @@ async def _scrub(db: AsyncSession, *, instance_label: str, keep: Iterable[str], 
     pending, rows = await OutboxRepository(db).clear(household.id)
     feedback_deleted = await FeedbackRepository(db).clear(household.id)
     shown_deleted = await ShownPlaceRepository(db).clear(household.id)  # every call's ended, so they're spent
+    weather_cleared = await LocalWeatherRepository(db).clear(household.id)  # production's location stays there
     forgotten = await forget_for_test(db, household.id)
     # So test never holds production's feedback or counts: the counts, and the badges that come from them.
     await ContributionRepository(db).clear_feedback(household.id)
@@ -364,6 +374,7 @@ async def _scrub(db: AsyncSession, *, instance_label: str, keep: Iterable[str], 
         shown_places_deleted=shown_deleted,
         push_devices_deleted=push_devices,
         pushes_deleted=push_rows,
+        local_weather_cleared=weather_cleared,
     )
     summary_payload = {"kept_member_ids": sorted(kept_ids), "instance_label": instance_label} | asdict(summary)
     target = f"household:{household.id}"

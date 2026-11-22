@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from dinnerbell.domain.notifications import Channel
 from dinnerbell.domain.push import PushSender
+from dinnerbell.domain.weather import CHECK_INTERVAL
 from dinnerbell.logs import start_unit
 from dinnerbell.services import announcements, auth, backups, lifecycle, local_weather, outbox, push, recap, stuck
 from dinnerbell.services.assistant import retention
@@ -45,9 +46,10 @@ DRAIN_INTERVAL = timedelta(seconds=5)
 """How often the outbox is drained between ticks, so a tap in Slack shows up within seconds."""
 PUSH_DRAIN_INTERVAL = timedelta(seconds=5)
 """How often the push queue is drained (spec 6.15). Its own job, so neither queue waits on the other."""
-WEATHER_INTERVAL = timedelta(minutes=5)
+WEATHER_INTERVAL = CHECK_INTERVAL
 """How often the scheduler looks for local weather that's due (ADR 0011). Each household asks only
-when its own randomized 1-to-3-hour wait is over, so this only bounds how late a fetch can be."""
+when its own randomized wait is over; ``domain.weather.next_fetch`` leaves room for this, so a
+fetch is never more than 3 hours after the last."""
 
 
 @dataclass(frozen=True)
@@ -215,7 +217,7 @@ async def drain_push(ctx: JobContext) -> None:
 async def refresh_weather(ctx: JobContext) -> None:
     """Ask Open-Meteo for each household whose local weather is due (ADR 0011). Its own job, apart
     from the call tick, so a slow or failing weather service never holds up a call. With local
-    weather off everywhere, it reads one index and asks nothing."""
+    weather off everywhere, it finds nothing due and asks nothing."""
     if ctx.weather is None:
         return
     try:

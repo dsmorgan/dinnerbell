@@ -420,7 +420,9 @@ body[data-pile="snow"] .den.den-shake .den-cap-wheel { display: block; }
   body[data-react="scarf"] .ham .acc-scarf-tail { transform-box: view-box; transform-origin: 33px 35px; animation: den-flap 0.5s ease-in-out infinite alternate; }
   body[data-react="fan"] .ham .acc-fan { transform-box: view-box; transform-origin: 55px 45px; animation: den-fan 0.45s ease-in-out infinite alternate; }
   .den[data-pose="peek"] .ham { animation: den-peek 5s ease-in-out infinite; }
-  .den[data-walking] .ham-shake, .den-runner .ham-shake { animation: none; }
+  /* Not on the way, and not on the lap runner, a copy of him that would otherwise shake too. */
+  body[data-react] .den[data-walking] .ham .ham-shake, body[data-react] .den[data-walking] .ham .acc-snowcap,
+  body[data-react] .den-runner .ham .ham-shake, body[data-react] .den-runner .ham .acc-snowcap { animation: none; }
 
   .den-wx i { animation: den-fall 6s linear infinite; }
   body[data-fall="rain"] .den-wx i, body[data-fall="sleet"] .den-wx i:nth-child(odd) { animation: den-rain 0.8s linear infinite; }
@@ -519,7 +521,8 @@ body[data-pile="snow"] .den.den-shake .den-cap-wheel { display: block; }
 @keyframes den-twinkle { 50% { filter: brightness(0.8); } }
 @keyframes den-drift { from { translate: -6px 0; } to { translate: 10px 0; } }
 @keyframes den-fog { from { opacity: 0.75; translate: -4px 0; } to { opacity: 1; translate: 4px 0; } }
-@keyframes den-lightning { 0%, 90%, 100% { filter: none; } 93% { filter: brightness(1.3); } }
+/* Over about a second each way in a 9-second loop: a soft glow, not a flash. */
+@keyframes den-lightning { 0%, 78%, 100% { filter: none; } 89% { filter: brightness(1.15); } }
 @keyframes den-shake-off { 0%, 86%, 100% { rotate: 0deg; } 88% { rotate: -7deg; } 90% { rotate: 7deg; } 92% { rotate: -6deg; } 94% { rotate: 5deg; } 96% { rotate: 0deg; } }
 @keyframes den-snow-off { 0% { opacity: 0; } 30%, 88% { opacity: 1; translate: 0 0; } 96% { opacity: 0; translate: -9px 16px; } 100% { opacity: 0; } }
 @keyframes den-flap { from { rotate: -7deg; } to { rotate: 6deg; scale: 1 0.85; } }
