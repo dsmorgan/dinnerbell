@@ -7,18 +7,26 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from dataclasses import dataclass
+from datetime import date
 from html.parser import HTMLParser
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
+from joserfc.jwk import RSAKey
 
-from dinnerbell.config import Settings
-from tests.conftest import invite, page
+from dinnerbell.config import SLACK_ISSUER, Settings
+from tests.conftest import invite, page, sign_in
 from tests.support.clock import FakeClock
 from tests.support.fake_oidc import FakeProvider
+from tests.support.web import htmx, submit
 from tests.test_auth_flow import member
 from tests.test_events_web import admin as admin
 from tests.test_events_web import sign_in_as, start, to_voting
+from tests.test_guests_web import SLACK_ADMIN, TEAM, add_guest, as_guest
+from tests.test_history import log
+from tests.test_offers_web import offer_form
 from tests.test_web_app import switch
 
 KEY = '<svg width="16" height="16" viewBox="0 0 24 24"'
@@ -26,27 +34,44 @@ VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "met
 
 
 class Buttons(HTMLParser):
-    """Each button on a page: its classes, and which card and expandable section it sits in."""
+    """Each button on a page, and each card. A button records its classes, attributes, label, and
+    the card and expandable section (``<details>``) it sits in, by the order they opened."""
 
     def __init__(self) -> None:
         super().__init__()
         self.open: list[tuple[str, list[str], int]] = []
-        self.buttons: list[tuple[list[str], int | None, int | None]] = []
+        self.buttons: list[Button] = []
+        self.cards: set[int] = set()
         self.count = 0
+        self.label: Button | None = None
+        self.label_depth = 0
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        classes = (dict(attrs).get("class") or "").split()
+        values = dict(attrs)
+        classes = (values.get("class") or "").split()
         if "button" in classes and tag in {"a", "button"}:
-            self.buttons.append((classes, self.innermost("card"), self.innermost(None, tag="details")))
-        if tag not in VOID:
-            self.count += 1
-            self.open.append((tag, classes, self.count))
+            self.label = Button(tag, classes, values, self.innermost("card"), self.innermost(None, tag="details"))
+            self.buttons.append(self.label)
+            self.label_depth = len(self.open)
+        if tag in VOID:
+            return
+        self.count += 1
+        self.open.append((tag, classes, self.count))
+        if "card" in classes:
+            self.cards.add(self.count)
+
+    def handle_data(self, data: str) -> None:
+        if self.label is not None:
+            self.label.text += data
 
     def handle_endtag(self, tag: str) -> None:
         for i in range(len(self.open) - 1, -1, -1):
             if self.open[i][0] == tag:
                 del self.open[i:]
-                return
+                break
+        if self.label is not None and len(self.open) <= self.label_depth:
+            self.label.text = " ".join(self.label.text.split())
+            self.label = None
 
     def innermost(self, cls: str | None, tag: str | None = None) -> int | None:
         for name, classes, key in reversed(self.open):
@@ -55,21 +80,61 @@ class Buttons(HTMLParser):
         return None
 
 
-def primaries_per_card(html: str) -> Counter[tuple[int, int | None]]:
-    """How many primaries each card has, counting each expandable section (a ``<details>``, such
-    as Invite a guest on a call) as a card of its own. Toggles (``.choice``) aren't actions."""
+@dataclass
+class Button:
+    tag: str
+    classes: list[str]
+    attrs: dict[str, str | None]
+    card: int | None
+    section: int | None
+    text: str = ""
+
+    @property
+    def primary(self) -> bool:
+        """A primary action: toggles (``.choice``) aren't actions."""
+        return "primary" in self.classes and "choice" not in self.classes
+
+
+def parse(html: str) -> Buttons:
     parser = Buttons()
     parser.feed(html)
-    return Counter(
-        (card, section)
-        for classes, card, section in parser.buttons
-        if card is not None and "primary" in classes and "choice" not in classes
-    )
+    parser.close()
+    return parser
+
+
+def primaries_per_card(html: str) -> Counter[tuple[int, int | None]]:
+    """How many primaries each card has, counting each expandable section (a ``<details>``, such
+    as Invite a guest on a call) as a card of its own."""
+    return Counter((b.card, b.section) for b in parse(html).buttons if b.card is not None and b.primary)
 
 
 def assert_one_primary_per_card(html: str) -> None:
     crowded = {key: n for key, n in primaries_per_card(html).items() if n > 1}
     assert not crowded, f"cards with more than one primary: {crowded}"
+
+
+PAGE_FORM = "a form whose fields span several cards; its one Save sits under them, for the whole form"
+OUTSIDE_CARDS: dict[str, str] = {
+    "Save ranking": PAGE_FORM,  # Admin > Ranking
+    "Save badge counts": PAGE_FORM,  # Admin > Badges: three ladders, one card each
+    "Save assistant settings": PAGE_FORM,  # Admin > Assistant
+}
+"""Primaries allowed outside any card, by label, each with the reason."""
+
+
+def check_page(where: str, html: str, *, min_cards: int = 1) -> list[Button]:
+    """The button rules on one page or fragment: one primary per card or section, no primary
+    outside a card unless OUTSIDE_CARDS says why, and every toggle says whether it's pressed.
+    Returns the page's primaries."""
+    parsed = parse(html)
+    assert len(parsed.cards) >= min_cards, f"{where}: {len(parsed.cards)} cards, expected {min_cards} or more"
+    assert_one_primary_per_card(html)
+    for b in parsed.buttons:
+        if "choice" in b.classes:
+            assert b.attrs.get("aria-pressed") in {"true", "false"}, f"{where}: a toggle without aria-pressed: {b}"
+        if b.primary and b.card is None:
+            assert b.text in OUTSIDE_CARDS, f"{where}: a primary outside any card: {b.text!r}"
+    return [b for b in parsed.buttons if b.primary]
 
 
 def buttons_in(html: str, start: str, end: str) -> list[str]:
@@ -79,6 +144,12 @@ def buttons_in(html: str, start: str, end: str) -> list[str]:
     return re.findall(r"<button\b[^>]*>.*?</button>", section, re.S)
 
 
+@pytest.fixture
+def provider(signing_key: RSAKey, clock: FakeClock, settings: Settings) -> FakeProvider:
+    """The configured issuer: the fake one, or Sign in with Slack for the guest's page."""
+    return FakeProvider(key=signing_key, clock=clock, issuer=settings.oidc_issuer)
+
+
 # The check itself ----------------------------------------------------------------------------
 
 
@@ -86,7 +157,7 @@ def test_the_check_finds_a_card_with_two_primaries() -> None:
     two = '<section class="card"><a class="button primary">Add</a><button class="button primary">Save</button>'
     two += "</section>"
     with pytest.raises(AssertionError, match="more than one primary"):
-        assert_one_primary_per_card(two)
+        check_page("two", two)
 
 
 def test_the_check_counts_each_section_and_skips_toggles() -> None:
@@ -94,11 +165,21 @@ def test_the_check_counts_each_section_and_skips_toggles() -> None:
         '<section class="card"><button class="button primary">Count me in</button>'
         '<button class="button small primary choice" aria-pressed="false">Vote</button>'
         '<details class="details-form"><summary>Invite</summary><form><input name="x">'
-        '<button class="button primary">Invite</button></form></details></section>'
+        '<button class="button primary"><svg><path d="M0 0"/></svg>Invite</button></form></details></section>'
         '<form class="card"><button class="button primary">Save</button></form>'
     )
-    assert_one_primary_per_card(html)
+    primaries = check_page("sections", html, min_cards=2)
+    assert [b.text for b in primaries] == ["Count me in", "Invite", "Save"]
     assert sorted(primaries_per_card(html).values()) == [1, 1, 1]
+
+
+def test_the_check_finds_a_primary_outside_a_card_and_a_toggle_without_its_state() -> None:
+    with pytest.raises(AssertionError, match="outside any card"):
+        check_page("outside", '<div class="card"></div><a class="button primary">Add restaurant</a>')
+    with pytest.raises(AssertionError, match="without aria-pressed"):
+        check_page("toggle", '<div class="card"><button class="button small choice">I\'ll coordinate</button></div>')
+    with pytest.raises(AssertionError, match="0 cards"):
+        check_page("empty", "<p>Nothing here</p>")
 
 
 # Admin ---------------------------------------------------------------------------------------
@@ -116,19 +197,23 @@ def voting(admin: TestClient, provider: FakeProvider, clock: FakeClock, migrated
 
 
 def test_a_calls_admin_section_uses_the_admin_style(admin: TestClient, voting: int) -> None:
+    """Its actions are admin buttons with the key, except Re-run: it clears the proposals, votes,
+    and any decision, so danger wins."""
     for html in (page(admin.get("/")), page(admin.get(f"/events/{voting}"))):
         start = '<details class="details-form admin-controls">'
         assert re.search(re.escape(start) + r'\s*<summary class="small">' + re.escape(KEY), html)  # the key leads
         buttons = buttons_in(html, start, "</details>")
-        assert len(buttons) >= 3  # at least one deadline move, Assign, and nothing else unstyled
-        for button in buttons:
-            assert re.search(r'class="button small admin"', button), button
+        keyed = [b for b in buttons if 'class="button small admin"' in b]
+        assert len(keyed) >= 4  # three deadline moves and Assign
+        for button in keyed:
             assert KEY in button and button.index(KEY) < button.index("</svg>") < button.index("</button>")
-        assert re.search(r'<svg [^>]*aria-hidden="true"', buttons[0])
-        assert any(b.endswith("</svg>Assign</button>") for b in buttons)
+        (rerun,) = [b for b in buttons if b not in keyed]
+        assert 'class="button small danger"' in rerun and rerun.endswith(">Re-run</button>") and KEY not in rerun
+        assert re.search(r'<svg [^>]*aria-hidden="true"', keyed[0])
+        assert any(b.endswith("</svg>Assign</button>") for b in keyed)
         # Outside it, the coordinator's own actions are plain secondary buttons.
         assert re.search(r'class="button small"[^>]*>Lock this<', html)
-        assert html.count(KEY) == len(buttons) + 1
+        assert html.count(KEY) == len(keyed) + 1
 
 
 def test_an_admin_editing_someones_preferences_saves_with_the_admin_style(
@@ -163,24 +248,101 @@ def test_a_plain_member_never_sees_the_admin_style(
 
 # One primary per card ------------------------------------------------------------------------
 
+SETTINGS_ON = {"enabled": "on", "cap_dollars": "5", "conversation_hours": "24"}
+EXPECTED = {
+    "Post it now",
+    "Count me in",
+    "Save details",
+    "I'm in (late)",
+    "Start dinner again",
+    "Invite",
+    "Add guest",
+    "Add tag",
+    "Add to catalog",
+    "Log it",
+    "Save needs",
+    "Save away days",
+    "Save ranking",
+    "Save badge counts",
+    "Send",
+}
+"""Primaries the pages below must show, so the check can't pass on pages that lost them."""
 
-def test_each_card_has_at_most_one_primary(admin: TestClient, voting: int, migrated: Settings) -> None:
+
+def made(response: httpx.Response) -> int:
+    assert response.status_code == 303, page(response)
+    return int(response.headers["location"].rsplit("/", 1)[1])
+
+
+@pytest.mark.parametrize("settings_overrides", [{"anthropic_api_key": "sk-ant-test-not-a-real-key"}])
+def test_each_card_has_at_most_one_primary(
+    admin: TestClient, provider: FakeProvider, voting: int, migrated: Settings
+) -> None:
+    """Every page an admin and a plain member see, with calls in each state: scheduled (Post it
+    now), collecting (Save details), voting without Sam (I'm in (late)), called off (Start dinner
+    again), and an offer (Count me in), plus an HTMX answer's card."""
+    submit(admin, "/catalog/tags", {"kind": "dietary", "name": "Vegetarian"})  # for Save needs
+    scheduled = made(submit(admin, "/events", {"slot": "lunch", "day": "2026-10-23"}))
+    collecting = made(submit(admin, "/events", {"slot": "lunch", "day": "2026-10-24", "post_now": "1"}))
+    called_off = made(submit(admin, "/events", {"slot": "dinner", "day": "2026-10-26", "post_now": "1"}))
+    assert submit(admin, f"/events/{called_off}/cancel", {"run": "1"}).status_code == 303
+    offer = made(submit(admin, "/offers", offer_form(day="2026-10-25")))
+    assert submit(admin, "/admin/assistant", SETTINGS_ON).status_code == 303
     sam = member(migrated, "sam@example.com").id
-    paths = (
+    me = member(migrated, "admin@example.com").id
+    assert log(admin, 1, [me, sam], day=date(2026, 10, 21)).status_code == 303
+    meal = int(re.findall(r'id="meal-(\d+)"', admin.get("/history").text)[0])
+
+    seen: set[str] = set()
+    admin_pages = (
         "/",
         f"/events/{voting}",
+        f"/events/{offer}",
         "/preferences",
         f"/admin/members/{sam}/preferences",
         "/admin/members",
         f"/admin/members/{sam}",
-        "/catalog",
-        "/catalog/tags",
-        "/history",
-        "/schedule",
+        "/admin/channel",
         "/admin/schedule",
         "/admin/badges",
+        "/admin/assistant",
+        "/admin/web-app",
+        "/catalog",
+        "/catalog/new",
+        "/catalog/items/1",
+        "/catalog/import",
+        "/catalog/tags",
+        "/history",
+        f"/history/meals/{meal}",
+        f"/history/meals/{meal}/feedback",
+        "/schedule",
+        "/assistant",
+        "/app",
     )
-    for path in paths:
-        html = page(admin.get(path))
-        assert "button" in html, path
-        assert_one_primary_per_card(html)
+    for path in admin_pages:
+        response = admin.get(path)
+        assert response.status_code == 200, path
+        # Admin > Channel lists people from Slack, as rows, not cards; without Slack it has none.
+        seen |= {b.text for b in check_page(path, response.text, min_cards=0 if path == "/admin/channel" else 1)}
+
+    sign_in_as(admin, provider, "sam@example.com")
+    member_pages = ("/", *(f"/events/{e}" for e in (voting, scheduled, collecting, called_off, offer)))
+    for path in (*member_pages, "/preferences", "/history", "/catalog", "/schedule"):
+        response = admin.get(path)
+        assert response.status_code == 200, path
+        seen |= {b.text for b in check_page(f"Sam: {path}", response.text)}
+    answered = htmx(admin, f"/events/{collecting}/respond", {"status": "in", "from": "today"})
+    assert answered.status_code == 200 and "<html" not in answered.text
+    seen |= {b.text for b in check_page("Sam answers In", answered.text)}
+
+    assert seen >= EXPECTED, f"primaries no page showed: {sorted(EXPECTED - seen)}"
+
+
+@pytest.mark.parametrize("settings_overrides", [{"slack_team_id": TEAM, "oidc_issuer": SLACK_ISSUER}])
+def test_a_guests_own_page_has_one_primary_per_card(client: TestClient, provider: FakeProvider) -> None:
+    assert sign_in(client, provider, claims=SLACK_ADMIN).status_code == 303
+    submit(client, "/catalog/tags", {"kind": "dietary", "name": "Vegetarian"})
+    add_guest(client, "Pat", slack="U07PAT")
+    guest = as_guest(client, provider)
+    primaries = check_page("/me", guest.get("/me").text, min_cards=3)
+    assert [b.text for b in primaries] == ["Save", "Save", "Save"]  # needs, fun mode, light or dark
