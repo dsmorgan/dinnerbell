@@ -88,7 +88,7 @@
     {#- Inside the installed app, push.js shows this until the member answers the permission
         prompt on Preferences (spec 6.15). -#}
     {%- if web_app and push_key and principal and not principal.member.is_guest and principal.member.delivery.value != "slack" %}
-    <p class="alert editing" id="push-nudge" hidden>Get notifications on this phone: <a href="/preferences#notify-via">turn them on</a>.</p>
+    <p class="alert editing" id="push-nudge" hidden>Get notifications on this device: <a href="/preferences#notify-via">turn them on</a>.</p>
     {%- endif %}
     {% block content %}{% endblock %}
   </main>

@@ -28,7 +28,7 @@
     // gets pushes (Safari and in-app browsers such as Slack's have no push at all).
     if (card) {
       document.getElementById("push-state").hidden = true;
-      document.getElementById(ios ? "push-install" : "push-unsupported").hidden = false;
+      document.getElementById(ios && !installed ? "push-install" : "push-unsupported").hidden = false;
       card.hidden = false;
     }
     return;

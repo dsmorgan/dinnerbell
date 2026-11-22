@@ -6,7 +6,7 @@
 {% endif %}
 <p id="push-state" role="status">Checking this device…</p>
 <p id="push-install" hidden>On an iPhone or iPad, notifications work only in Dinnerbell on your Home Screen, not in Safari or another app's browser.{% if request.url.path != "/app" %} <a href="/app">Get the app</a> shows how.{% endif %}</p>
-<p id="push-unsupported" hidden>This browser can't get notifications.</p>
+<p id="push-unsupported" hidden>This browser can't get notifications. On an iPhone or iPad, you need iOS 16.4 or later.</p>
 <p class="push-actions">
   <button type="button" class="button primary" id="push-on" hidden>Turn on notifications</button>
   <button type="button" class="button" id="push-off" hidden>Turn off</button>
