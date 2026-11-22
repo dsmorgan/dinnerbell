@@ -6,9 +6,11 @@
 {%- macro key_icon() -%}
 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2 20 3"/><path d="m16 7 3 3"/></svg>
 {%- endmacro -%}
-{#- A form's submit button: ``role`` is primary, secondary (""), or danger, or, when ``admin``
-    is true, admin with its key, whatever ``role`` says. ``extra`` adds classes such as small. -#}
+{#- A form's submit button: ``role`` is primary, secondary (""), or danger. When ``admin`` is
+    true, it's admin with its key instead, unless ``role`` is danger: danger wins. ``extra`` adds
+    classes such as small. -#}
 {%- macro save_button(label, role="primary", admin=false, extra="") -%}
-{%- set roles = ["button", "admin" if admin else role, extra]|select|join(" ") -%}
-<button type="submit" class="{{ roles }}">{% if admin %}{{ key_icon() }}{% endif %}{{ label }}</button>
+{%- set as_admin = admin and role != "danger" -%}
+{%- set roles = ["button", "admin" if as_admin else role, extra]|select|join(" ") -%}
+<button type="submit" class="{{ roles }}">{% if as_admin %}{{ key_icon() }}{% endif %}{{ label }}</button>
 {%- endmacro -%}

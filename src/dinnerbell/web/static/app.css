@@ -247,7 +247,7 @@ p { margin: 0 0 0.75rem; }
 .button.admin { gap: 0.35rem; background: var(--admin-fill); border-color: var(--admin-line); color: var(--admin); }
 .button.admin > svg, .admin-controls > summary > svg { flex: none; }
 /* A toggle that isn't on keeps the look it had before the button roles. */
-.button:is(.choice, .answer-option):not(.primary, .quiet) { background: var(--surface); border-color: var(--line); }
+.button:is(.choice, .answer-option):not(.primary, .quiet, .danger, .admin) { background: var(--surface); border-color: var(--line); }
 .button.small { min-height: 40px; padding: 0 0.8rem; font-size: 0.9rem; }
 .button.block { width: 100%; margin: 0.5rem 0 1rem; }
 
@@ -899,7 +899,7 @@ fieldset.card > .button.block { margin-bottom: 0; }
 /* A new code sits on a line of its own, never broken, with Copy beside it. On the green alert,
    Copy's edge takes --muted, since --button-line would fall short of 3:1 there in light mode. */
 .code-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; }
-.code-row .button { border-color: var(--muted); }
+.code-row .button:not(.primary, .danger, .admin) { border-color: var(--muted); }
 .issued-code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 1.5rem; font-weight: 700; letter-spacing: 0.08em; white-space: nowrap; user-select: all; -webkit-user-select: all; }
 @media (display-mode: standalone) {
   .signin-options .signin-code { order: -1; background: var(--accent); border-color: var(--accent); color: var(--accent-text); }

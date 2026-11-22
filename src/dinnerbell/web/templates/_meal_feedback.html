@@ -6,7 +6,7 @@
     other buttons instead: it imports feedback_button and sets button_apart. -#}
 {% macro feedback_button(meal, fb, from_page="history") %}
 {% if fb and fb.can_give %}
-<a class="button small{% if not fb.mine %} primary{% endif %}" href="/history/meals/{{ meal.id }}/feedback{% if from_page == 'event' %}?from=event{% endif %}">{{ "Change your feedback" if fb.mine else "How was it?" }}</a>
+<a class="button small" href="/history/meals/{{ meal.id }}/feedback{% if from_page == 'event' %}?from=event{% endif %}">{{ "Change your feedback" if fb.mine else "How was it?" }}</a>
 {% endif %}
 {% endmacro %}
 {% if fb %}

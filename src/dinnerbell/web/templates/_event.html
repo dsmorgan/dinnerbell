@@ -126,7 +126,7 @@
     {% set offered = mine is not none and role in mine.offers %}
     {{ act(e.id, base ~ "/offer", label, "button small choice", {"role": role.value, "offered": "0" if offered else "1"}, pressed=offered) }}
     {% endfor %}
-    {% if v.can.claim %}{{ act(e.id, base ~ "/coordinate", labels.COORDINATE, "button small choice") }}{% endif %}
+    {% if v.can.claim %}{{ act(e.id, base ~ "/coordinate", labels.COORDINATE, "button small") }}{% endif %}
   </div>
   {% if not as_guest %}
   {#- Away (FR-63): the status line and what ends it, or Away until… for the day they're back. -#}
@@ -535,7 +535,7 @@
     </form>
     {% endif %}
     {% if rerun %}
-    <div class="button-row">{{ act(e.id, base ~ "/admin/rerun", "Re-run", "button small admin", confirm="Start this call over? Proposals, votes, and any decision are cleared.") }}</div>
+    <div class="button-row">{{ act(e.id, base ~ "/admin/rerun", "Re-run", "button small danger", confirm="Start this call over? Proposals, votes, and any decision are cleared.") }}</div>
     {% endif %}
   </details>
   {% endif %}
