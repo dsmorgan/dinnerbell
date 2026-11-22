@@ -479,16 +479,43 @@ async def test_a_url_outside_the_allowlist_is_never_sent() -> None:
 def test_the_next_fetch_is_one_to_three_hours_away_and_randomized() -> None:
     now = datetime(2026, 10, 22, 18, 0, tzinfo=UTC)
     assert next_fetch(now, 0.0) - now == REFRESH_MIN == timedelta(hours=1)
-    assert next_fetch(now, 1.0) - now == REFRESH_MAX == timedelta(hours=3)
-    assert next_fetch(now, 0.5) - now == timedelta(hours=2)
+    assert next_fetch(now, 1.0) - now == REFRESH_MAX - WEATHER_INTERVAL == timedelta(hours=2, minutes=55)
+    assert next_fetch(now, 0.5) - now == timedelta(hours=1, minutes=57, seconds=30)
     import random
 
     draws = [next_fetch(now, random.random()) - now for _ in range(200)]  # noqa: S311 - like the job's own draw
-    assert all(REFRESH_MIN <= d <= REFRESH_MAX for d in draws)
+    assert all(REFRESH_MIN <= d <= REFRESH_MAX - WEATHER_INTERVAL for d in draws)
     assert len(set(draws)) > 150  # not on a fixed clock
     for bad in (-0.1, 1.1):
         with pytest.raises(ValueError, match="from 0 to 1"):
             next_fetch(now, bad)
+
+
+def realized_gap(lag: timedelta, draw: float) -> timedelta:
+    """The time between two fetches as they happen. The scheduler checks every interval from a
+    tick; the check that claims a fetch reads the clock ``lag`` after its tick, and the next fetch
+    runs at the first tick at or after its drawn time."""
+    tick = datetime(2026, 10, 22, 18, 0, tzinfo=UTC)
+    claimed = tick + lag
+    due = next_fetch(claimed, draw)
+    checks = -(-(due - tick) // WEATHER_INTERVAL)  # ceiling division
+    return tick + checks * WEATHER_INTERVAL - claimed
+
+
+LAGS = [timedelta(0), timedelta(seconds=1), timedelta(seconds=30), WEATHER_INTERVAL - timedelta(seconds=1)]
+
+
+@pytest.mark.parametrize("draw", [0.0, 1e-9, 0.5, 1 - 1e-9, 1.0])
+@pytest.mark.parametrize("lag", LAGS)
+def test_fetches_as_they_happen_are_one_to_three_hours_apart(draw: float, lag: timedelta) -> None:
+    """A drawn time is reached up to one check late, and the draw leaves room for that."""
+    assert REFRESH_MIN <= realized_gap(lag, draw) <= REFRESH_MAX
+
+
+def test_the_extremes_reach_one_and_three_hours() -> None:
+    assert min(realized_gap(lag, 0.0) for lag in LAGS) == REFRESH_MIN
+    assert max(realized_gap(lag, 1.0) for lag in LAGS) == REFRESH_MAX - timedelta(seconds=1)
+    assert max(realized_gap(lag, 1.0) for lag in LAGS) > REFRESH_MAX - WEATHER_INTERVAL
 
 
 def test_an_answer_is_good_for_six_hours() -> None:
@@ -657,20 +684,56 @@ def test_the_refresh_asks_once_then_waits_one_to_three_hours(
     admin: TestClient, open_meteo: FakeOpenMeteo, migrated: Settings, clock: FakeClock
 ) -> None:
     save(admin)
-    assert refresh(admin, draw=0.25) == 1
+    assert refresh(admin, draw=0.0) == 1
     row = stored(migrated)
     assert row is not None and (row.code, row.temperature_c, row.wind_kmh) == (61, 12.5, 8.0)
-    assert row.observed_at == clock.now and row.next_fetch_at == clock.now + timedelta(hours=1, minutes=30)
+    assert row.observed_at == clock.now and row.next_fetch_at == clock.now + timedelta(hours=1)
     params = open_meteo.forecasts()[0].url.params
     assert (params["latitude"], params["longitude"]) == ("40.1", "-75.2")
-    assert refresh(admin) == 0  # not due again for 90 minutes
-    clock.advance(timedelta(hours=1, minutes=29))
+    assert refresh(admin) == 0  # not due again for an hour
+    clock.advance(timedelta(minutes=55))
     assert refresh(admin) == 0
-    clock.advance(timedelta(minutes=1))
+    clock.advance(timedelta(minutes=5))
     assert refresh(admin, draw=1.0) == 1
     assert len(open_meteo.forecasts()) == 2
     row = stored(migrated)
-    assert row is not None and row.next_fetch_at == clock.now + timedelta(hours=3)
+    assert row is not None and row.next_fetch_at == clock.now + timedelta(hours=2, minutes=55)
+    clock.advance(timedelta(hours=2, minutes=50))
+    assert refresh(admin) == 0
+    clock.advance(WEATHER_INTERVAL)  # the next check: 3 hours after the last fetch, never later
+    assert refresh(admin) == 1
+
+
+def test_a_change_of_code_asks_again_at_the_next_check(admin: TestClient, open_meteo: FakeOpenMeteo) -> None:
+    """Turning it off and on, or another code, asks at the next check, whenever the last fetch was."""
+    save(admin)
+    assert refresh(admin) == 1
+    save(admin, on=False)
+    save(admin)
+    assert refresh(admin) == 1
+    assert len(open_meteo.forecasts()) == 2
+
+
+def test_a_source_that_never_answers_cant_hold_the_job(
+    admin: TestClient, migrated: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The refresh gives any source its own deadline plus a second, then counts a timeout."""
+    save(admin)
+    monkeypatch.setattr(local_weather, "DEADLINE_SECONDS", -0.95)  # a 50 ms limit in all
+
+    class Silent:
+        async def geocode(self, postal_code: str, country: str) -> Place:  # pragma: no cover - not asked
+            raise AssertionError
+
+        async def current(self, place: Place) -> Observation:
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")  # pragma: no cover
+
+    jobs = admin.app.state.jobs  # type: ignore[attr-defined]
+    run = functools.partial(local_weather.refresh, jobs.sessionmaker, Silent(), jobs.clock())
+    assert admin.portal.call(run) == 1  # type: ignore[union-attr]
+    row = stored(migrated)
+    assert row is not None and row.failure == "timeout"
 
 
 def test_a_fetch_that_ends_after_it_was_turned_off_changes_nothing(
@@ -712,7 +775,8 @@ def test_the_page_shows_the_local_weather_with_its_credit(
     assert re.search(f'<div id="den-state" hidden data-pose="peek"[^>]* {storm} data-weather-local="on"', html)
     assert '<div class="den" data-pose="peek" aria-hidden="true">' in html
     credit = (
-        '<p class="small muted weather-credit">Weather data by <a href="https://open-meteo.com/">Open-Meteo.com</a></p>'
+        '<p class="small muted weather-credit">Weather data by '
+        '<a href="https://open-meteo.com/" rel="noopener noreferrer">Open-Meteo.com</a></p>'
     )
     assert html.count(credit) == 1 and "style=" not in html
     assert storm in admin.get("/catalog").text and credit not in admin.get("/catalog").text
@@ -783,7 +847,7 @@ def test_each_failure_falls_back_to_the_seasonal_weather(
     assert refresh(admin) == 1
     row = stored(migrated)
     assert row is not None and (row.failure, row.failing_since, row.code) == (reason.value, clock.now, None)
-    assert row.next_fetch_at == clock.now + timedelta(hours=2)  # failing, it still waits
+    assert row.next_fetch_at == next_fetch(clock.now, 0.5)  # failing, it still waits
     html = admin.get("/").text
     assert SEASONAL in html and 'data-weather-local="on"' not in html  # the rest of the page is untouched
     assert 'class="den" data-pose="potter"' in html
@@ -907,19 +971,62 @@ def test_fun_css_draws_every_weather_fall_pile_and_reaction() -> None:
     assert '.den[data-pose="peek"]' in FUN_CSS
 
 
-def test_the_weather_never_sits_over_him_or_takes_a_tap() -> None:
-    ham_layer = int(re.search(r"\.den-ham \{[^}]*z-index: (\d+)", FUN_CSS).group(1))  # type: ignore[union-attr]
-    for layer in ("den-wx", "den-fog", "den-clouds"):
-        rule = re.search(rf"\.{layer} \{{[^}}]*\}}", FUN_CSS)
-        assert rule, layer
-        z = re.search(r"z-index: (-?\d+)", rule.group(0)) or re.search(
-            rf"\.{layer}[^{{]*\{{[^}}]*z-index: (-?\d+)", FUN_CSS
-        )
-        assert z and int(z.group(1)) < ham_layer, layer
-    assert ".den-clouds, .den-fog { position: absolute; inset: 0; display: none; pointer-events: none; }" in FUN_CSS
-    assert ".den-wx { position: absolute; inset: 0; z-index: 2; overflow: hidden; pointer-events: none; }" in FUN_CSS
-    assert ".ham .acc { pointer-events: none; }" in FUN_CSS
-    assert ".den.den-live .den-ham { pointer-events: auto; cursor: pointer; }" in FUN_CSS
+def css_rules(css: str) -> list[tuple[list[str], dict[str, str]]]:
+    """Every innermost rule, inside @media too, as its selectors and declarations, with comments
+    dropped and whitespace normalized, so a test doesn't depend on how the file is laid out."""
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
+    found = []
+    for selector, body in re.findall(r"([^{}]+)\{([^{}]*)\}", css):
+        selectors = [" ".join(part.split()) for part in selector.split(",") if part.strip()]
+        declarations = {}
+        for declaration in body.split(";"):
+            name, colon, value = declaration.partition(":")
+            if colon:
+                declarations[name.strip()] = " ".join(value.split())
+        found.append((selectors, declarations))
+    return found
+
+
+FUN_RULES = css_rules(FUN_CSS)
+
+
+def declared(selector: str, prop: str) -> list[str]:
+    """What every rule naming exactly ``selector`` sets ``prop`` to."""
+    return [d[prop] for selectors, d in FUN_RULES if selector in selectors and prop in d]
+
+
+def test_only_he_takes_taps_in_the_den() -> None:
+    """The den lets taps through; only Dinnerbone, once fun.js is live, takes them back."""
+    taking = [selectors for selectors, d in FUN_RULES if d.get("pointer-events") == "auto"]
+    assert taking == [[".den.den-live .den-ham"]]
+    assert declared(".den", "pointer-events") == ["none"]
+    for layer in (".den-wx", ".den-fog", ".den-clouds", ".edge-wx", ".den-track", ".ham .acc"):
+        assert declared(layer, "pointer-events") == ["none"], layer
+
+
+def test_the_weather_sits_behind_him() -> None:
+    (ham,) = declared(".den-ham", "z-index")
+    for layer in (".den-wx", ".den-fog", ".den-clouds", ".den-snow", ".den-puddle", ".den-leaves"):
+        levels = declared(layer, "z-index")
+        assert levels and all(int(z) < int(ham) for z in levels), layer
+
+
+def test_everything_he_wears_is_inside_him() -> None:
+    """Every accessory is drawn in his own svg, so it moves with him and stays under his tap."""
+    den = (Path(__file__).resolve().parents[1] / "src/dinnerbell/web/templates/_den.html").read_text()
+    inside = den.split('<svg class="ham"', 1)[1].split("</svg>", 1)[0]
+    outside = den.replace(inside, "")
+    assert len(re.findall(r'class="acc ', inside)) == len(re.findall(r'class="acc ', den)) >= 12
+    assert 'class="acc ' not in outside
+
+
+def test_he_is_hidden_only_while_away_on_a_lap() -> None:
+    hidden = [selectors for selectors, d in FUN_RULES if d.get("visibility") == "hidden"]
+    assert hidden == [[".den-ham.den-away"]]
+    for selectors, d in FUN_RULES:
+        if d.get("display") == "none" or d.get("opacity") == "0":
+            for selector in selectors:
+                assert not re.search(r"\.den-ham$|\.ham$", selector), selector
 
 
 def test_lightning_only_brightens_and_only_with_motion() -> None:
@@ -928,13 +1035,28 @@ def test_lightning_only_brightens_and_only_with_motion() -> None:
     assert "den-lightning" in FUN_CSS[start:end] and "den-lightning" not in FUN_CSS[:start]
     keyframes = FUN_CSS.split("@keyframes den-lightning", 1)[1].split("\n", 1)[0]
     levels = [float(x) for x in re.findall(r"brightness\(([\d.]+)\)", keyframes)]
-    assert levels and max(levels) <= 1.3
+    assert levels and max(levels) <= 1.15
+    stops = [float(x) for x in re.findall(r"([\d.]+)%", keyframes)]
+    peak = float(re.search(r"([\d.]+)% \{ filter: brightness", keyframes).group(1))  # type: ignore[union-attr]
+    rise = min(peak - s for s in stops if s < peak) * 9 / 100  # seconds, in the 9-second loop
+    assert rise >= 0.9
 
 
 def test_fun_js_follows_the_weather() -> None:
     assert 'var WEATHER = ["weather", "feel", "fall", "pile", "react"];' in FUN_JS
     assert '["period", "season", "season-depth"].concat(WEATHER).forEach' in FUN_JS
     assert "flashTimers" in FUN_JS  # a second tap restarts the reaction in full
+    tap = FUN_JS.split('ham.addEventListener("click"', 1)[1].split("});", 1)[0]
+    asleep = tap.index('if (pose === "sleep" || pose === "doze")')
+    assert tap.index('flash(heart, "den-pop"') < asleep  # asleep, the heart pops too
+
+
+def test_the_lap_runner_never_shakes_off_snow() -> None:
+    """The runner is a copy of him; the shake on the den's own would leak onto it unless the
+    runner's rule wins."""
+    for part in (".ham-shake", ".acc-snowcap"):
+        rule = f"body[data-react] .den-runner .ham {part}"
+        assert declared(rule, "animation") == ["none"], part
 
 
 def test_the_reactions_are_in_the_sprite() -> None:
@@ -954,3 +1076,39 @@ def test_a_new_member_sees_the_same_weather(
     assert mine and theirs
     attributes = re.compile(r' data-(?:period|season|season-depth|weather|feel|fall|pile|react)="[^"]*"')
     assert attributes.findall(mine.group(0)) == attributes.findall(theirs.group(0))
+
+
+def test_a_lookup_that_raises_logs_no_traceback_above_debug(
+    admin: TestClient, open_meteo: FakeOpenMeteo, migrated: Settings, caplog: pytest.LogCaptureFixture
+) -> None:
+    """An exception's message can quote the URL, and so the postal code: its traceback is debug only."""
+
+    def leaky(request: httpx.Request) -> httpx.Response:
+        raise RuntimeError(f"could not open {request.url}")
+
+    caplog.set_level(logging.DEBUG, logger="dinnerbell")
+    open_meteo.respond = leaky
+    assert save(admin).status_code == 400
+    open_meteo.respond = None  # and on a refresh: turn it on with a working lookup, then fail the fetch
+    assert save(admin).status_code == 303
+    open_meteo.respond = leaky
+    refresh(admin)
+    loud = [r for r in caplog.records if r.levelno >= logging.INFO and r.name.startswith("dinnerbell.services")]
+    assert any(r.getMessage() == "postal code lookup failed" for r in loud)
+    for record in loud:
+        assert record.exc_info is None, record.getMessage()
+        assert "12345" not in record.getMessage() + repr(record.__dict__)
+    assert any(r.exc_info and r.levelno == logging.DEBUG for r in caplog.records)
+
+
+def test_an_off_save_never_stores_a_country_that_cant_be_one(admin: TestClient, migrated: Settings) -> None:
+    save(admin)
+    assert save(admin, on=False, postal_code="", country="XYZ").status_code == 303
+    row = stored(migrated)
+    assert row is not None and (row.postal_code, row.country) == ("", "US")
+    assert save(admin, on=False, postal_code="99999", country="1A").status_code == 303
+    row = stored(migrated)
+    assert row is not None and (row.postal_code, row.country) == ("", "US")  # kept what was saved
+    assert save(admin, on=False, postal_code="", country="ca").status_code == 303
+    row = stored(migrated)
+    assert row is not None and row.country == "CA"

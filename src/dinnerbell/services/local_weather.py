@@ -4,17 +4,20 @@ what pages read.
 
 Off by default. An admin turns it on with a postal code on Admin > Web app; the save geocodes it
 once and stores the place rounded to 0.1°. The scheduler's ``refresh`` asks Open-Meteo for each
-household that's due, and sets the next fetch to a random time 1 to 3 hours later before it
-asks. Pages read only the stored answer (``weather_now``), never the network, so a slow or
-failing weather service can't slow a page: the den falls back to the seasonal weather.
+household that's due, and sets the next fetch to a random time before it asks, so fetches come
+1 to 3 hours apart (``domain.weather.next_fetch``). Pages read only the stored answer
+(``weather_now``), never the network, so a slow or failing weather service can't slow a page:
+the den falls back to the seasonal weather.
 
 Logs name the household and the failure's reason, never the postal code, place, or coordinates,
-which locate the household: those go only to debug lines. The first failure logs a warning, the
-ones after it debug lines, and the first answer after them an info line.
+which locate the household: those go only to debug lines. So do tracebacks, since an exception's
+message can quote a URL or a query's parameters. The first failure logs a warning, the ones after
+it debug lines, and the first answer after them an info line.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import random
 from collections.abc import Callable
@@ -28,6 +31,7 @@ from dinnerbell.db.engine import write_transaction
 from dinnerbell.db.local_weather import LocalWeatherRepository
 from dinnerbell.domain.members import Member
 from dinnerbell.domain.weather import (
+    DEADLINE_SECONDS,
     DEFAULT_COUNTRY,
     InvalidLocation,
     LocalWeather,
@@ -37,6 +41,7 @@ from dinnerbell.domain.weather import (
     WeatherError,
     WeatherFailure,
     next_fetch,
+    normalize_country,
     normalize_location,
 )
 from dinnerbell.services.common import audit, require_admin
@@ -93,8 +98,9 @@ async def weather_now(db: AsyncSession, household_id: int, now: datetime) -> tup
     the seasonal weather."""
     try:
         stored = await LocalWeatherRepository(db).get(household_id)
-    except Exception:
-        log.warning("could not read local weather", exc_info=True, extra={"household_id": household_id})
+    except Exception as exc:
+        log.warning("could not read local weather", extra={"household_id": household_id, "error": type(exc).__name__})
+        log.debug("could not read local weather", exc_info=True, extra={"household_id": household_id})
         await db.rollback()
         return None, False
     if stored is None:
@@ -150,12 +156,13 @@ async def save_setting(
 def _kept(postal_code: str, country: str, current: LocalWeather | None) -> tuple[str, str]:
     """What an off save keeps for when it's on again: the code as typed if it's valid, nothing if
     it's blank, and otherwise what was saved before."""
-    if not postal_code.strip():
-        return "", (country.strip().upper() or DEFAULT_COUNTRY)[:2]
+    fallback = (current.postal_code, current.country) if current is not None else ("", DEFAULT_COUNTRY)
     try:
+        if not postal_code.strip():
+            return "", normalize_country(country)
         return normalize_location(postal_code, country)
     except InvalidLocation:
-        return (current.postal_code, current.country) if current is not None else ("", DEFAULT_COUNTRY)
+        return ("", fallback[1]) if not postal_code.strip() else fallback
 
 
 async def _look_up(source: WeatherSource, household_id: int, postal_code: str, country: str) -> Place:
@@ -165,7 +172,8 @@ async def _look_up(source: WeatherSource, household_id: int, postal_code: str, c
         log.warning("postal code lookup failed", extra={"household_id": household_id, "reason": exc.reason.value})
         raise LocationNotSaved(NOT_FOUND if exc.reason is WeatherFailure.NOT_FOUND else UNREACHABLE) from None
     except Exception:
-        log.warning("postal code lookup failed", exc_info=True, extra={"household_id": household_id, "reason": "error"})
+        log.warning("postal code lookup failed", extra={"household_id": household_id, "reason": "error"})
+        log.debug("postal code lookup raised", exc_info=True, extra={"household_id": household_id})
         raise LocationNotSaved(UNREACHABLE) from None
     log.debug("postal code found", extra={"household_id": household_id, "place": place.name})
     return place
@@ -187,16 +195,19 @@ async def refresh(
     try:
         async with sessionmaker() as db:
             due = await LocalWeatherRepository(db).due(now)
-    except Exception:
-        log.exception("could not read which local weather is due")
+    except Exception as exc:
+        log.warning("could not read which local weather is due", extra={"error": type(exc).__name__})
+        log.debug("could not read which local weather is due", exc_info=True)
         return 0
     asked = 0
     for stored in due:
         try:
             if await _refresh_one(sessionmaker, source, stored, now, draw):
                 asked += 1
-        except Exception:
-            log.exception("local weather refresh failed", extra={"household_id": stored.household_id})
+        except Exception as exc:
+            fields = {"household_id": stored.household_id}
+            log.warning("local weather refresh failed", extra=fields | {"error": type(exc).__name__})
+            log.debug("local weather refresh failed", exc_info=True, extra=fields)
     return asked
 
 
@@ -218,7 +229,11 @@ async def _refresh_one(
     if not claimed:
         return False  # turned off, moved, or another process asked first
     try:
-        observation = await source.current(place)
+        async with asyncio.timeout(DEADLINE_SECONDS + 1):  # whatever the source, it can't hold the job
+            observation = await source.current(place)
+    except TimeoutError:
+        await _failed(sessionmaker, stored, place, WeatherFailure.TIMEOUT, now)
+        return True
     except WeatherError as exc:
         await _failed(sessionmaker, stored, place, exc.reason, now)
         return True

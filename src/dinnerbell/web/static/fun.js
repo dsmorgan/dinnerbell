@@ -21,7 +21,7 @@
 //   and state per tab (sessionStorage). A badge flips once, for the member who earned it: the
 //   server keeps the marker, and this script tells it after the flip, once the page is in view.
 // - Tap him whenever he's still, in any pose and any weather: a hop, puffed cheeks, and a heart;
-//   asleep, he opens an eye and rolls over. Everything drawn over or around him lets taps through
+//   asleep or dozing, the heart pops as he opens an eye and rolls over. Everything drawn over or around him lets taps through
 //   (pointer-events: none), and his box, not just his drawing, takes them, so peeking out of the
 //   straw in a storm he's as easy to tap as anywhere.
 // - Snow never sits on a turning wheel: climbing in, he shakes the wheel's cap off before it
@@ -546,13 +546,14 @@
 
   // Taps ------------------------------------------------------------------------------------
 
+  // Asleep or dozing counts as still too: he opens an eye and rolls over, and the heart pops.
   ham.addEventListener("click", function () {
     var pose = den.getAttribute("data-pose");
+    flash(heart, "den-pop", 1300);
     if (pose === "sleep" || pose === "doze") {
       flash(den, "den-stir", 1500);
       return;
     }
-    flash(heart, "den-pop", 1300);
     if (!moving()) {
       return;
     }

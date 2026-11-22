@@ -314,6 +314,36 @@ async def test_scrub_deletes_every_push_device_and_push(house: House) -> None:
     assert row.payload["push_devices_deleted"] == 2
 
 
+async def test_scrub_deletes_the_local_weather_setting(house: House) -> None:
+    """A test copy never holds production's postal code, place, or coordinates, or asks for its
+    weather (ADR 0011). Without a setting, the report says nothing about it."""
+    from dinnerbell.db.local_weather import LocalWeatherRepository
+    from dinnerbell.db.models import LocalWeatherRow
+    from dinnerbell.domain.weather import Observation, Place
+
+    place = Place(40.1, -75.2, "Elmford, Northshire")
+    async with house.sessionmaker() as db:
+        repo = LocalWeatherRepository(db)
+        await repo.save_setting(house.household.id, postal_code="12345", country="US", place=place, now=house.clock())
+        await repo.record_answer(house.household.id, place, Observation(61, 12.0, 5.0), house.clock())
+        await db.commit()
+
+    summary = await scrub(house)
+
+    assert summary.local_weather_cleared
+    assert "Local weather turned off, and its postal code and place deleted" in summary.lines()
+    async with house.sessionmaker() as db:
+        assert list(await db.scalars(select(LocalWeatherRow))) == []
+        assert await LocalWeatherRepository(db).due(house.clock()) == []
+    (row,) = await house.audits("instance.")
+    assert row.payload["local_weather_cleared"] is True
+    assert "12345" not in str(row.payload) and "Elmford" not in str(row.payload)
+    house.clock.now += timedelta(minutes=5)
+    again = await scrub(house)
+    assert not again.local_weather_cleared
+    assert not [line for line in again.lines() if "weather" in line.lower()]
+
+
 async def test_a_second_run_changes_nothing(house: House) -> None:
     await scrub(house)
     house.clock.now += timedelta(minutes=5)

@@ -107,8 +107,9 @@ async def _fun_scene(request: Request) -> Scene | None:
     try:
         async with context.sessionmaker() as db:
             local, _ = await weather_now(db, household.id, now)
-    except Exception:
-        log.warning("could not read local weather", exc_info=True)
+    except Exception as exc:
+        log.warning("could not read local weather", extra={"error": type(exc).__name__})
+        log.debug("could not read local weather", exc_info=True)
     return scene(now, household.timezone, household_id=household.id, local=local)
 
 

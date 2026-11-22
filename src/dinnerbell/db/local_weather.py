@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import ColumnElement, and_, select, update
+from sqlalchemy import ColumnElement, and_, delete, select, update
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -77,6 +77,16 @@ class LocalWeatherRepository:
         }
         statement = insert(LocalWeatherRow).values(household_id=household_id, **values)
         await self._session.execute(statement.on_conflict_do_update(index_elements=["household_id"], set_=values))
+
+    async def clear(self, household_id: int) -> bool:
+        """Delete the household's setting, place, and answers: for ``scrub-test``, so a test copy
+        never holds or asks about production's location. True if there was a row."""
+        result = await self._session.execute(
+            delete(LocalWeatherRow)
+            .where(LocalWeatherRow.household_id == household_id)
+            .execution_options(synchronize_session=False)
+        )
+        return bool(getattr(result, "rowcount", 0))
 
     async def due(self, now: datetime) -> list[LocalWeather]:
         """Every household whose next fetch is due, oldest first."""
