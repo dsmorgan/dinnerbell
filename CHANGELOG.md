@@ -6,6 +6,10 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+### Security
+
+- **The image installs Debian's fixed glibc** (CVE-2026-5435 and CVE-2026-19499, both high). No `python:3.12-slim` digest has it yet, so the image installs `libc6` and `libc-bin` 2.41-12+deb13u5 from Debian until one does, beside the fixed zlib (#236). The first is in deprecated DNS printing functions and the second in `strfmon`; Dinnerbell calls neither, but every program in the image loads glibc.
+
 ### Added
 
 - **An optional web app, part 1: the switch, each member's choice, and the installable app** (#138, [ADR 0010](docs/adr/0010-optional-web-app.md), spec 6.15). **Admin** > **Web app** has a switch, off by default for every household. While it's off, members see no change, and Slack delivery is unchanged; Admin gains a **Web app** tab, and Admin's tabs wrap onto a second row on a phone. While it's on, members can add Dinnerbell to their phone's Home Screen (**Get the app** shows the steps for iPhone and Android), and **Preferences** has **Notifications**: **Slack**, **Web app**, or **Both**. A member linked to Slack starts on **Both**, so Slack still reaches them and any device where they turn notifications on gets pushes too; one without a Slack link has only **Web app**. Slack skips direct messages to members on **Web app**, and closes them as skipped instead of failing them, so `/healthz` doesn't count them as failures. Signing in with a code and push notifications are parts 2 and 3, below. Turning the switch on or off is audited as `household.web_app_updated`, and an admin's change to a member's choice as `member.notify_via_set`. See [Members and guests](docs/members.md#the-web-app).
@@ -16,10 +20,6 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 ### Changed
 
 - **`dinnerbell config check` no longer prints warnings that `serve` logs.** Before, `deploy/dinnerbell-test up` printed a `... is set in the environment` warning in your terminal for each secret in `.env.test`, and the service then logged it again. Now the check prints only errors and `Configuration is valid.`, and the warnings appear only in the service's log. A line in the env file that python-dotenv can't parse still shows a warning, because only the check reads the file that way.
-
-### Security
-
-- **The image installs Debian's fixed glibc** (CVE-2026-5435 and CVE-2026-19499, both high). No `python:3.12-slim` digest has it yet, so the image installs `libc6` and `libc-bin` 2.41-12+deb13u5 from Debian until one does, beside the fixed zlib (#236). The first is in deprecated DNS printing functions and the second in `strfmon`; Dinnerbell calls neither, but every program in the image loads glibc.
 
 ### Upgrade notes
 
