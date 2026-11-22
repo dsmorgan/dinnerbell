@@ -7,10 +7,12 @@ from __future__ import annotations
 import logging
 import re
 import socket
+import ssl
 from collections.abc import Mapping, Sequence
 from typing import Any
 
 import anthropic
+import certifi
 import httpx2
 from anthropic.types.beta import BetaMessage
 from pydantic import SecretStr
@@ -87,8 +89,11 @@ def new_http_client() -> httpx2.AsyncClient:
     and ``SSL_CERT_FILE``, and verifies TLS against the bundled certificate authorities, as
     pushes, menu links, and the weather do (#328). The SDK's own default client mounts the
     environment's proxies whatever ``trust_env`` says, so this builds the transport itself, with
-    the SDK's TCP keepalives so a long stream's connection isn't dropped while idle."""
-    transport = httpx2.AsyncHTTPTransport(trust_env=False, socket_options=_keepalive())
+    the TCP keepalives the SDK sets on Linux, so a long stream's connection isn't dropped while
+    idle. httpx2 would verify against the operating system's store, so the context loads
+    certifi's, the bundle httpx uses for the other clients."""
+    tls = ssl.create_default_context(cafile=certifi.where())
+    transport = httpx2.AsyncHTTPTransport(verify=tls, trust_env=False, socket_options=_keepalive())
     return httpx2.AsyncClient(transport=transport, trust_env=False, follow_redirects=False)
 
 
