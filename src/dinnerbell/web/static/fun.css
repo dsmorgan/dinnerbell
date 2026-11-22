@@ -7,10 +7,18 @@
      data-period="breakfast | lunch | afternoon | dinner | late"
      data-season="spring | summer | autumn | winter"
      data-season-depth="0" to "10"   (how far into the season: snow, leaves, or the puddle)
+   and the weather (#319, domain.fun.Scene), each "none" when it doesn't apply:
+     data-weather="clear | partly-cloudy | overcast | fog | drizzle | rain | heavy-rain |
+                   thunderstorm | snow | heavy-snow | sleet"
+     data-feel="hot | cold | windy"
+     data-fall="rain | snow | sleet | leaves | petals | gusts"   (what falls)
+     data-pile="snow | leaves | puddle"                         (what lies on the floor)
+     data-react="umbrella | shake | scarf | shades | fan"       (what Dinnerbone does about it)
    and what Dinnerbone is doing on the den, as data-pose (domain.fun.Pose). Every rule keys on
-   those attributes and needs no inline style; den.svg draws the parts. The base rules draw a
-   still picture of each pose; motion goes only inside
-   @media (prefers-reduced-motion: no-preference), at the end. */
+   those attributes and needs no inline style; den.svg draws the parts. The weather's layers sit
+   behind him, and nothing but him takes a tap. The base rules draw a still picture of each pose
+   and weather; motion goes only inside @media (prefers-reduced-motion: no-preference), at the
+   end, and lightning is a gentle brightening there, never a flash. */
 
 /* The greeting row: "Hi, Sam" and the den, side by side, never overlapping. data-fit is how wide
    the greeting reads, in narrow characters, rounded up; the greeting shrinks to fit beside a den
@@ -52,12 +60,19 @@ body[data-fun] {
   --den-floor: #e3d3bd;
   --den-wash: transparent;
   --den-snow: #ffffff;
+  --den-cloud: #ffffff;
+  --den-cloud-wet: #d3d9e0;
+  --den-grey: #8f9aa6;
+  --den-storm: #3b4252;
+  --den-fog: rgb(236 238 240 / 0.8);
+  --den-gust: rgb(84 104 126 / 0.5);
+  --den-drop: #5f95c4;
 }
 /* Dark on a dark device unless the viewer chose Light, and always for one who chose Dark (#231). */
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) body[data-fun] { --den-floor: #6b5038; --den-wash: rgb(27 23 20 / 0.45); --den-snow: #e9eef3; }
+  :root:not([data-theme="light"]) body[data-fun] { --den-floor: #6b5038; --den-wash: rgb(27 23 20 / 0.45); --den-snow: #e9eef3; --den-cloud: #9aa3b0; --den-cloud-wet: #7d8592; --den-grey: #2c3138; --den-storm: #15181e; --den-fog: rgb(150 158 168 / 0.6); --den-gust: rgb(226 232 240 / 0.45); --den-drop: #8dbbe3; }
 }
-:root[data-theme="dark"] body[data-fun] { --den-floor: #6b5038; --den-wash: rgb(27 23 20 / 0.45); --den-snow: #e9eef3; }
+:root[data-theme="dark"] body[data-fun] { --den-floor: #6b5038; --den-wash: rgb(27 23 20 / 0.45); --den-snow: #e9eef3; --den-cloud: #9aa3b0; --den-cloud-wet: #7d8592; --den-grey: #2c3138; --den-storm: #15181e; --den-fog: rgb(150 158 168 / 0.6); --den-gust: rgb(226 232 240 / 0.45); --den-drop: #8dbbe3; }
 body[data-period="breakfast"] { --den-sky1: #ffc9a3; --den-sky2: #fff0d6; }
 body[data-period="lunch"] { --den-sky1: #8fcdf0; --den-sky2: #e6f6fc; }
 body[data-period="afternoon"] { --den-sky1: #f2b65a; --den-sky2: #fde9bf; }
@@ -106,6 +121,36 @@ body[data-period="late"] .den-sky {
     radial-gradient(1px 1px at 64% 70%, #fff 99%, transparent),
     linear-gradient(var(--den-sky1), var(--den-sky2));
 }
+/* The sky's weather (#319), behind everything on the floor: clouds, and a grey wash that deepens
+   from overcast to a storm. Fog lies low over the floor, behind him. None of it takes a tap. */
+.den-clouds, .den-fog { position: absolute; inset: 0; display: none; pointer-events: none; }
+.den-clouds { z-index: 0; }
+.den-clouds::before { content: ""; position: absolute; inset: 0; background: var(--den-grey); opacity: 0; }
+.den-clouds i { position: absolute; display: none; width: 24px; height: 7px; border-radius: 4px; background: var(--den-cloud); opacity: 0.92; }
+.den-clouds i::before, .den-clouds i::after { content: ""; position: absolute; border-radius: 50%; background: inherit; }
+.den-clouds i::before { left: 4px; bottom: 3px; width: 11px; height: 11px; }
+.den-clouds i::after { left: 12px; bottom: 2px; width: 8px; height: 8px; }
+.den-clouds i:nth-child(1) { left: 16%; top: 9px; }
+.den-clouds i:nth-child(2) { left: 55%; top: 5px; scale: 0.8; }
+.den-clouds i:nth-child(3) { left: 78%; top: 11px; scale: 0.9; }
+body:not([data-weather="partly-cloudy"]) .den-clouds i { background: var(--den-cloud-wet); }
+body[data-period="late"] .den-clouds i { background: #4b5174; }
+body:not([data-weather="clear"]) .den-clouds { display: block; }
+body[data-weather="partly-cloudy"] .den-clouds i:nth-child(-n + 2),
+body[data-weather="overcast"] .den-clouds i, body[data-weather="drizzle"] .den-clouds i,
+body[data-weather="rain"] .den-clouds i, body[data-weather="heavy-rain"] .den-clouds i,
+body[data-weather="thunderstorm"] .den-clouds i, body[data-weather="snow"] .den-clouds i,
+body[data-weather="heavy-snow"] .den-clouds i, body[data-weather="sleet"] .den-clouds i { display: block; }
+body[data-weather="overcast"] .den-clouds::before, body[data-weather="drizzle"] .den-clouds::before { opacity: 0.4; }
+body[data-weather="rain"] .den-clouds::before, body[data-weather="sleet"] .den-clouds::before,
+body[data-weather="snow"] .den-clouds::before { opacity: 0.45; }
+body[data-weather="heavy-rain"] .den-clouds::before, body[data-weather="heavy-snow"] .den-clouds::before { opacity: 0.58; }
+body[data-weather="fog"] .den-clouds::before { opacity: 0.3; }
+body[data-weather="thunderstorm"] .den-clouds::before { background: var(--den-storm); opacity: 0.62; }
+body[data-weather="thunderstorm"] .den-clouds i { background: #6f7888; }
+.den-fog { left: -8px; right: -8px; z-index: 2; background: linear-gradient(transparent, var(--den-fog) 55%, var(--den-fog)); }
+body[data-weather="fog"] .den-fog { display: block; }
+
 .den-floor { position: absolute; left: 0; right: 0; bottom: 0; height: 5px; background: var(--den-floor); z-index: 1; }
 .den-nook { position: absolute; left: 3px; bottom: 3px; width: 30px; height: 22px; z-index: 1; }
 .den-bowl { position: absolute; left: var(--den-bowl); bottom: 4px; width: 19px; height: 13px; z-index: 1; }
@@ -113,8 +158,9 @@ body[data-period="late"] .den-sky {
 .den-wheel, .den-spokes { position: absolute; right: 3px; bottom: 3px; width: 34px; height: 36px; z-index: 1; }
 .den-spokes { transform-origin: 50% 48.2%; }
 
-/* Weather that settles: snow in winter, leaves in autumn, a puddle in spring, deeper or bigger the
-   further into the season (data-season-depth). Summer is clear. */
+/* Weather that settles (data-pile): snow in winter and leaves in autumn, deeper the further into
+   the season (data-season-depth), and a puddle on a wet day, biggest late in spring. Only on days
+   whose weather allows it: rain or heat washes the snow away, and wind scatters the leaves. */
 .den-snow, .den-cap, .den-leaves, .den-puddle { display: none; }
 .den-snow {
   position: absolute; left: 0; right: 0; bottom: 0; height: 1px; z-index: 2;
@@ -123,9 +169,9 @@ body[data-period="late"] .den-sky {
 .den-cap { position: absolute; z-index: 2; height: 3px; background: var(--den-snow); border-radius: 4px 4px 2px 2px; opacity: 0; }
 .den-cap-straw { left: 6px; bottom: 15px; width: 24px; }
 .den-cap-wheel { right: 12px; bottom: 37px; width: 16px; }
-body[data-season="winter"] .den-snow, body[data-season="winter"] .den-cap { display: block; }
+body[data-pile="snow"] .den-snow, body[data-pile="snow"] .den-cap { display: block; }
 .den-leaves { position: absolute; inset: 0; z-index: 2; }
-body[data-season="autumn"] .den-leaves { display: block; }
+body[data-pile="leaves"] .den-leaves { display: block; }
 .den-leaves i { position: absolute; width: 7px; height: 5px; border-radius: 0 100% 0 100%; background: #d9772b; }
 .den-leaves i:nth-child(3n) { background: #b8432a; }
 .den-leaves i:nth-child(3n + 1) { background: #e0a92e; }
@@ -134,7 +180,7 @@ body[data-season="autumn"] .den-leaves { display: block; }
   border-radius: 50%; background: rgb(127 176 216 / 0.55);
 }
 .den-puddle::after { content: ""; position: absolute; inset: 0; border-radius: 50%; border: 1px solid rgb(111 163 207 / 0.9); }
-body[data-season="spring"] .den-puddle { display: block; }
+body[data-pile="puddle"] .den-puddle { display: block; }
 body[data-season-depth="0"] .den-snow { height: 1.0px; } body[data-season-depth="0"] .den-cap { opacity: 0.00; } body[data-season-depth="0"] .den-puddle { width: 12px; }
 body[data-season-depth="0"] .den-leaves i:nth-child(n + 2) { display: none; }
 body[data-season-depth="1"] .den-snow { height: 1.8px; } body[data-season-depth="1"] .den-cap { opacity: 0.00; } body[data-season-depth="1"] .den-puddle { width: 15px; }
@@ -175,26 +221,46 @@ body[data-season-depth="10"] .den-snow { height: 9.0px; } body[data-season-depth
   .den-leaves i:nth-child(even) { margin-left: 20px; }
 }
 
-/* Weather that falls, in the den and down the page's edges, behind the cards. Still, it hangs
-   where it is; with motion allowed, it falls (at the end). Summer is clear. */
-.den-wx { position: absolute; inset: 0; z-index: 4; overflow: hidden; }
+/* Weather that falls (data-fall), in the den and down the page's edges, behind him and the cards:
+   rain, snow, sleet (both), leaves in autumn, blossom in a spring wind, and gusts in any other
+   wind. Still, it hangs where it is; with motion allowed, it falls (at the end). */
+.den-wx { position: absolute; inset: 0; z-index: 2; overflow: hidden; pointer-events: none; }
 .den-wx i, .edge-wx i { position: absolute; display: none; }
 .edge-wx { position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
-body[data-season="winter"] .den-wx i:nth-child(-n + 10),
-body[data-season="autumn"] .den-wx i:nth-child(-n + 6),
-body[data-season="spring"] .den-wx i,
-body[data-season="winter"] .edge-wx i,
-body[data-season="autumn"] .edge-wx i:nth-child(-n + 12),
-body[data-season="spring"] .edge-wx i { display: block; }
-body[data-season="winter"] .den-wx i { width: 4px; height: 4px; border-radius: 50%; background: #fff; box-shadow: 0 0 2px rgb(0 0 0 / 0.2); }
-body[data-season="autumn"] .den-wx i { width: 8px; height: 6px; border-radius: 0 100% 0 100%; background: #d9772b; }
-body[data-season="autumn"] .den-wx i:nth-child(3n) { background: #b8432a; }
-body[data-season="autumn"] .den-wx i:nth-child(3n + 1) { background: #e0a92e; }
-body[data-season="spring"] .den-wx i { width: 1.2px; height: 9px; border-radius: 1px; background: linear-gradient(transparent, #6fa3cf); }
-body[data-season="winter"] .edge-wx i { width: 6px; height: 6px; border-radius: 50%; background: #fff; box-shadow: 0 0 0 1px rgb(110 140 170 / 0.35), 0 1px 3px rgb(0 0 0 / 0.15); opacity: 0.85; }
-body[data-season="autumn"] .edge-wx i { width: 9px; height: 6px; border-radius: 0 100% 0 100%; background: #d9772b; opacity: 0.85; }
-body[data-season="autumn"] .edge-wx i:nth-child(3n) { background: #b8432a; }
-body[data-season="spring"] .edge-wx i { width: 1.4px; height: 13px; background: linear-gradient(transparent, #6fa3cf); opacity: 0.85; }
+body[data-fall="snow"] .den-wx i:nth-child(-n + 10),
+body[data-weather="heavy-snow"] .den-wx i,
+body[data-fall="rain"] .den-wx i,
+body[data-fall="sleet"] .den-wx i,
+body[data-fall="leaves"] .den-wx i:nth-child(-n + 6),
+body[data-feel="windy"][data-fall="leaves"] .den-wx i:nth-child(-n + 9),
+body[data-fall="petals"] .den-wx i:nth-child(-n + 8),
+body[data-fall="gusts"] .den-wx i:nth-child(-n + 5),
+body[data-fall="snow"] .edge-wx i:nth-child(-n + 14),
+body[data-weather="heavy-snow"] .edge-wx i,
+body[data-fall="rain"] .edge-wx i,
+body[data-fall="sleet"] .edge-wx i,
+body[data-fall="leaves"] .edge-wx i:nth-child(-n + 12),
+body[data-fall="petals"] .edge-wx i:nth-child(-n + 12),
+body[data-fall="gusts"] .edge-wx i:nth-child(-n + 8) { display: block; }
+body[data-weather="drizzle"] .den-wx i:nth-child(n + 7), body[data-weather="drizzle"] .edge-wx i:nth-child(n + 9) { display: none; }
+body[data-fall="snow"] .den-wx i, body[data-fall="sleet"] .den-wx i:nth-child(even) { width: 4px; height: 4px; border-radius: 50%; background: var(--den-snow); box-shadow: 0 0 2px rgb(0 0 0 / 0.2); }
+body[data-weather="heavy-snow"] .den-wx i:nth-child(3n) { width: 5px; height: 5px; }
+body[data-fall="rain"] .den-wx i, body[data-fall="sleet"] .den-wx i:nth-child(odd) { width: 1.2px; height: 9px; border-radius: 1px; background: linear-gradient(transparent, var(--den-drop)); }
+body[data-weather="drizzle"] .den-wx i { height: 5px; }
+body[data-weather="heavy-rain"] .den-wx i, body[data-weather="thunderstorm"] .den-wx i { width: 1.5px; height: 12px; }
+body[data-fall="leaves"] .den-wx i { width: 8px; height: 6px; border-radius: 0 100% 0 100%; background: #d9772b; }
+body[data-fall="leaves"] .den-wx i:nth-child(3n) { background: #b8432a; }
+body[data-fall="leaves"] .den-wx i:nth-child(3n + 1) { background: #e0a92e; }
+body[data-fall="petals"] .den-wx i { width: 6px; height: 5px; border-radius: 60% 0 60% 0; background: #f6a8c0; box-shadow: inset 0 0 0 0.6px #e5577a; }
+body[data-fall="gusts"] .den-wx i { width: 14px; height: 1.2px; border-radius: 1px; background: var(--den-gust); }
+body[data-fall="snow"] .edge-wx i, body[data-fall="sleet"] .edge-wx i:nth-child(even) { width: 6px; height: 6px; border-radius: 50%; background: #fff; box-shadow: 0 0 0 1px rgb(110 140 170 / 0.35), 0 1px 3px rgb(0 0 0 / 0.15); opacity: 0.85; }
+body[data-weather="heavy-snow"] .edge-wx i:nth-child(3n) { width: 8px; height: 8px; }
+body[data-fall="leaves"] .edge-wx i { width: 9px; height: 6px; border-radius: 0 100% 0 100%; background: #d9772b; opacity: 0.85; }
+body[data-fall="leaves"] .edge-wx i:nth-child(3n) { background: #b8432a; }
+body[data-fall="petals"] .edge-wx i { width: 7px; height: 6px; border-radius: 60% 0 60% 0; background: #f6a8c0; opacity: 0.85; }
+body[data-fall="rain"] .edge-wx i, body[data-fall="sleet"] .edge-wx i:nth-child(odd) { width: 1.4px; height: 13px; background: linear-gradient(transparent, var(--den-drop)); opacity: 0.85; }
+body[data-weather="heavy-rain"] .edge-wx i, body[data-weather="thunderstorm"] .edge-wx i { width: 1.8px; height: 17px; }
+body[data-fall="gusts"] .edge-wx i { width: 18px; height: 1.4px; border-radius: 1px; background: var(--den-gust); }
 .den-wx i:nth-child(1) { left: 3%; top: 5%; }
 .den-wx i:nth-child(2) { left: 32%; top: 46%; }
 .den-wx i:nth-child(3) { left: 61%; top: 27%; }
@@ -231,6 +297,8 @@ body[data-season="spring"] .edge-wx i { width: 1.4px; height: 13px; background: 
 .den-ham { position: absolute; left: 2px; bottom: 4px; width: 30px; height: 26px; z-index: 3; transform-origin: 50% 100%; }
 .den-ham .ham { width: 100%; height: 100%; transform-origin: 50% 100%; }
 .ham .acc, .ham .ham-eyes-shut { display: none; }
+/* What he wears is decoration: a tap anywhere on him, umbrella or not, is a tap on him. */
+.ham .acc { pointer-events: none; }
 .ham .ham-cheek { transform-origin: 47px 35px; }
 body[data-season="spring"] .ham .acc-flower,
 body[data-season="summer"] .ham .acc-sunhat,
@@ -241,6 +309,22 @@ body[data-period="dinner"] .ham .acc-apron,
 .den[data-pose="nibble"] .ham .acc-cereal { display: inline; }
 body[data-season="winter"] .ham .ham-collar,
 body[data-period="late"] .ham .acc-hat { display: none; }
+/* His reactions to the weather (#319): an umbrella in rain, sleet, or a storm; snow on his head,
+   which he shakes off; his scarf blowing in the wind, and worn on any cold day; sunglasses in the
+   heat by day, and a fan in the evening. Not in the wheel or the straw, and not in his sleep. */
+body[data-react="umbrella"] .ham .acc-umbrella,
+body[data-react="shake"] .ham .acc-snowcap,
+body[data-react="scarf"] .ham .acc-scarf,
+body[data-react="scarf"] .ham .acc-scarf-tail,
+body[data-feel="cold"] .ham .acc-scarf,
+body[data-react="shades"] .ham .acc-shades,
+body[data-react="fan"] .ham .acc-fan { display: inline; }
+body[data-react="scarf"] .ham .ham-collar, body[data-feel="cold"] .ham .ham-collar { display: none; }
+.den[data-pose="wheel"] .ham .acc-umbrella, .den[data-pose="wheel"] .ham .acc-fan,
+.den[data-pose="peek"] .ham .acc-umbrella, .den[data-pose="peek"] .ham .acc-fan,
+.den[data-pose="sleep"] .ham .acc-shades, .den[data-pose="sleep"] .ham .acc-fan,
+.den[data-pose="doze"] .ham .acc-shades, .den[data-pose="doze"] .ham .acc-fan,
+.den-runner .ham .acc-umbrella, .den-runner .ham .acc-fan { display: none; }
 .den-zzz { position: absolute; left: 22px; top: -6px; display: none; font: 900 0.6rem/1 system-ui, sans-serif; color: var(--text); opacity: 0.75; }
 body[data-period="late"] .den-zzz { color: #f6efd8; opacity: 0.9; }
 .den-zzz i { display: inline-block; font-style: normal; }
@@ -259,6 +343,11 @@ body[data-period="late"] .den-zzz { color: #f6efd8; opacity: 0.9; }
 .den[data-pose="potter"] .den-ham { left: clamp(var(--den-bowl) + 23px, 65%, 100% - 72px); }
 .den[data-pose="laps"] .den-ham { left: clamp(var(--den-bowl) + 23px, 50% - 15px, 100% - 72px); transform: rotate(10deg); }
 .den[data-pose="wheel"] .den-ham { left: calc(100% - 35px); transform: translateY(-7px) scale(0.7); }
+/* A thunderstorm (#319): down in the straw, only his head peeking out. The drawing sinks and is
+   cut at the straw's edge, but his box stays whole, so a tap on the straw around him still lands. */
+.den[data-pose="peek"] .den-ham { left: 3px; bottom: 2px; }
+.den[data-pose="peek"] .ham { translate: 0 4px; clip-path: inset(0 0 50% 0); }
+.den[data-pose="peek"] .ham .acc-hat { display: none; }
 /* No snow on a turning wheel. */
 .den[data-pose="wheel"] .den-cap-wheel { display: none; }
 
@@ -278,12 +367,13 @@ body[data-period="late"] .den-zzz { color: #f6efd8; opacity: 0.9; }
 .den-ham.den-away { visibility: hidden; }
 .den[data-walking] .den-ham, .den[data-walking] .ham, .den[data-walking] .ham-cheek { transform: none; }
 .den[data-walking="left"] .ham { transform: scaleX(-1); }
+.den[data-walking] .ham { translate: none; clip-path: none; }
 .den[data-walking] .ham-eyes-open, .den.den-stir .ham-eyes-open { display: inline; }
-.den[data-walking] .ham-eyes-shut, .den[data-walking] .den-zzz, .den.den-stir .ham-eyes-shut { display: none; }
+.den[data-walking] .ham-eyes-shut, .den[data-walking] .den-zzz, .den.den-stir .ham-eyes-shut, .den.den-stir .den-zzz { display: none; }
 .den.den-stir .ham { transform: scaleX(-1); }
 /* On his way to the wheel, it's still: its snow stays until he shakes it off (.den-shake). */
-body[data-season="winter"] .den[data-walking] .den-cap-wheel,
-body[data-season="winter"] .den.den-shake .den-cap-wheel { display: block; }
+body[data-pile="snow"] .den[data-walking] .den-cap-wheel,
+body[data-pile="snow"] .den.den-shake .den-cap-wheel { display: block; }
 .den-heart { position: absolute; left: 9px; top: -9px; font: 700 11px/1 system-ui, sans-serif; color: #e5577a; opacity: 0; }
 .den-heart.den-pop { opacity: 1; }
 .den-track { position: absolute; left: 0; top: 0; width: 100%; overflow: hidden; pointer-events: none; z-index: 0; }
@@ -317,17 +407,35 @@ body[data-season="winter"] .den.den-shake .den-cap-wheel { display: block; }
   .den-zzz i { animation: den-zzz 3s ease-in-out infinite; }
   .den-zzz i:nth-child(2) { animation-delay: 1.5s; }
   body[data-period="late"] .den-sky { animation: den-twinkle 4s ease-in-out infinite; }
-  body[data-season="spring"] .den-puddle::after { animation: den-ripple 1.6s ease-out infinite; }
+  body[data-fall="rain"] .den-puddle::after, body[data-fall="sleet"] .den-puddle::after { animation: den-ripple 1.6s ease-out infinite; }
+
+  /* The weather (#319). Lightning only brightens the sky a little, now and then. */
+  .den-clouds i { animation: den-drift 26s ease-in-out infinite alternate; }
+  .den-clouds i:nth-child(2) { animation-duration: 34s; animation-delay: -9s; }
+  .den-clouds i:nth-child(3) { animation-duration: 30s; animation-delay: -17s; }
+  body[data-weather="fog"] .den-fog { animation: den-fog 9s ease-in-out infinite alternate; }
+  body[data-weather="thunderstorm"] .den-sky, body[data-weather="thunderstorm"] .den-clouds { animation: den-lightning 9s ease-in-out infinite; }
+  body[data-react="shake"] .ham-shake { transform-box: view-box; transform-origin: 32px 52px; animation: den-shake-off 7s ease-in-out infinite; }
+  body[data-react="shake"] .ham .acc-snowcap { transform-box: view-box; animation: den-snow-off 7s ease-in infinite; }
+  body[data-react="scarf"] .ham .acc-scarf-tail { transform-box: view-box; transform-origin: 33px 35px; animation: den-flap 0.5s ease-in-out infinite alternate; }
+  body[data-react="fan"] .ham .acc-fan { transform-box: view-box; transform-origin: 55px 45px; animation: den-fan 0.45s ease-in-out infinite alternate; }
+  .den[data-pose="peek"] .ham { animation: den-peek 5s ease-in-out infinite; }
+  .den[data-walking] .ham-shake, .den-runner .ham-shake { animation: none; }
 
   .den-wx i { animation: den-fall 6s linear infinite; }
-  body[data-season="spring"] .den-wx i { animation: den-rain 0.8s linear infinite; }
+  body[data-fall="rain"] .den-wx i, body[data-fall="sleet"] .den-wx i:nth-child(odd) { animation: den-rain 0.8s linear infinite; }
+  body[data-fall="petals"] .den-wx i, body[data-feel="windy"][data-fall="leaves"] .den-wx i { animation-name: den-blow; }
+  body[data-fall="gusts"] .den-wx i { animation: den-gust 2.4s ease-in infinite; }
   .edge-wx i { animation: den-edge-fall 14s linear infinite; }
   .edge-wx i:nth-child(even) { animation-name: den-edge-fall-in; }
-  body[data-season="spring"] .edge-wx i { animation: den-edge-rain 1.6s linear infinite; }
-  body[data-season="spring"] .edge-wx i:nth-child(even) { animation-name: den-edge-rain-in; }
+  body[data-fall="rain"] .edge-wx i, body[data-fall="sleet"] .edge-wx i:nth-child(odd) { animation: den-edge-rain 1.6s linear infinite; }
+  body[data-fall="rain"] .edge-wx i:nth-child(even) { animation-name: den-edge-rain-in; }
+  body[data-fall="gusts"] .edge-wx i { animation: den-edge-gust 3s ease-in infinite; }
 
   /* fun.js: walking, celebrations, and taps. Walking stops the pose's own motion. */
   .den[data-walking] .den-ham, .den[data-walking] .ham, .den[data-walking] .ham-cheek { animation: none; }
+  /* Tapped asleep, he rolls over: his breathing stops for it, or it would hide the roll. */
+  .den.den-stir .ham { animation: none; }
   .den[data-walking] .ham-foot-back, .den-runner .ham-foot-back { animation: den-step 0.22s linear infinite; }
   .den[data-walking] .ham-foot-front, .den-runner .ham-foot-front { animation: den-step 0.22s linear infinite reverse; }
   .den[data-walking][data-gait="waddle"] .den-ham { animation: den-waddle 0.45s ease-in-out infinite; }
@@ -341,29 +449,35 @@ body[data-season="winter"] .den.den-shake .den-cap-wheel { display: block; }
   .den-heart.den-pop { animation: den-heart 1.3s ease-out both; }
   .den-caption:not([hidden]) { animation: den-say 0.25s ease-out; }
   .den-wx i:nth-child(1) { top: -10px; animation-delay: -0.0s; animation-duration: 4.0s; }
-  body[data-season="spring"] .den-wx i:nth-child(1) { animation-duration: 0.6s; }
+  body[data-fall="rain"] .den-wx i:nth-child(1) { animation-duration: 0.6s; }
   .den-wx i:nth-child(2) { top: -10px; animation-delay: -2.3s; animation-duration: 5.6s; }
-  body[data-season="spring"] .den-wx i:nth-child(2) { animation-duration: 0.9s; }
+  body[data-fall="rain"] .den-wx i:nth-child(2) { animation-duration: 0.9s; }
   .den-wx i:nth-child(3) { top: -10px; animation-delay: -4.6s; animation-duration: 7.2s; }
-  body[data-season="spring"] .den-wx i:nth-child(3) { animation-duration: 0.7s; }
+  body[data-fall="rain"] .den-wx i:nth-child(3) { animation-duration: 0.7s; }
   .den-wx i:nth-child(4) { top: -10px; animation-delay: -6.9s; animation-duration: 4.8s; }
-  body[data-season="spring"] .den-wx i:nth-child(4) { animation-duration: 1.0s; }
+  body[data-fall="rain"] .den-wx i:nth-child(4) { animation-duration: 1.0s; }
   .den-wx i:nth-child(5) { top: -10px; animation-delay: -1.2s; animation-duration: 6.4s; }
-  body[data-season="spring"] .den-wx i:nth-child(5) { animation-duration: 0.8s; }
+  body[data-fall="rain"] .den-wx i:nth-child(5) { animation-duration: 0.8s; }
   .den-wx i:nth-child(6) { top: -10px; animation-delay: -3.5s; animation-duration: 4.0s; }
-  body[data-season="spring"] .den-wx i:nth-child(6) { animation-duration: 0.6s; }
+  body[data-fall="rain"] .den-wx i:nth-child(6) { animation-duration: 0.6s; }
   .den-wx i:nth-child(7) { top: -10px; animation-delay: -5.8s; animation-duration: 5.6s; }
-  body[data-season="spring"] .den-wx i:nth-child(7) { animation-duration: 0.9s; }
+  body[data-fall="rain"] .den-wx i:nth-child(7) { animation-duration: 0.9s; }
   .den-wx i:nth-child(8) { top: -10px; animation-delay: -0.1s; animation-duration: 7.2s; }
-  body[data-season="spring"] .den-wx i:nth-child(8) { animation-duration: 0.7s; }
+  body[data-fall="rain"] .den-wx i:nth-child(8) { animation-duration: 0.7s; }
   .den-wx i:nth-child(9) { top: -10px; animation-delay: -2.4s; animation-duration: 4.8s; }
-  body[data-season="spring"] .den-wx i:nth-child(9) { animation-duration: 1.0s; }
+  body[data-fall="rain"] .den-wx i:nth-child(9) { animation-duration: 1.0s; }
   .den-wx i:nth-child(10) { top: -10px; animation-delay: -4.7s; animation-duration: 6.4s; }
-  body[data-season="spring"] .den-wx i:nth-child(10) { animation-duration: 0.8s; }
+  body[data-fall="rain"] .den-wx i:nth-child(10) { animation-duration: 0.8s; }
   .den-wx i:nth-child(11) { top: -10px; animation-delay: -7.0s; animation-duration: 4.0s; }
-  body[data-season="spring"] .den-wx i:nth-child(11) { animation-duration: 0.6s; }
+  body[data-fall="rain"] .den-wx i:nth-child(11) { animation-duration: 0.6s; }
   .den-wx i:nth-child(12) { top: -10px; animation-delay: -1.3s; animation-duration: 5.6s; }
-  body[data-season="spring"] .den-wx i:nth-child(12) { animation-duration: 0.9s; }
+  body[data-fall="rain"] .den-wx i:nth-child(12) { animation-duration: 0.9s; }
+  body[data-fall="gusts"] .den-wx i:nth-child(n) { left: -16px; }
+  body[data-fall="gusts"] .den-wx i:nth-child(1) { top: 18%; animation-delay: -0.2s; }
+  body[data-fall="gusts"] .den-wx i:nth-child(2) { top: 40%; animation-delay: -1.1s; }
+  body[data-fall="gusts"] .den-wx i:nth-child(3) { top: 28%; animation-delay: -1.9s; }
+  body[data-fall="gusts"] .den-wx i:nth-child(4) { top: 55%; animation-delay: -0.7s; }
+  body[data-fall="gusts"] .den-wx i:nth-child(5) { top: 12%; animation-delay: -1.5s; }
   .edge-wx i:nth-child(1) { top: -14px; animation-delay: -0.0s; animation-duration: 11s; }
   .edge-wx i:nth-child(2) { top: -14px; animation-delay: -3.7s; animation-duration: 16s; }
   .edge-wx i:nth-child(3) { top: -14px; animation-delay: -7.4s; animation-duration: 13s; }
@@ -403,6 +517,17 @@ body[data-season="winter"] .den.den-shake .den-cap-wheel { display: block; }
 @keyframes den-potter-face { 0% { transform: none; } 46% { transform: scaleX(-1); } 96% { transform: none; } }
 @keyframes den-zzz { 0% { transform: translate(0, 0); opacity: 0; } 30% { opacity: 1; } 100% { transform: translate(6px, -10px); opacity: 0; } }
 @keyframes den-twinkle { 50% { filter: brightness(0.8); } }
+@keyframes den-drift { from { translate: -6px 0; } to { translate: 10px 0; } }
+@keyframes den-fog { from { opacity: 0.75; translate: -4px 0; } to { opacity: 1; translate: 4px 0; } }
+@keyframes den-lightning { 0%, 90%, 100% { filter: none; } 93% { filter: brightness(1.3); } }
+@keyframes den-shake-off { 0%, 86%, 100% { rotate: 0deg; } 88% { rotate: -7deg; } 90% { rotate: 7deg; } 92% { rotate: -6deg; } 94% { rotate: 5deg; } 96% { rotate: 0deg; } }
+@keyframes den-snow-off { 0% { opacity: 0; } 30%, 88% { opacity: 1; translate: 0 0; } 96% { opacity: 0; translate: -9px 16px; } 100% { opacity: 0; } }
+@keyframes den-flap { from { rotate: -7deg; } to { rotate: 6deg; scale: 1 0.85; } }
+@keyframes den-fan { from { rotate: -14deg; } to { rotate: 12deg; } }
+@keyframes den-peek { 0%, 35%, 100% { translate: 0 4px; } 45%, 75% { translate: 0 2px; } }
+@keyframes den-blow { from { transform: translate(-10px, 0) rotate(0); } to { transform: translate(46px, 60px) rotate(420deg); } }
+@keyframes den-gust { 0% { transform: translateX(0); opacity: 0; } 20% { opacity: 1; } 100% { transform: translateX(calc(100cqi + 32px)); opacity: 0; } }
+@keyframes den-edge-gust { 0% { transform: translateX(-10px); opacity: 0; } 30% { opacity: 1; } 100% { transform: translateX(40px); opacity: 0; } }
 @keyframes den-ripple { from { transform: scale(0.2); opacity: 1; } to { transform: scale(1.3); opacity: 0; } }
 @keyframes den-fall { from { transform: translate(0, 0) rotate(0); } to { transform: translate(8px, 64px) rotate(300deg); } }
 @keyframes den-rain { from { transform: translate(0, 0); } to { transform: translate(-6px, 64px); } }

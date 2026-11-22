@@ -129,16 +129,21 @@ def test_depth_only_grows_within_a_season_and_stays_in_range() -> None:
 def test_scene_is_in_the_household_time_zone() -> None:
     # 03:00 UTC on Dec 21 is still 9 PM on Dec 20 in Chicago: autumn's last evening.
     now = datetime(2026, 12, 21, 3, 0, tzinfo=UTC)
-    assert scene(now, "America/Chicago") == Scene(Period.LATE, Season.AUTUMN, DEPTH_STEPS)
-    assert scene(now, "UTC") == Scene(Period.LATE, Season.WINTER, 0)
-    assert scene(now, "Asia/Tokyo") == Scene(Period.LUNCH, Season.WINTER, 0)  # noon on Dec 21
-    assert scene(now, "America/Chicago").overnight
-    assert not scene(now, "Asia/Tokyo").overnight
+
+    def at(zone: str) -> tuple[Period, Season, int]:
+        s = scene(now, zone, household_id=1)
+        return s.period, s.season, s.depth
+
+    assert at("America/Chicago") == (Period.LATE, Season.AUTUMN, DEPTH_STEPS)
+    assert at("UTC") == (Period.LATE, Season.WINTER, 0)
+    assert at("Asia/Tokyo") == (Period.LUNCH, Season.WINTER, 0)  # noon on Dec 21
+    assert scene(now, "America/Chicago", household_id=1).overnight
+    assert not scene(now, "Asia/Tokyo", household_id=1).overnight
 
 
 def test_scene_needs_an_aware_now() -> None:
     with pytest.raises(ValueError, match="timezone-aware"):
-        scene(datetime(2026, 10, 22, 18, 0), "UTC")  # noqa: DTZ001
+        scene(datetime(2026, 10, 22, 18, 0), "UTC", household_id=1)  # noqa: DTZ001
 
 
 # What he does ----------------------------------------------------------------------------------------
@@ -254,7 +259,7 @@ def test_overnight_a_dinner_done_at_eight_still_has_him_asleep() -> None:
     late = datetime(2026, 10, 23, 3, 30, tzinfo=UTC)  # 10:30 PM in Chicago
     dinner = event(1, EventState.DONE, done_at=late - timedelta(hours=2, minutes=30))
     state = followed_state([dinner], late, CHICAGO)
-    assert state is None and pose(scene(late, CHICAGO), state) is Pose.SLEEP
+    assert state is None and pose(scene(late, CHICAGO, household_id=1), state) is Pose.SLEEP
 
 
 @pytest.mark.parametrize(
@@ -279,8 +284,12 @@ FUN_ASSETS = (
     f'\n  <link rel="stylesheet" href="/static/fun.css?v={__version__}">'
     f'\n  <script src="/static/fun.js?v={__version__}" defer></script>'
 )
-# The test clock starts at 18:00 UTC on Thursday, Oct 22, 2026: 1 PM in Chicago, 30 days into autumn.
-FUN_BODY = ' data-fun="on" data-period="lunch" data-season="autumn" data-season-depth="3"'
+# The test clock starts at 18:00 UTC on Thursday, Oct 22, 2026: 1 PM in Chicago, 30 days into autumn,
+# and the household's seasonal weather that day is crisp and clear, with leaves falling and lying.
+FUN_BODY = (
+    ' data-fun="on" data-period="lunch" data-season="autumn" data-season-depth="3"'
+    ' data-weather="clear" data-feel="none" data-fall="leaves" data-pile="leaves" data-react="none"'
+)
 
 
 def test_fun_mode_is_on_by_default_on_every_signed_in_page(
@@ -302,9 +311,10 @@ def test_signed_out_pages_carry_no_fun(client: TestClient) -> None:
 def test_the_scene_follows_the_household_clock(client: TestClient, provider: FakeProvider, clock: FakeClock) -> None:
     clock.now = datetime(2027, 1, 10, 3, 0, tzinfo=UTC)  # 9 PM on Jan 9 in Chicago, 19 days into winter
     sign_in(client, provider)
-    assert ' data-period="late" data-season="winter" data-season-depth="2">' in client.get("/").text
+    snow = ' data-weather="snow" data-feel="none" data-fall="snow" data-pile="snow" data-react="shake">'
+    assert ' data-period="late" data-season="winter" data-season-depth="2"' + snow in client.get("/").text
     clock.advance(timedelta(hours=9))  # 6 AM
-    assert ' data-period="breakfast" data-season="winter" data-season-depth="2">' in client.get("/").text
+    assert ' data-period="breakfast" data-season="winter" data-season-depth="2"' + snow in client.get("/").text
 
 
 def test_turning_it_off_leaves_the_page_as_it_was(

@@ -30,6 +30,7 @@ M6_DRAFT_TABLES = {"assistant_draft"}
 SHUFFLE_TABLES = {"shown_place"}
 CODE_TABLES = {"sign_in_code"}
 PUSH_TABLES = {"push_subscription", "push_queue"}
+WEATHER_TABLES = {"local_weather"}
 
 
 def test_migrates_an_empty_database(settings: Settings) -> None:
@@ -39,7 +40,7 @@ def test_migrates_an_empty_database(settings: Settings) -> None:
     try:
         inspector = inspect(engine)
         everything = M0_TABLES | M1_TABLES | M2_TABLES | M3_TABLES | M4_TABLES | M6_TABLES | M6_DRAFT_TABLES | M7_TABLES
-        everything |= SHUFFLE_TABLES | CODE_TABLES | PUSH_TABLES
+        everything |= SHUFFLE_TABLES | CODE_TABLES | PUSH_TABLES | WEATHER_TABLES
         assert set(inspector.get_table_names()) == everything | {"alembic_version"}
         for table in everything - {"household"}:
             assert "household_id" in {c["name"] for c in inspector.get_columns(table)}, table
@@ -1425,6 +1426,7 @@ def _rows_outside_m4(settings: Settings) -> dict[str, list[object]]:
                     "stance_edit",
                     "sign_in_code",
                     *PUSH_TABLES,
+                    *WEATHER_TABLES,
                     "alembic_version",
                 }
             }
@@ -3047,3 +3049,36 @@ def test_a_rebuild_of_session_keeps_every_push_device_and_its_cascade(settings: 
             assert c.exec_driver_sql("SELECT subscription_id FROM push_queue").all() == [(2,)]
     finally:
         engine.dispose()
+
+
+WEATHER_REVISION = "0044_local_weather"
+
+
+def test_0044_adds_an_empty_local_weather_table_and_downgrade_drops_it(settings: Settings) -> None:
+    """Up adds ``local_weather``, empty, and touches no other row, so every household keeps the
+    seasonal weather until an admin turns local weather on (ADR 0011). Down drops it and changes
+    no other row."""
+    _upgrade_to(settings, PUSH_REVISION)
+    _populate_calls(settings)
+    before = _rows_outside_m4(settings)
+
+    _upgrade_to(settings, WEATHER_REVISION)
+    assert _rows_outside_m4(settings) == before
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.begin() as c:
+            assert c.execute(text("SELECT count(*) FROM local_weather")).scalar() == 0
+            c.execute(
+                text(
+                    "INSERT INTO local_weather (household_id, enabled, postal_code, country, latitude, longitude, "
+                    "place, updated_at) VALUES (1, 1, '12345', 'US', 40.1, -75.2, 'Elmford, Northshire', :t)"
+                ),
+                {"t": STAMP},
+            )
+    finally:
+        engine.dispose()
+
+    _downgrade_to(settings, PUSH_REVISION)
+    assert "local_weather" not in _tables(settings)
+    assert _rows_outside_m4(settings) == before
+    _upgrade_to(settings, WEATHER_REVISION)

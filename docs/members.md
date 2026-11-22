@@ -1,6 +1,6 @@
 # Members and guests
 
-Admins manage the household on **Admin** > **Members**. This page covers guests, joining from the channel, editing a member's preferences, the [web app](#the-web-app), and the [Assistant page](#the-assistant-page). To link members' Slack accounts, see [Link everyone's Slack account](setup.md#link-everyones-slack-account).
+Admins manage the household on **Admin** > **Members**. This page covers guests, joining from the channel, editing a member's preferences, the [web app](#the-web-app), [Dinnerbone's weather](#dinnerbones-weather), and the [Assistant page](#the-assistant-page). To link members' Slack accounts, see [Link everyone's Slack account](setup.md#link-everyones-slack-account).
 
 ## Guests
 
@@ -105,6 +105,23 @@ It then says "Notifications are on for this device." To stop them, tap **Turn of
 Notifications go with the sign-in that turned them on. Signing out on the device, or the sign-in running out, stops them there. When you sign in again in the installed app, the first page you open turns them back on by itself, as long as the device still allows them. In a browser outside the app, open **Preferences** to turn them back on. If someone else signs in in the app on the device, it gets their notifications instead of yours, and none still waiting for you. If it says notifications are blocked, allow them for Dinnerbell in the device's settings (on iPhone, **Settings** > **Notifications** > **Dinnerbell**), and open the page again.
 
 Each member can have up to 10 devices; turning on an eleventh drops the one turned on longest ago. Pushes go through the device's push service, from Apple, Google, Mozilla, or Microsoft, which sees when a device gets one and how big it is, but not what it says.
+
+## Dinnerbone's weather
+
+In fun mode, the den on Today and on each call's page shows the season's weather, a little different each day and the same for everyone in the household. To show the weather outside instead, turn on local weather ([ADR 0011](adr/0011-local-weather.md), spec 11, "Fun mode"). It works whether or not the web app is on.
+
+1. Open **Admin** > **Web app**, and find **Dinnerbone's weather**.
+2. Select **Show local weather**.
+3. Enter your **ZIP or postal code**. For a household outside the US, also change **Country** to its two-letter code, such as `CA` or `GB`.
+4. Select **Save**.
+
+Dinnerbell looks the code up once, with Open-Meteo, and the card says which place it found, such as "Showing the weather near Elmford, Northshire". Check that it's near you. If Dinnerbell can't find the code, or can't reach Open-Meteo, nothing is saved and the card says so: check the code and the country, or try again in a few minutes.
+
+Within about 5 minutes, the den shows the weather there, and Today and each call's page credit "Weather data by Open-Meteo.com". After that, Dinnerbell asks again at a random time every 1 to 3 hours. The card shows when the weather last arrived. If Open-Meteo can't be reached, the card says "Couldn't reach the weather service since" and the time, and the den keeps the last weather for up to 6 hours, then shows the season's weather until Open-Meteo answers again. Nothing else in Dinnerbell waits on it.
+
+**What leaves Dinnerbell.** When you save, Dinnerbell sends Open-Meteo the postal code and country, to find the place. After that, it sends only the place's location rounded to about 10 km. Open-Meteo also sees the server's internet address. Nothing about members is sent. Open-Meteo's free service is for non-commercial use, and its data is licensed CC BY 4.0, which is why the pages credit it. Logs and the audit log never record the code, the place, or its location.
+
+To turn it off, clear **Show local weather** and select **Save**. Dinnerbell stops asking at once, deletes the place and the weather it stored, and the den shows the season's weather. The code stays in the field for next time; clear it too if you'd rather it didn't. Each change writes a `household.weather_updated` audit row, with whether it's on and whether the code changed.
 
 ## The Assistant page
 

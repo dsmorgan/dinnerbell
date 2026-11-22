@@ -35,6 +35,7 @@ from dinnerbell.services.bootstrap import bootstrap
 from dinnerbell.services.clock import Clock, utc_now
 from dinnerbell.services.database import open_database
 from dinnerbell.services.health import SchedulerState, SlackState, schema_revision
+from dinnerbell.services.open_meteo import OpenMeteo
 from dinnerbell.web.app import build_app
 from dinnerbell.web.context import LOGIN_STATE_LIFETIME, AppContext, CookieNames
 from dinnerbell.web.oidc import OIDCClient
@@ -57,10 +58,12 @@ def create_app(
     prewarm_badge_art: bool = False,
     model_client: ModelClient | None = None,
     push_transport: httpx.AsyncBaseTransport | None = None,
+    weather_transport: httpx.AsyncBaseTransport | None = None,
 ) -> FastAPI:
     """Build the app. ``oidc_transport`` lets tests route provider calls to a fake in-process;
     ``slack_client`` and ``slack_socket`` do the same for Slack, ``model_client`` for the
-    assistant's model, in place of Anthropic, and ``push_transport`` for the web push services.
+    assistant's model, in place of Anthropic, ``push_transport`` for the web push services, and
+    ``weather_transport`` for Open-Meteo (ADR 0011).
     ``prewarm_badge_art`` (the CLI sets it) uploads the badge art to Slack in the background
     once connected (#112)."""
 
@@ -97,6 +100,7 @@ def create_app(
             channel: Channel = slack.channel if slack else NullChannel()
             vapid = VapidKeys.from_secret(secret)
             push_http = new_client(push_transport)
+            weather = OpenMeteo(weather_transport)
             stack.push_async_callback(push_http.aclose)
             app.state.dinnerbell = AppContext(
                 settings=settings,
@@ -111,6 +115,7 @@ def create_app(
                 slack_state=slack_state,
                 slack_people=slack.people if slack else None,
                 vapid_public_key=vapid.public_key,
+                weather=weather,
             )
             jobs = JobContext(
                 state=state,
@@ -122,6 +127,7 @@ def create_app(
                 channel=channel,
                 push_sender=WebPushSender(vapid, settings.base_url, push_http, clock),
                 base_url=settings.base_url,
+                weather=weather,
             )
             app.state.jobs = jobs
             app.state.slack = slack

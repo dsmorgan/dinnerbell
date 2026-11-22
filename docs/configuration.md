@@ -129,6 +129,17 @@ While **Admin** > **Web app** is on, Dinnerbell sends push notifications to the 
 
 Dinnerbell posts only to these hosts, so a browser can't point it anywhere else, and never follows a redirect. The push key comes from `DINNERBELL_SECRET_KEY`: changing the secret key ends every device's notifications, and each member taps **Turn on notifications** again. While the switch is off, Dinnerbell connects to none of these hosts. A browser whose push service isn't listed gets "That browser's push service isn't one Dinnerbell knows.", and the log line `push subscription refused` names its host. Set `DINNERBELL_BASE_URL` to an https URL: Apple refuses pushes otherwise, and Dinnerbell logs a warning at startup.
 
+## Local weather
+
+While **Dinnerbone's weather** on **Admin** > **Web app** is on, Dinnerbell asks Open-Meteo for the weather at the household's postal code ([ADR 0011](adr/0011-local-weather.md), [Dinnerbone's weather](members.md#dinnerbones-weather)). It needs no setting or key of its own, but the host needs outbound HTTPS (port 443) to:
+
+| Host | For |
+|---|---|
+| `geocoding-api.open-meteo.com` | Finding the place for a postal code, once each time an admin saves it |
+| `api.open-meteo.com` | The current weather there, every 1 to 3 hours |
+
+Dinnerbell calls only these hosts, at addresses it builds itself, over HTTPS, and never follows a redirect. Each request has 5 seconds and reads at most 64 KB of JSON. While local weather is off, which is the default, Dinnerbell connects to neither host. If the host can't reach them, the den shows the season's weather, and the log says `local weather failed; the den shows the seasonal weather` once, with the reason, such as `timeout` or `network`, until it recovers. Open-Meteo's free API is for non-commercial use: check that its terms fit your install.
+
 ## The sign-in rate limit
 
 Dinnerbell allows 20 requests a minute to the sign-in pages under `/auth/` from each client address. A sign-in takes two requests, and a sign-out one. Past the limit, the page says "Too many sign-in attempts. Wait a minute and try again."

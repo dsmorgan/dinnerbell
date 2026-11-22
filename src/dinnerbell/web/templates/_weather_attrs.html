@@ -1,0 +1,6 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{#- The scene's weather (#319) as data- attributes, on <body> and #den-state, for fun.css and
+    fun.js. Expects s (domain.fun.Scene). Every attribute is always there, "none" when it doesn't
+    apply, so fun.js can copy a new state over an old one. -#}
+data-weather="{{ s.weather.sky }}" data-feel="{{ s.weather.feel or 'none' }}" data-fall="{{ s.fall or 'none' }}" data-pile="{{ s.pile or 'none' }}" data-react="{{ s.react or 'none' }}"
+{%- if s.weather.local %} data-weather-local="on"{% endif %}

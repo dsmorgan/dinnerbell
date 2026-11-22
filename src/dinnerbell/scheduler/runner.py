@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from dinnerbell.domain.notifications import Channel
 from dinnerbell.domain.push import PushSender
 from dinnerbell.logs import start_unit
-from dinnerbell.services import announcements, auth, backups, lifecycle, outbox, push, recap, stuck
+from dinnerbell.services import announcements, auth, backups, lifecycle, local_weather, outbox, push, recap, stuck
 from dinnerbell.services.assistant import retention
 from dinnerbell.services.clock import Clock
 from dinnerbell.services.health import HEARTBEAT_INTERVAL, SchedulerState
@@ -45,6 +45,9 @@ DRAIN_INTERVAL = timedelta(seconds=5)
 """How often the outbox is drained between ticks, so a tap in Slack shows up within seconds."""
 PUSH_DRAIN_INTERVAL = timedelta(seconds=5)
 """How often the push queue is drained (spec 6.15). Its own job, so neither queue waits on the other."""
+WEATHER_INTERVAL = timedelta(minutes=5)
+"""How often the scheduler looks for local weather that's due (ADR 0011). Each household asks only
+when its own randomized 1-to-3-hour wait is over, so this only bounds how late a fetch can be."""
 
 
 @dataclass(frozen=True)
@@ -69,6 +72,8 @@ class JobContext:
     """What a push's link starts with: ``DINNERBELL_BASE_URL``."""
     push_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     """One push drain at a time in this process; row claims cover other processes."""
+    weather: local_weather.WeatherSource | None = None
+    """Open-Meteo, for Dinnerbone's local weather (ADR 0011). None leaves it alone."""
 
 
 Job = Callable[[JobContext], Awaitable[None]]
@@ -207,6 +212,18 @@ async def drain_push(ctx: JobContext) -> None:
             log.exception("push drain failed")
 
 
+async def refresh_weather(ctx: JobContext) -> None:
+    """Ask Open-Meteo for each household whose local weather is due (ADR 0011). Its own job, apart
+    from the call tick, so a slow or failing weather service never holds up a call. With local
+    weather off everywhere, it reads one index and asks nothing."""
+    if ctx.weather is None:
+        return
+    try:
+        await local_weather.refresh(ctx.sessionmaker, ctx.weather, ctx.clock())
+    except Exception:  # pragma: no cover - refresh catches everything itself
+        log.exception("local weather refresh failed")
+
+
 async def purge_pushes(ctx: JobContext) -> None:
     """Delete pushes that ended a week ago, hourly, whether or not anything was due."""
     try:
@@ -294,5 +311,12 @@ def build_scheduler(ctx: JobContext) -> AsyncIOScheduler:
     )
     scheduler.add_job(
         _tracked(purge_pushes), IntervalTrigger(hours=1), args=[ctx], id="purge_pushes", next_run_time=start
+    )
+    scheduler.add_job(
+        _tracked(refresh_weather),
+        IntervalTrigger(seconds=WEATHER_INTERVAL.total_seconds()),
+        args=[ctx],
+        id="refresh_weather",
+        next_run_time=start,
     )
     return scheduler

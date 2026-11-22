@@ -27,6 +27,19 @@ GitHub sends a scheduled workflow's failure notice to the person who last change
 - **Bind only to the interface your reverse proxy reaches.** Keep the default `DINNERBELL_BIND`, `127.0.0.1`, when the proxy (for Pangolin, Newt) runs on this host; otherwise set it to that interface's address. Never use `0.0.0.0`: the proxy must be the only way in. To confirm, run `ss -ltn | grep -E ':801[34]'` and check the listening addresses.
 - **Keep the compose hardening flags.** `compose.yaml` runs the container with `read_only`, `cap_drop: ALL`, `no-new-privileges`, a size-capped `/tmp`, a process limit, a memory limit, and rotated logs. Don't remove them in `compose.override.yaml`.
 
+## Allow only the outbound connections Dinnerbell needs
+
+If your firewall limits outbound connections, Dinnerbell needs HTTPS (port 443) to these hosts, and only while the feature that uses them is on:
+
+| Host | For | When |
+|---|---|---|
+| `slack.com`, `wss-primary.slack.com` | Slack's API and Socket Mode | Always, with Slack configured |
+| Your sign-in provider, such as `slack.com` | Sign-in (OpenID Connect) | Always |
+| `api.anthropic.com` | The assistant | With `DINNERBELL_ANTHROPIC_API_KEY` set and **Admin** > **Assistant** on ([The assistant](configuration.md#the-assistant)) |
+| Any public website | A menu link a member asks the assistant to read: public addresses only, never a private one | With the assistant on |
+| The push services | Web push | With **Admin** > **Web app** on ([Web push](configuration.md#web-push)) |
+| `geocoding-api.open-meteo.com`, `api.open-meteo.com` | Dinnerbone's local weather | With **Dinnerbone's weather** on ([Local weather](configuration.md#local-weather)) |
+
 ## Monitor it
 
 Add two monitors in Uptime Kuma, or any monitor that can match a keyword:

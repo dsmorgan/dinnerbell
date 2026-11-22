@@ -48,7 +48,7 @@
   <script src="/static/fun.js?v={{ version|urlencode }}" defer></script>
   {%- endif %}
 </head>
-<body{% if csrf_token %} hx-headers='{{ {"X-CSRF-Token": csrf_token}|tojson }}'{% endif %}{% if fun %} data-fun="on" data-period="{{ fun.period }}" data-season="{{ fun.season }}" data-season-depth="{{ fun.depth }}"{% endif %}>
+<body{% if csrf_token %} hx-headers='{{ {"X-CSRF-Token": csrf_token}|tojson }}'{% endif %}{% if fun %} data-fun="on" data-period="{{ fun.period }}" data-season="{{ fun.season }}" data-season-depth="{{ fun.depth }}" {% with s = fun %}{% include "_weather_attrs.html" %}{% endwith %}{% endif %}>
   <header class="topbar">{% if instance_label %}
     <div class="instance-banner" role="note">{{ instance_label }} instance</div>{% endif %}
     <a class="brand" href="/">

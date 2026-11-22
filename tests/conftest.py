@@ -27,6 +27,7 @@ from dinnerbell.logs import JsonFormatter
 from tests.support.clock import FakeClock
 from tests.support.fake_oidc import CLIENT_ID, CLIENT_SECRET, ISSUER, FakeProvider, generate_key
 from tests.support.flags import disagreements, features_for, item_problems
+from tests.support.weather import FakeOpenMeteo
 
 BASE_URL = "https://dinnerbell.test"
 ADMIN_EMAIL = "admin@example.com"
@@ -206,12 +207,21 @@ def no_push_service(request: httpx.Request) -> httpx.Response:
 
 
 @pytest.fixture
-def client(migrated: Settings, clock: FakeClock, provider: FakeProvider) -> Iterator[TestClient]:
+def open_meteo() -> FakeOpenMeteo:
+    """Open-Meteo in app tests (ADR 0011): tests never reach the network."""
+    return FakeOpenMeteo()
+
+
+@pytest.fixture
+def client(
+    migrated: Settings, clock: FakeClock, provider: FakeProvider, open_meteo: FakeOpenMeteo
+) -> Iterator[TestClient]:
     app = create_app(
         migrated,
         clock=clock,
         oidc_transport=httpx.ASGITransport(app=provider.app),
         push_transport=httpx.MockTransport(no_push_service),
+        weather_transport=httpx.MockTransport(open_meteo),
     )
     with TestClient(app, base_url=BASE_URL, headers={"Origin": BASE_URL}, follow_redirects=False) as test_client:
         yield test_client
