@@ -6,6 +6,7 @@ billed. Nothing here reaches the network."""
 from __future__ import annotations
 
 import json
+import pathlib
 from collections.abc import Callable, Iterable
 from typing import Any
 
@@ -402,3 +403,23 @@ async def test_a_listener_that_breaks_never_breaks_the_call(caplog: pytest.LogCa
     reply = await client_for(lambda request: streamed(body)).create(REQUEST, time_left=5.0, events=Broken())
     assert reply.content == ({"type": "text", "text": "Hello."},)
     assert "assistant reply listener broke" in caplog.text
+
+
+async def test_the_anthropic_client_ignores_proxy_and_ca_variables(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """#328: like pushes, menu links, and the weather, the assistant goes straight to Anthropic,
+    verified against the bundled certificate authorities, and never follows a redirect. The
+    SDK's default client would mount a proxy transport for ``HTTPS_PROXY``."""
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.invalid:3128")
+    monkeypatch.setenv("ALL_PROXY", "http://proxy.invalid:3128")
+    monkeypatch.setenv("SSL_CERT_FILE", str(tmp_path / "missing.pem"))  # would fail to load if read
+    model = AnthropicModelClient(SecretStr(KEY))
+    try:
+        http = model._client._client  # private in anthropic 2.7: the SDK's HTTP client
+        assert isinstance(http, httpx2.AsyncClient)
+        assert http.trust_env is False
+        assert http.follow_redirects is False
+        assert not http._mounts  # private in httpx2: no proxy transport for any URL
+    finally:
+        await model.close()

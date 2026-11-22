@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
+import pathlib
 from typing import Any
 
 import httpx
 import pytest
 
+from dinnerbell.app_factory import oidc_http_client
 from dinnerbell.web.oidc import OIDCClient, OIDCError, pkce_challenge
 from tests.support.clock import FakeClock
 from tests.support.fake_oidc import CLIENT_ID, CLIENT_SECRET, ISSUER, REDIRECT_URI, FakeProvider
@@ -194,3 +196,20 @@ def test_pkce_challenge_matches_rfc7636_example() -> None:
     assert (
         pkce_challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk") == "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
     )
+
+
+async def test_the_sign_in_client_ignores_proxy_and_ca_variables(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """#328: like pushes, menu links, and the weather, sign-in goes straight to the provider,
+    verified against the bundled certificate authorities, and never follows a redirect."""
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.invalid:3128")
+    monkeypatch.setenv("ALL_PROXY", "http://proxy.invalid:3128")
+    monkeypatch.setenv("SSL_CERT_FILE", str(tmp_path / "missing.pem"))  # would fail to load if read
+    client = oidc_http_client()
+    try:
+        assert client.trust_env is False
+        assert client.follow_redirects is False
+        assert not client._mounts  # private in httpx 0.28: no proxy transport for any URL
+    finally:
+        await client.aclose()

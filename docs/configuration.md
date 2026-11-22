@@ -140,6 +140,10 @@ While **Dinnerbone's weather** on **Admin** > **Web app** is on, Dinnerbell asks
 
 Dinnerbell calls only these hosts, at addresses it builds itself, over HTTPS, and never follows a redirect. It ignores proxy and CA bundle environment variables, such as `HTTPS_PROXY` and `SSL_CERT_FILE`, and uses its bundled certificate authorities, as menu links and pushes do. Each request has 5 seconds and reads at most 64 KB of JSON. While local weather is off, which is the default, Dinnerbell connects to neither host. If the host can't reach them, the den shows the season's weather, and the log says `local weather failed; the den shows the seasonal weather` once, with the reason, such as `timeout` or `network`, until it recovers. Open-Meteo's free API is for non-commercial use: check that its terms fit your install.
 
+## Outbound connections
+
+Except for Slack's connection, every request Dinnerbell makes, to the sign-in provider, Anthropic, the push services, menu links, and the weather, ignores proxy and CA bundle environment variables, such as `HTTPS_PROXY` and `SSL_CERT_FILE`, verifies TLS against Dinnerbell's bundled certificate authorities, and never follows a redirect. The host must reach those services directly, without a proxy.
+
 ## The sign-in rate limit
 
 Dinnerbell allows 20 requests a minute to the sign-in pages under `/auth/` from each client address. A sign-in takes two requests, and a sign-out one. Past the limit, the page says "Too many sign-in attempts. Wait a minute and try again."
