@@ -935,8 +935,9 @@ def _proposal_card(html: str, item_id: int) -> str:
 def test_web_vote_card_puts_vote_first_and_the_coordinators_row_below(
     admin: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings
 ) -> None:
-    """Vote is the primary button for everyone. The coordinator and an admin get a quiet row below
-    it: Pickup | Delivery, Break the tie when tied, and Lock this. A member sees only Vote. The
+    """Vote is the primary button for everyone. The coordinator and an admin get a row below it:
+    the quiet Pickup | Delivery, then Break the tie when tied and Lock this, as secondary buttons
+    (#317). A member sees only Vote. The
     chosen way posts "either" and the way it clears, so tapping it again clears it, and a tap
     from a page that's out of date is refused; its id stays the way's."""
     add_item(admin, "Pho Place", cuisines="Vietnamese", modes=["pickup", "delivery"])
@@ -964,7 +965,7 @@ def test_web_vote_card_puts_vote_first_and_the_coordinators_row_below(
     assert 'class="button quiet choice" aria-pressed="false">Delivery<' in card
     assert "Not chosen yet" in card
     lock = card.index(">Lock this<")
-    assert card.index(">Delivery</button>") < lock and 'class="button quiet">Lock this<' in card
+    assert card.index(">Delivery</button>") < lock and 'class="button small">Lock this<' in card
     assert 'hx-confirm="' in card[card.rindex("<form", 0, lock) : lock]  # still confirmed
     assert "primary" not in card[card.index("coordinator-row") :]
     html = page(admin.get(f"/events/{event_id}"))
@@ -1042,7 +1043,7 @@ def test_the_quiet_style_keeps_its_tap_height_and_shows_a_border_on_hover_or_foc
     assert check + 'content: "\\2713\\00a0" / ""; }' in css
 
 
-def test_web_break_the_tie_comes_before_lock_in_the_quiet_row(
+def test_web_break_the_tie_comes_before_lock_in_the_coordinators_row(
     admin: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings
 ) -> None:
     event_id = web_voting(admin, provider, clock, migrated)
@@ -1056,7 +1057,7 @@ def test_web_break_the_tie_comes_before_lock_in_the_quiet_row(
     for tied in (first, second):
         card = _proposal_card(html, tied)
         row = card[card.index('<div class="coordinator-row"') :]
-        assert 'class="button quiet">Break the tie<' in row and 'class="button quiet">Lock this<' in row
+        assert 'class="button small">Break the tie<' in row and 'class="button small">Lock this<' in row
         assert row.index(">Break the tie<") < row.index(">Lock this<")
         tie = row.index(">Break the tie<")
         assert 'hx-confirm="' in row[row.rindex("<form", 0, tie) : tie]

@@ -30,7 +30,7 @@
     <input name="slack_user_id" maxlength="32" autocomplete="off" autocapitalize="characters" spellcheck="false"
            placeholder="U0123ABCDEF" value="{{ slack_value if slack_value is defined else (member.slack_user_id or '') }}">
   </label>
-  <button type="submit" class="button block">Save Slack link</button>
+  <button type="submit" class="button primary block">Save Slack link</button>
 </form>
 {% if member.slack_link_locked %}
 <form method="post" action="/admin/members/{{ member.id }}/slack/automatic" class="card stack">

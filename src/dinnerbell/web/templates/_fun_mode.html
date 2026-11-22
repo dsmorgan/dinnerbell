@@ -3,6 +3,7 @@
     guest's own page. A checkbox like the page's other on/off settings: unchecked sends nothing,
     which the route reads as off. fun_saved says it just saved; the route sends people back to
     #fun-mode. An admin editing a member's preferences (#181) passes fun_action and fun_member. -#}
+{% from "_buttons.html" import save_button %}
 {% set fun_on = (fun_member|default(principal.member)).fun_mode %}
 <form method="post" action="{{ fun_action|default("/me/fun") }}" class="card stack" id="fun-mode">
   <h2>Fun mode</h2>
@@ -13,5 +14,5 @@
     <p class="small muted" id="fun-mode-about">Dinnerbone, the hamster in the logo, lives beside your greeting on Today and at the top of a call's page, and follows the call. Off, your pages load none of it.</p>
     <label class="check"><input type="checkbox" aria-describedby="fun-mode-about" name="fun" value="on"{% if fun_on %} checked{% endif %}> Show Dinnerbone's Den</label>
   </fieldset>
-  <button type="submit" class="button">Save</button>
+  {{ save_button("Save", admin=editing) }}
 </form>

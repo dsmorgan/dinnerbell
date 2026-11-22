@@ -1,5 +1,6 @@
 {#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
 {% extends "base.html" %}
+{% from "_buttons.html" import key_icon %}
 {% block title %}Schedule{% endblock %}
 {% block content %}
 <h1>Schedule</h1>
@@ -51,7 +52,7 @@
       <label class="field"><span>Day</span><input type="date" name="day" value="{{ skip.day }}" min="{{ skip_days[0].isoformat() }}" max="{{ skip_days[1].isoformat() }}" required></label>
     </div>
     <label class="field"><span>Reason (optional)</span><input type="text" name="reason" maxlength="140" autocomplete="off" value="{{ skip.reason }}"></label>
-    <button type="submit" class="button block">Skip this call</button>
+    <button type="submit" class="button block admin">{{ key_icon() }}Skip this call</button>
   </form>
   {% else %}
   <p class="small">No meal has a daily call right now, so there's nothing to skip.</p>

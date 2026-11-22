@@ -2,6 +2,7 @@
 {#- Slack, the web app, or both (spec 6.15), on Preferences only while Admin's Web app switch is
     on. A member without a Slack user has only the web app, so there's nothing to choose. An
     admin editing a member's preferences (#181) passes notify_action and notify_member. -#}
+{% from "_buttons.html" import save_button %}
 {% set notify_now = notify_member.delivery.value %}
 <section class="card stack" id="notify-via" aria-labelledby="notify-via-heading">
   <h2 id="notify-via-heading">Notifications</h2>
@@ -18,7 +19,7 @@
         {% endfor %}
       </div>
     </fieldset>
-    <button type="submit" class="button">Save</button>
+    {{ save_button("Save", admin=editing) }}
   </form>
   {% else %}
   <p class="small">Web app. Without a linked Slack account, Dinnerbell can reach {{ "them" if editing else "you" }} only in the web app.</p>
@@ -28,7 +29,7 @@
   {% if not editing and push_key and not principal.member.is_guest %}
   <div class="stack" id="notifications" role="group" aria-labelledby="this-device-heading" hidden>
     <h3 id="this-device-heading">This device</h3>
-    {% include "_push_controls.html" %}
+    {% with push_primary=notify_choices|length < 2 %}{% include "_push_controls.html" %}{% endwith %}
   </div>
   {% endif %}
   <p class="small"><a href="/app">Get the app</a></p>

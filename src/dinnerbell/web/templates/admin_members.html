@@ -103,7 +103,7 @@
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <label class="field compact"><span>Make them</span><select name="role">{% for r in roles %}<option value="{{ r.value }}"{% if r.value == "member" %} selected{% endif %}>{{ r.value|capitalize }}</option>{% endfor %}</select></label>
           <label class="field compact"><span>Email</span><input type="email" name="email" maxlength="254" required></label>
-          <button type="submit" class="button small primary">Promote</button>
+          <button type="submit" class="button small">Promote</button>
         </form>
         {% endif %}
       </details>

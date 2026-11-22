@@ -23,7 +23,10 @@
 
 /* Colors. Every text color meets 4.5:1 on each background it sits on, in both themes. Text on
    --accent-soft is --accent-soft-text; text on --accent is --accent-text. --hair is a divider
-   inside a card, lighter than --line. The page follows the device unless <html> carries
+   inside a card, lighter than --line. Controls have their own: a secondary button is --text on
+   --button inside --button-line, danger is --danger on --danger-soft inside --danger-line, and
+   admin is --admin on --admin-fill inside --admin-line. Each edge keeps 3:1 on --surface and
+   --bg (#317). The page follows the device unless <html> carries
    data-theme="light" or data-theme="dark" (#231), so the dark colors appear twice: for a dark
    device without a light override, and for a dark override. */
 :root {
@@ -42,7 +45,14 @@
   --ok-soft: #dcf3e3;
   --danger: #b91c1c;
   --danger-soft: #fde4e4;
+  --danger-line: #b91c1c;
+  --button: #f3ece3;
+  --button-line: #9c8b7c;
+  --admin: #284766;
+  --admin-fill: #e8eff7;
+  --admin-line: #4d6b8e;
   --press-filled: rgb(0 0 0 / 0.14);
+  --press-tint: rgb(0 0 0 / 0.07);
   --shadow: 0 1px 2px rgb(0 0 0 / 0.05), 0 4px 16px rgb(0 0 0 / 0.04);
   color-scheme: light;
 }
@@ -64,7 +74,14 @@
     --ok-soft: #173322;
     --danger: #fca5a5;
     --danger-soft: #3f1d1d;
+    --danger-line: #d96b6b;
+    --button: #3a302a;
+    --button-line: #8a7b6e;
+    --admin: #cfe0f5;
+    --admin-fill: #1f2a37;
+    --admin-line: #7f9cc0;
     --press-filled: rgb(255 255 255 / 0.18);
+    --press-tint: rgb(255 255 255 / 0.1);
     --shadow: none;
     color-scheme: dark;
   }
@@ -86,7 +103,14 @@
   --ok-soft: #173322;
   --danger: #fca5a5;
   --danger-soft: #3f1d1d;
+  --danger-line: #d96b6b;
+  --button: #3a302a;
+  --button-line: #8a7b6e;
+  --admin: #cfe0f5;
+  --admin-fill: #1f2a37;
+  --admin-line: #7f9cc0;
   --press-filled: rgb(255 255 255 / 0.18);
+  --press-tint: rgb(255 255 255 / 0.1);
   --shadow: none;
   color-scheme: dark;
 }
@@ -196,15 +220,20 @@ p { margin: 0 0 0.75rem; }
 
 .inline { display: inline; margin: 0; }
 
+/* Buttons (#317, spec 11 "Buttons"). Each style means one thing. Primary, the accent fill, is the
+   one main action of a card or form. Secondary, a tinted fill with a darker edge, is every other
+   action. Danger destroys something or is hard to undo. Admin is an admin's action on a page
+   members also see, with a key before its label. Toggles (.choice, In/Maybe/Out, a takeout pair)
+   are choices, not actions, and keep their own look. */
 .button, button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   min-height: 44px;
   padding: 0 1rem;
-  border: 1px solid var(--line);
+  border: 1px solid var(--button-line);
   border-radius: var(--radius-control);
-  background: var(--surface);
+  background: var(--button);
   color: var(--text);
   font: inherit;
   font-weight: 600;
@@ -214,7 +243,11 @@ p { margin: 0 0 0.75rem; }
 }
 
 .button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
-.button.danger { color: var(--danger); }
+.button.danger { background: var(--danger-soft); border-color: var(--danger-line); color: var(--danger); }
+.button.admin { gap: 0.35rem; background: var(--admin-fill); border-color: var(--admin-line); color: var(--admin); }
+.button.admin > svg, .admin-controls > summary > svg { flex: none; }
+/* A toggle that isn't on keeps the look it had before the button roles. */
+.button:is(.choice, .answer-option):not(.primary, .quiet) { background: var(--surface); border-color: var(--line); }
 .button.small { min-height: 40px; padding: 0 0.8rem; font-size: 0.9rem; }
 .button.block { width: 100%; margin: 0.5rem 0 1rem; }
 
@@ -312,8 +345,9 @@ details[open] > summary { margin-bottom: 0.5rem; }
 .today-action > summary > span { flex-basis: 100%; }
 
 /* Tap feedback (#153). A pressed button, level, or toggle chip tints at once: 10% of its own text
-   color over a light fill, or darker (lighter in dark mode) on a filled choice, so its text keeps
-   at least 4.5:1 in both themes. A link chip's border takes its text color instead, since its
+   color over a toggle's light fill, darker (lighter in dark mode) on a secondary, danger, or admin
+   button (--press-tint, #317), or more so on a filled one (--press-filled), so its text keeps at
+   least 4.5:1 in both themes. A link chip's border takes its text color instead, since its
    tinted fill would fall short. With motion allowed, colors ease over 120 ms, including a choice
    that turns on or off after a save, and a pressed control shrinks slightly. The press shows
    instantly; only the release eases. */
@@ -321,6 +355,9 @@ details[open] > summary { margin-bottom: 0.5rem; }
 .segment:active span,
 .chip-toggle:active span {
   box-shadow: inset 0 0 0 100vmax color-mix(in srgb, currentColor 10%, transparent);
+}
+:is(.button, button):not(.primary, .choice, .answer-option, .quiet, .link):not(:disabled):active {
+  box-shadow: inset 0 0 0 100vmax var(--press-tint);
 }
 :is(.button.primary:not([aria-pressed="true"]), .button.choice[aria-pressed="true"]:not(.primary), .answer-option[aria-current="true"]):not(:disabled):active,
 .segment:not(.level-zero, .level-neg, .level-pos):active input:checked + span,
@@ -644,9 +681,9 @@ ins { color: var(--ok); text-decoration: none; }
 /* The check is for the eye; the button already says it's pressed, so screen readers skip it. A
    browser without alternative text for content keeps the first line. */
 .button.primary.choice[aria-pressed="true"]::before { content: "\2713\00a0"; content: "\2713\00a0" / ""; }
-/* Quiet (#212): the coordinator's and admins' overrides, so everyone's Vote stands out.
-   Smaller and muted, with no border until hovered or focused, and still a 40 px tap target. A
-   chosen way is the accent fill, like any choice. */
+/* Quiet (#212): a takeout pick's Pickup | Delivery, so everyone's Vote stands out. Smaller and
+   muted, with no border until hovered or focused, and still a 40 px tap target. A chosen way is
+   the accent fill, like any choice. Break the tie and Lock this are secondary buttons (#317). */
 .button.quiet { min-height: 40px; padding: 0 0.65rem; border-color: transparent; background: transparent; color: var(--muted); font-size: 0.85rem; font-weight: 500; }
 .button.quiet:hover, .button.quiet:focus-visible { border-color: var(--line); color: var(--text); }
 .button.quiet.choice[aria-pressed="true"] { background: var(--accent); border-color: transparent; color: var(--accent-text); font-weight: 600; }
@@ -706,7 +743,11 @@ ins { color: var(--ok); text-decoration: none; }
 .details-form form { margin-top: 0.5rem; }
 .pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; }
 .pair .field { margin-top: 0; }
-.admin-controls { border-top: 1px dashed var(--line); padding-top: 0.3rem; }
+/* A call's Admin section (#317): a box in the admin color, its summary the key and "Admin". */
+.admin-controls { margin-top: 0.5rem; padding: 0 0.7rem; border: 1px solid var(--admin-line); border-radius: var(--radius-control); }
+.admin-controls[open] { padding-bottom: 0.6rem; }
+.admin-controls > summary { gap: 0.35rem; color: var(--admin); font-weight: 600; }
+.admin-controls .button-row { margin-bottom: 0.4rem; }
 .end-controls { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0 0.6rem; border-top: 1px solid var(--hair); padding-top: 0.4rem; }
 .end-controls > form { margin-top: 0.4rem; }
 .end-controls .calloff { flex: 1 1 12rem; }
@@ -855,12 +896,14 @@ fieldset.card > .button.block { margin-bottom: 0; }
 /* Sign in (spec 6.15): inside the installed app, Sign in with a code comes first and is the primary button. */
 .signin-options { display: flex; flex-direction: column; }
 .code-input { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; letter-spacing: 0.08em; text-transform: uppercase; }
-/* A new code sits on a line of its own, never broken, with Copy beside it. */
+/* A new code sits on a line of its own, never broken, with Copy beside it. On the green alert,
+   Copy's edge takes --muted, since --button-line would fall short of 3:1 there in light mode. */
 .code-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; }
+.code-row .button { border-color: var(--muted); }
 .issued-code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 1.5rem; font-weight: 700; letter-spacing: 0.08em; white-space: nowrap; user-select: all; -webkit-user-select: all; }
 @media (display-mode: standalone) {
   .signin-options .signin-code { order: -1; background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
-  .signin-options .signin-provider { background: var(--surface); border-color: var(--line); color: var(--text); }
+  .signin-options .signin-provider { background: var(--button); border-color: var(--button-line); color: var(--text); }
 }
 /* With the web app on, a member's row has more buttons (spec 6.15): let them wrap on a phone. */
 .member-actions { flex-wrap: wrap; }

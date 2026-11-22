@@ -1,5 +1,6 @@
 {#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
 {% extends "base.html" %}
+{% from "_buttons.html" import key_icon %}
 {% set is_admin = principal.member.is_admin %}
 {% block title %}Tags{% endblock %}
 {% block content %}
@@ -43,7 +44,7 @@
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <label class="field compact"><span class="small muted">New name</span>
             <input name="name" required maxlength="40" autocomplete="off" value="{{ t.name }}"></label>
-          <button type="submit" class="button small">Rename</button>
+          <button type="submit" class="button small admin">{{ key_icon() }}Rename</button>
         </form>
         <form method="post" action="/catalog/tags/{{ t.id }}/merge" class="inline-form" hx-boost="true"
               hx-confirm="Merge {{ t.name }} into the chosen tag? This can't be undone.">

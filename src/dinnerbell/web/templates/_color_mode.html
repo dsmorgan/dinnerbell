@@ -4,6 +4,7 @@
     choice is one of three radios, so a save always sends one. color_saved says it just saved;
     the route sends people back to #color-mode. An admin editing a member's preferences (#181)
     passes color_action and color_member. -#}
+{% from "_buttons.html" import save_button %}
 {% set color_now = (color_member|default(principal.member)).color_mode.value %}
 <form method="post" action="{{ color_action|default("/me/color-mode") }}" class="card stack" id="color-mode">
   <h2>Light or dark</h2>
@@ -18,5 +19,5 @@
       {% endfor %}
     </div>
   </fieldset>
-  <button type="submit" class="button">Save</button>
+  {{ save_button("Save", admin=editing) }}
 </form>

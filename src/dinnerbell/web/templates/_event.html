@@ -5,7 +5,9 @@
     saved. -#}
 {#- Each button's id is stable across swaps, so HTMX puts focus back on it: the path after the
     event, plus the field that tells its siblings apart. Vote and Voted share one, and so does a way
-    and clearing it (#212): ``way`` names the way when the posted mode is "either". -#}
+    and clearing it (#212): ``way`` names the way when the posted mode is "either". An admin
+    button (``cls`` with admin, #317) starts with the key. -#}
+{% from "_buttons.html" import key_icon %}
 {% macro act(eid, path, label, cls="button small", fields={}, confirm=None, pressed=None, current=False, way=None) -%}
 {%- set key = [path.split("/")[3:]|join("-")|replace("unvote", "vote")] -%}
 {%- set key = key + [fields.get("status"), fields.get("role"), fields.get("switch"), fields.get("window"), fields.get("shift"), way or fields.get("mode")] -%}
@@ -15,7 +17,7 @@
   {%- for name, value in fields.items() %}
   <input type="hidden" name="{{ name }}" value="{{ value }}">
   {%- endfor %}
-  <button type="submit" id="event-{{ eid }}-{{ key|select|join("-") }}" class="{{ cls }}"{% if pressed is not none %} aria-pressed="{{ 'true' if pressed else 'false' }}"{% endif %}{% if current %} aria-current="true"{% endif %}>{{ label }}</button>
+  <button type="submit" id="event-{{ eid }}-{{ key|select|join("-") }}" class="{{ cls }}"{% if pressed is not none %} aria-pressed="{{ 'true' if pressed else 'false' }}"{% endif %}{% if current %} aria-current="true"{% endif %}>{% if "admin" in cls.split() %}{{ key_icon() }}{% endif %}{{ label }}</button>
 </form>
 {%- endmacro %}
 {% macro hidden() -%}
@@ -42,7 +44,7 @@
   {% endfor %}
 </div>
 {% endif %}
-{% if g.removable %}<div class="button-row">{{ act(e.id, base ~ "/guests/" ~ g.person.id ~ "/remove", "Take off the call", "button small", confirm="Take " ~ g.person.name ~ " off this call?") }}</div>{% endif %}
+{% if g.removable %}<div class="button-row">{{ act(e.id, base ~ "/guests/" ~ g.person.id ~ "/remove", "Take off the call", "button small danger", confirm="Take " ~ g.person.name ~ " off this call?") }}</div>{% endif %}
 {%- endmacro %}
 {% set e = v.event %}{% set tz = v.info.timezone %}{% set base = "/events/" ~ e.id %}
 {#- A guest is in or out, with no details, and sees only what they may do (#38). -#}
@@ -280,14 +282,16 @@
       {% for w in p.info.warnings %}<p class="small warning">{{ w }}</p>{% endfor %}
       {#- Only the late joiner sees which picks miss their own stances or needs (FR-29). -#}
       {% if p.not_for_me %}<p class="small warning">⚠ This proposal doesn't fit your preferences.</p>{% endif %}
-      {#- Two tiers (#212): everyone's vote first, then the coordinator's and admins' quieter overrides. -#}
+      {#- Two tiers (#212): everyone's vote first, then the coordinator's and admins' overrides as
+          secondary buttons (#317). Join late and vote is secondary too: Join late above is the
+          card's one primary. -#}
       {% if v.can.vote or v.can.join_late %}
       <div class="button-row">
         {% if v.can.vote %}
         {% if p.voted %}{{ act(e.id, base ~ "/proposals/" ~ p.info.id ~ "/unvote", "Voted", "button small primary choice", pressed=true) }}
         {% else %}{{ act(e.id, base ~ "/proposals/" ~ p.info.id ~ "/vote", "Vote", "button small primary choice", pressed=false) }}{% endif %}
         {% else %}
-        {{ act(e.id, base ~ "/proposals/" ~ p.info.id ~ "/vote", "Join late and vote", "button small primary", {"join_late": "1"}, confirm=late_prompt) }}
+        {{ act(e.id, base ~ "/proposals/" ~ p.info.id ~ "/vote", "Join late and vote", "button small", {"join_late": "1"}, confirm=late_prompt) }}
         {% endif %}
       </div>
       {% endif %}
@@ -304,8 +308,8 @@
         </span>
         {% if not p.info.mode_chosen %}<span class="small muted">Not chosen yet</span>{% endif %}
         {% endif %}
-        {% if tie %}{{ act(e.id, base ~ "/proposals/" ~ p.info.id ~ "/break-tie", labels.BREAK_TIE, "button quiet", {"run": e.run}, confirm=labels.web_confirm(labels.BREAK_TIE_TITLE, labels.decides_now(p.info.item.name))) }}{% endif %}
-        {% if v.can.lock %}{{ act(e.id, base ~ "/proposals/" ~ p.info.id ~ "/lock", labels.LOCK, "button quiet", confirm=labels.web_confirm(labels.LOCK_TITLE, labels.decides_now(p.info.item.name))) }}{% endif %}
+        {% if tie %}{{ act(e.id, base ~ "/proposals/" ~ p.info.id ~ "/break-tie", labels.BREAK_TIE, "button small", {"run": e.run}, confirm=labels.web_confirm(labels.BREAK_TIE_TITLE, labels.decides_now(p.info.item.name))) }}{% endif %}
+        {% if v.can.lock %}{{ act(e.id, base ~ "/proposals/" ~ p.info.id ~ "/lock", labels.LOCK, "button small", confirm=labels.web_confirm(labels.LOCK_TITLE, labels.decides_now(p.info.item.name))) }}{% endif %}
       </div>
       {% endif %}
     </li>
@@ -449,7 +453,7 @@
         </label>
         {% if v.can.correct_place %}
         <p class="small muted">This corrects the record and messages nobody. History, stats, and ranking use the new place, feedback on the meal moves to it, and the meal's counts and badges follow. People keep their roles if the new way still has them. Something new needs a way: Cook makes it a home meal, and Pickup or Delivery a restaurant.</p>
-        <button type="submit" class="button small">Correct the place</button>
+        <button type="submit" class="button small admin">{{ key_icon() }}Correct the place</button>
         {% else %}
         <p class="small muted">Everyone who's in hears about it before the meal time. People keep their roles if the new way still has them. Something new needs a way: Cook makes it a home meal, and Pickup or Delivery a restaurant.</p>
         <button type="submit" class="button small">Change the place</button>
@@ -513,11 +517,11 @@
 
   {% if v.can.admin and not v.offer and (e.state.is_open or rerun) %}
   <details class="details-form admin-controls">
-    <summary class="small">Admin</summary>
+    <summary class="small">{{ key_icon() }}Admin</summary>
     {% if v.can.move_window %}
     <div class="button-row" role="group" aria-label="Move the {{ 'response' if v.can.move_window.value == 'respond' else 'vote' }} deadline">
       {% for shift, label in labels.SHIFT_LABELS.items() %}
-      {{ act(e.id, base ~ "/admin/deadline", label, "button small", {"window": v.can.move_window.value, "shift": shift}) }}
+      {{ act(e.id, base ~ "/admin/deadline", label, "button small admin", {"window": v.can.move_window.value, "shift": shift}) }}
       {% endfor %}
     </div>
     {% endif %}
@@ -527,11 +531,11 @@
       <label class="field compact"><span>Coordinator</span>
         <select name="member_id"><option value="">{{ labels.NOBODY }}</option>{% for m in v.coordinators %}<option value="{{ m.id }}"{% if v.info.coordinator and v.info.coordinator.id == m.id %} selected{% endif %}>{{ m.name }}</option>{% endfor %}</select>
       </label>
-      <button type="submit" class="button small">Assign</button>
+      <button type="submit" class="button small admin">{{ key_icon() }}Assign</button>
     </form>
     {% endif %}
     {% if rerun %}
-    <div class="button-row">{{ act(e.id, base ~ "/admin/rerun", "Re-run", "button small", confirm="Start this call over? Proposals, votes, and any decision are cleared.") }}</div>
+    <div class="button-row">{{ act(e.id, base ~ "/admin/rerun", "Re-run", "button small admin", confirm="Start this call over? Proposals, votes, and any decision are cleared.") }}</div>
     {% endif %}
   </details>
   {% endif %}
