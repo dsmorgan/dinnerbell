@@ -472,7 +472,13 @@ def test_turn_off_pick_up_drafts_a_card_and_confirm_changes_it_on_preferences(
     saved = submit(
         client,
         "/preferences/settings",
-        {"can_pickup": "on", "can_order": "on", "send_reminders": "on", "feedback_reminder": "on"},
+        {
+            "can_pickup": "on",
+            "can_order": "on",
+            "reminders_form": "2",
+            "send_reminders": "on",
+            "feedback_reminder": "on",
+        },
     )
     assert saved.status_code == 303
     assert 'name="can_pickup" checked' in page(client.get("/preferences"))
