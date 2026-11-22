@@ -53,7 +53,13 @@ def test_every_kind_is_classified_on_purpose() -> None:
     assert set(note.NOTIFICATION_TYPES) == push.PUSHED_KINDS | push.NOT_PUSHED_KINDS
     assert not push.PUSHED_KINDS & push.NOT_PUSHED_KINDS
     assert not push.PUSHED_KINDS & note.UPDATE_KINDS  # edits to Slack messages never push
-    assert {"call_opened", "proposals_ready", "decision_made", "event_cancelled"} == push.CHANNEL_PUSHES
+    assert {
+        "call_opened",
+        "proposals_ready",
+        "picks_shuffled",
+        "decision_made",
+        "event_cancelled",
+    } == push.CHANNEL_PUSHES
     for kind in push.DIRECT_PUSHES:
         cls = note.NOTIFICATION_TYPES[kind]
         assert "recipient_id" in dir(cls) and kind not in push.CHANNEL_PUSHES, kind
@@ -74,6 +80,9 @@ def test_channel_posts_push_to_the_members_they_concern() -> None:
     assert push.audience(note.CallOpened(EVENT, (KIM, SAM, LEE))) == (KIM.id, SAM.id, LEE.id)
     assert push.audience(note.ProposalsReady(EVENT, (), participants=(SAM, KIM))) == (SAM.id, KIM.id)
     assert push.audience(note.DecisionMade(EVENT, DECISION)) == (KIM.id, SAM.id)
+    shuffled = note.PicksShuffled(EVENT, SAM, 2, 1, participants=(KIM, SAM, LEE))
+    assert push.audience(shuffled) == (KIM.id, LEE.id)  # not whoever shuffled
+    assert push.audience(note.PicksShuffled(EVENT, SAM, 2, 1)) == ()  # a row from before participants
     off = note.EventCancelled(EVENT, (KIM,), cancelled_by=SAM, audience=(KIM, SAM, LEE))
     assert push.audience(off) == (KIM.id, LEE.id)  # not whoever called it off
     assert push.audience(note.EventCancelled(EVENT, (KIM, SAM))) == (KIM.id, SAM.id)  # a row from before audience
@@ -105,6 +114,9 @@ def test_muted_reminders_dont_push_but_everything_else_does() -> None:
         ("call_opened", None, None, push.STARTED_AGAIN),  # discarded
         ("proposals_ready", EventState.VOTING, 2, None),
         ("proposals_ready", EventState.DECIDED, 2, push.MOVED_ON),
+        ("picks_shuffled", EventState.VOTING, 2, None),
+        ("picks_shuffled", EventState.DECIDED, 2, push.MOVED_ON),
+        ("picks_shuffled", EventState.VOTING, 3, push.STARTED_AGAIN),
         ("decision_made", EventState.DECIDED, 2, None),
         ("decision_made", EventState.DONE, 2, push.MOVED_ON),
         ("decision_made", EventState.CANCELLED, 2, note.SUPERSEDED_BY_CALL_OFF),
@@ -199,6 +211,7 @@ SAMPLES: dict[str, note.Notification] = {
     for n in (
         note.CallOpened(EVENT, (KIM, SAM)),
         note.ProposalsReady(EVENT, (PICK,), participants=(KIM,)),
+        note.PicksShuffled(EVENT, SAM, 2, 1, participants=(KIM, SAM)),
         note.DecisionMade(EVENT, DECISION),
         note.EventCancelled(EVENT, (KIM,), audience=(KIM,)),
         note.ResponseReminder(EVENT, KIM),
@@ -218,6 +231,7 @@ SAMPLES: dict[str, note.Notification] = {
     )
 }
 """One of each kind that pushes."""
+EVENT_OPENED = note.CallOpened(EVENT, ())
 
 
 def test_every_pushed_kind_has_an_audience_and_its_own_words() -> None:
@@ -234,6 +248,14 @@ def test_every_pushed_kind_has_an_audience_and_its_own_words() -> None:
     assert len(set(titles.values())) == len(titles) - 2 and titles["response_reminder"] in same
     with pytest.raises(ValueError, match="doesn't push"):
         push.message(note.OfferFull(EVENT, KIM, OFFER), NOW)
+
+
+def test_a_shuffle_says_how_many_picks_changed_and_when_voting_closes() -> None:
+    assert push.message(SAMPLES["picks_shuffled"], NOW) == push.PushMessage(
+        "Dinner: new picks", "2 picks changed. Voting closes at 5:15 PM.", "/events/7", push.topic_for(EVENT_OPENED)
+    )
+    one = note.PicksShuffled(replace(EVENT, vote_deadline=None), SAM, 1, 2, participants=(KIM,))
+    assert push.message(one, NOW).body == "1 pick changed."
 
 
 def test_the_new_direct_messages_say_what_happened_to_the_member() -> None:
@@ -332,6 +354,8 @@ def test_urgency_and_one_topic_per_call_run() -> None:
     assert set(topic) <= set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
     assert push.topic_for(note.EventCancelled(EVENT)) == topic  # a call off replaces "are you in?"
     assert push.topic_for(note.ProposalsReady(EVENT, ())) == topic == push.topic_for(note.DecisionMade(EVENT, DECISION))
+    assert push.topic_for(SAMPLES["picks_shuffled"]) == topic  # a shuffle replaces "time to vote"
+    assert push.message(SAMPLES["picks_shuffled"], NOW).tag == topic
     assert push.topic_for(note.CallOpened(replace(EVENT, run=3), ())) != topic
     for direct in push.DIRECT_PUSHES:  # an offline device keeps every one that asks something
         assert push.topic_for(SAMPLES[direct]) is None, direct

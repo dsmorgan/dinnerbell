@@ -43,7 +43,13 @@ DIRECT_PUSHES = frozenset(
 )
 """Direct messages that push to a member on **Web app** or **Both** (spec 6.15, "What pushes")."""
 CHANNEL_PUSHES = frozenset(
-    {note.CallOpened.kind, note.ProposalsReady.kind, note.DecisionMade.kind, note.EventCancelled.kind}
+    {
+        note.CallOpened.kind,
+        note.ProposalsReady.kind,
+        note.PicksShuffled.kind,
+        note.DecisionMade.kind,
+        note.EventCancelled.kind,
+    }
 )
 """Channel posts that push to the web-app members they concern."""
 PUSHED_KINDS = DIRECT_PUSHES | CHANNEL_PUSHES
@@ -61,7 +67,6 @@ NOT_PUSHED_KINDS = frozenset(
         # Channel posts nobody acts on from a phone, or that spec 6.15 doesn't name.
         note.CallAbandoned.kind,
         note.OfferPosted.kind,
-        note.PicksShuffled.kind,
         note.ScheduleChanged.kind,
         # Direct messages about offers, which aren't calls a phone acts on.
         note.OfferFull.kind,
@@ -83,8 +88,8 @@ def audience(notification: note.Notification) -> tuple[int, ...]:
     """The members a pushed ``notification`` concerns, before their choices are checked: the
     direct message's recipient (for a guest's, the member answering for them), or a channel
     post's members at the moment it was queued. A call opening: every member it invites. Voting
-    opening and the decision: everyone in. A call off: everyone in or maybe, and the coordinator,
-    but not whoever called it off."""
+    opening and the decision: everyone in. A shuffle: everyone in but whoever shuffled. A call
+    off: everyone in or maybe, and the coordinator, but not whoever called it off."""
     if notification.kind not in PUSHED_KINDS:
         return ()
     if notification.kind in DIRECT_PUSHES:
@@ -97,13 +102,15 @@ def audience(notification: note.Notification) -> tuple[int, ...]:
         people = notification.mentions
     elif isinstance(notification, note.ProposalsReady):
         people = notification.participants
+    elif isinstance(notification, note.PicksShuffled):
+        people = tuple(p for p in notification.participants if p.id != notification.by.id)
     elif isinstance(notification, note.DecisionMade):
         people = tuple(p.member for p in notification.decision.participants)
     elif isinstance(notification, note.EventCancelled):
         by = notification.cancelled_by.id if notification.cancelled_by else None
         everyone = notification.audience if notification.audience is not None else notification.participants
         people = tuple(p for p in everyone if p.id != by)
-    else:  # pragma: no cover - CHANNEL_PUSHES names only the four above
+    else:  # pragma: no cover - CHANNEL_PUSHES names only the five above
         raise ValueError(f"no audience for {notification.kind}")
     return tuple(dict.fromkeys(p.id for p in people))
 
@@ -121,6 +128,7 @@ def wants_push(member: Member, kind: str) -> bool:
 CHANNEL_STEPS: dict[str, frozenset[EventState]] = {
     note.CallOpened.kind: frozenset({EventState.COLLECTING}),
     note.ProposalsReady.kind: frozenset({EventState.VOTING}),
+    note.PicksShuffled.kind: frozenset({EventState.VOTING}),
     note.DecisionMade.kind: frozenset({EventState.DECIDED}),
     note.EventCancelled.kind: frozenset({EventState.CANCELLED}),
 }
@@ -357,6 +365,11 @@ def message(notification: note.Notification, now: datetime) -> PushMessage:
     elif isinstance(notification, note.ProposalsReady):
         title = f"{meal}: time to vote"
         body = f"Voting closes at {at(event.vote_deadline)}." if event.vote_deadline else "Vote for a pick."
+    elif isinstance(notification, note.PicksShuffled):
+        title = f"{meal}: new picks"
+        changed = "1 pick changed" if notification.replaced == 1 else f"{notification.replaced} picks changed"
+        closes = f" Voting closes at {at(event.vote_deadline)}." if event.vote_deadline else ""
+        body = f"{changed}.{closes}"
     elif isinstance(notification, note.DecisionMade):
         decision = notification.decision
         title, body = f"{meal} is decided", f"{decision.proposal.item.name}, at {at(decision.meal_time)}."
@@ -442,7 +455,7 @@ def topic(household_id: int, event_id: int | None, run: int) -> str | None:
 
 def topic_for(notification: note.Notification) -> str | None:
     """The ``Topic`` and notification ``tag`` of a channel post's push, shared by one call's
-    opening, voting, decision, and call off, so a newer one replaces the older both at the push
+    opening, voting, shuffles, decision, and call off, so a newer one replaces the older both at the push
     service and on the lock screen. None for a direct message, so an offline device keeps every
     one that asks something of the member."""
     if notification.kind not in CHANNEL_PUSHES:
