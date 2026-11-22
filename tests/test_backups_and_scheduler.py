@@ -378,3 +378,69 @@ async def test_purge_conversations_job(
     monkeypatch.setattr(runner.retention, "purge_expired_drafts", broken)
     await runner.purge_conversations(job_context)
     assert "assistant draft purge failed" in caplog.text
+
+
+def _fire_times(trigger: Any, start: datetime, end: datetime) -> list[datetime]:
+    """The trigger's fire times from ``start`` to ``end``, as the scheduler computes them: each
+    from the one before, with "now" a second after it."""
+    times: list[datetime] = []
+    previous = None
+    now = start
+    while (fire := trigger.get_next_fire_time(previous, now)) is not None and fire < end:
+        times.append(fire.astimezone(UTC))
+        previous, now = fire, fire.astimezone(UTC) + timedelta(seconds=1)
+    return times
+
+
+@pytest.mark.anyio
+async def test_the_backup_runs_once_on_a_night_without_0330(job_context: runner.JobContext) -> None:
+    """In Europe/Athens, 03:00 to 04:00 doesn't exist on the last Sunday of March (2026-03-29).
+    APScheduler runs the backup once that night, at 01:30 UTC (04:30 on the wall clock)."""
+    import dataclasses
+
+    athens = dataclasses.replace(job_context, zone=ZoneInfo("Europe/Athens"))
+    trigger = (await _started_jobs(runner.build_scheduler(athens)))["nightly_backup"].trigger
+    spring = _fire_times(trigger, datetime(2026, 3, 27, 12, tzinfo=UTC), datetime(2026, 3, 31, 12, tzinfo=UTC))
+    assert spring == [
+        datetime(2026, 3, 28, 1, 30, tzinfo=UTC),
+        datetime(2026, 3, 29, 1, 30, tzinfo=UTC),  # the night without 03:30
+        datetime(2026, 3, 30, 0, 30, tzinfo=UTC),
+        datetime(2026, 3, 31, 0, 30, tzinfo=UTC),
+    ]
+    assert [t.astimezone(athens.zone).date() for t in spring] == [date(2026, 3, d) for d in (28, 29, 30, 31)]
+    # On the night 03:30 happens twice (2026-10-25), it runs twice; the second run finds the
+    # day's copy and writes nothing (test_backup_is_idempotent_per_day).
+    autumn = _fire_times(trigger, datetime(2026, 10, 24, 12, tzinfo=UTC), datetime(2026, 10, 25, 12, tzinfo=UTC))
+    assert [t.astimezone(athens.zone).date() for t in autumn] == [date(2026, 10, 25)] * 2
+
+
+@pytest.mark.anyio
+async def test_a_backup_missed_while_the_host_slept_runs_on_wake(job_context: runner.JobContext) -> None:
+    """A host suspended across 03:30 for longer than the hour's misfire grace the other jobs get
+    wakes with the backup's run time two hours past. It runs then, once, instead of being skipped
+    with nothing in /healthz to show for it."""
+    import asyncio
+
+    from apscheduler.events import EVENT_JOB_EXECUTED, EVENT_JOB_MISSED, JobEvent
+
+    scheduler = runner.build_scheduler(job_context)
+    outcome: asyncio.Queue[int] = asyncio.Queue()
+
+    def record(event: JobEvent) -> None:
+        if event.job_id == "nightly_backup":
+            outcome.put_nowait(event.code)
+
+    scheduler.add_listener(record, EVENT_JOB_EXECUTED | EVENT_JOB_MISSED)
+    scheduler.start(paused=True)
+    try:
+        for job in scheduler.get_jobs():
+            if job.id != "nightly_backup":
+                job.remove()
+        overslept = datetime.now(UTC) - timedelta(hours=2)
+        scheduler.modify_job("nightly_backup", next_run_time=overslept)
+        scheduler.resume()
+        assert await asyncio.wait_for(outcome.get(), timeout=10) == EVENT_JOB_EXECUTED
+    finally:
+        await runner.stop_scheduler(scheduler, job_context)
+    assert len(backups.existing_backups(job_context.backup_dir)) == 1
+    assert job_context.state.backup_failing is False

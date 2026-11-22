@@ -118,7 +118,7 @@ A copy of production's data tests migrations and features against real history. 
    podman volume exists dinnerbell_dinnerbell-data && podman volume exists dinnerbell-test_dinnerbell-data && echo ok
    ```
 
-3. List production's backups, and pick the newest nightly `dinnerbell-YYYY-MM-DD.db` or a `pre-upgrade-*.db`. Replace `X.Y.Z` with the release production runs; its image is already on the host.
+3. List production's backups, and pick the newest nightly `dinnerbell-YYYY-MM-DD.db` or a `pre-upgrade-*.db`. `scrub-test` migrates the copy without a `pre-migrate-*` backup of its own, because the production backup you pick here is the original. Replace `X.Y.Z` with the release production runs; its image is already on the host.
 
    ```sh
    podman run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
@@ -211,7 +211,7 @@ Use this checklist for every release: it runs the exact release on a fresh copy 
 11. Check production's footer and `/healthz`.
 12. Stop test: `deploy/dinnerbell-test down`.
 
-If the rehearsal fails, stop test, and check out (or extract) the release production runs; production hasn't changed. If production misbehaves after step 10, [roll back](setup.md#roll-back) with the newest pre-upgrade backup. If the host reboots during the rehearsal with `dinnerbell-test.service` enabled, test restarts on its default tag, so start again from step 5.
+If the rehearsal fails, stop test, and check out (or extract) the release production runs; production hasn't changed. If production misbehaves after step 10, [roll back](setup.md#roll-back) with the newest `pre-upgrade-*` or `pre-migrate-*` backup. If the host reboots during the rehearsal with `dinnerbell-test.service` enabled, test restarts on its default tag, so start again from step 5.
 
 ## Troubleshoot the test instance
 

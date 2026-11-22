@@ -10,7 +10,7 @@ from datetime import UTC, date, datetime, timedelta
 import pytest
 
 from dinnerbell.domain import sessions
-from dinnerbell.domain.backups import backups_to_delete, backups_to_keep
+from dinnerbell.domain.backups import ONE_OFF_COPIES, backups_to_delete, backups_to_keep, one_offs_to_delete
 from dinnerbell.domain.identity import Allow, IdentityClaims, Refusal, Refuse, decide_sign_in
 from dinnerbell.domain.members import (
     _EMAIL_PATTERN,
@@ -228,3 +228,22 @@ class TestBackupRetention:
         days = [end - timedelta(days=i) for i in range(200)]
         kept = backups_to_keep(days)
         assert backups_to_keep(kept) == kept  # pruning twice changes nothing
+
+    def test_one_offs_keep_the_newest_five_of_each_kind(self) -> None:
+        upgrades = {
+            f"pre-upgrade-0.{i}.0-202610{i + 10:02d}T120000Z.db": ("upgrade", f"202610{i + 10:02d}T120000Z")
+            for i in range(8)
+        }
+        resets = {"pre-reset-0.3.0-20240101T000000Z.db": ("reset", "20240101T000000Z")}
+        doomed = one_offs_to_delete(upgrades | resets)
+        assert ONE_OFF_COPIES == 5
+        # The three oldest upgrades go; the one reset is the newest of its kind, however old.
+        assert doomed == {
+            "pre-upgrade-0.0.0-20261010T120000Z.db",
+            "pre-upgrade-0.1.0-20261011T120000Z.db",
+            "pre-upgrade-0.2.0-20261012T120000Z.db",
+        }
+        assert (
+            one_offs_to_delete({name: kind for name, kind in (upgrades | resets).items() if name not in doomed})
+            == set()
+        )

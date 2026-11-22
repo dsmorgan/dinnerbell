@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The ``dinnerbell`` command: ``serve``, ``migrate``, ``init``, ``config``, ``catalog``, ``slack``,
-``reset-history``, and, on a test instance only, ``scrub-test`` and ``discard-call``."""
+"""The ``dinnerbell`` command: ``serve``, ``migrate``, ``backup``, ``init``, ``config``, ``catalog``,
+``slack``, ``reset-history``, and, on a test instance only, ``scrub-test`` and ``discard-call``."""
 
 from __future__ import annotations
 
@@ -50,7 +50,19 @@ def _parser() -> argparse.ArgumentParser:
     serve = commands.add_parser("serve", help="migrate the database, then run the web app and scheduler")
     serve.add_argument("--host", default="0.0.0.0", help="address to listen on (default: 0.0.0.0)")  # noqa: S104 container
     serve.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"port (default: {DEFAULT_PORT})")
-    commands.add_parser("migrate", help="upgrade the database schema and exit")
+    commands.add_parser(
+        "migrate",
+        help="upgrade the database schema and exit",
+        description="Upgrade the database schema and exit. If the database needs migrating, first back it up "
+        "to backups/pre-migrate-FROM-TO-TIME.db, and stop if the backup fails. serve does the same.",
+    )
+    commands.add_parser(
+        "backup",
+        help="back up the database now, such as before an upgrade",
+        description="Copy the database to backups/pre-upgrade-VERSION-TIME.db, check the copy with SQLite's "
+        "quick_check, flush it to disk, and print its path. Changes nothing else, and never migrates. Run it in "
+        "the running container.",
+    )
     init_cli.add_parser(commands)
     config = commands.add_parser("config", help="configuration tools")
     config_commands = config.add_subparsers(dest="config_command", required=True, metavar="COMMAND")
@@ -204,9 +216,23 @@ def _slack_preview(kind: str | None, base_url: str) -> int:
     return 0
 
 
-def _migrate(settings: Settings) -> bool:
+MIGRATE_BACKS_UP = frozenset({"serve", "migrate"})
+"""The commands that back up a database that needs migrating, before they migrate it. The others
+that migrate either back up first anyway (reset-history) or run on test (scrub-test, discard-call),
+whose copy of production's data comes from a backup."""
+
+
+def _migrate(settings: Settings, *, back_up: bool = False) -> bool:
+    from dinnerbell.services.backups import MigrationBackupFailed, backup_before_migrating
+    from dinnerbell.services.clock import utc_now
+
     try:
+        if back_up:
+            backup_before_migrating(settings.database_path, settings.backup_dir, now=utc_now())
         run_migrations(settings.sync_database_url, settings.database_path)
+    except MigrationBackupFailed as exc:
+        log.critical(str(exc))
+        return False
     except (SchemaTooNewError, IntegrityCheckFailed, MigrationLocked, UpgradeBlocked) as exc:
         log.critical(str(exc))
         return False
@@ -420,6 +446,31 @@ def _backup_before_reset(settings: Settings) -> Path | None:
     return backup
 
 
+def _backup_now(settings: Settings) -> int:
+    """Back up the database as ``pre-upgrade-VERSION-TIME.db``, checked, without migrating it."""
+    import sqlite3
+
+    from dinnerbell.services.backups import BackupCheckFailed, one_off_name, run_one_off_backup
+    from dinnerbell.services.clock import utc_now
+
+    if not settings.database_path.is_file():
+        print(f"No database at {settings.database_path}. Nothing to back up.", file=sys.stderr)
+        return 1
+    name = one_off_name("upgrade", __version__, utc_now())
+    try:
+        backup = run_one_off_backup(
+            settings.database_path, settings.backup_dir, name, require_tables=("alembic_version",)
+        )
+    except BackupCheckFailed as exc:
+        print(f"Can't back up the database: {exc}.", file=sys.stderr)
+        return 1
+    except (OSError, sqlite3.Error) as exc:
+        print(f"Can't back up the database ({type(exc).__name__}).", file=sys.stderr)
+        return 1
+    print(f"Backed up the database to {backup}")
+    return 0
+
+
 def _reset_history(settings: Settings, backup: Path) -> int:
     from sqlalchemy.exc import SQLAlchemyError
 
@@ -522,6 +573,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _command(args: argparse.Namespace, settings: Settings) -> int:
     """Run a command that needs the database, once logging is configured."""
     os.umask(PRIVATE_UMASK)
+    if args.command == "backup":  # never migrates: it backs up the database as the running release left it
+        return _backup_now(settings)
     if args.command == "scrub-test" and not _confirm_scrub(settings, args.yes):
         return 1
     backup: Path | None = None
@@ -532,7 +585,7 @@ def _command(args: argparse.Namespace, settings: Settings) -> int:
         backup = _backup_before_reset(settings)
         if backup is None:
             return 1
-    if not _migrate(settings):
+    if not _migrate(settings, back_up=args.command in MIGRATE_BACKS_UP):
         return 1
     if args.command == "serve":
         _serve(settings, args.host, args.port)

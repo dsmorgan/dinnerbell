@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -61,6 +62,35 @@ def head_revision() -> str:
     config = Config()
     config.set_main_option("script_location", str(SCRIPT_LOCATION))
     return ScriptDirectory.from_config(config).get_current_head() or "base"
+
+
+def pending_upgrade(database_path: Path) -> tuple[str, str] | None:
+    """(the database's revision, this build's newest) when the SQLite file at ``database_path`` is
+    at a revision this build knows, older than its newest: the migrations ``run_migrations`` would
+    run. None for a missing or empty file, a database with no recorded revision, one already
+    current, or one at a revision this build doesn't know. Opens the file read-only."""
+    if not database_path.is_file() or database_path.stat().st_size == 0:
+        return None
+    database = sqlite3.connect(f"{database_path.resolve().as_uri()}?mode=ro", uri=True)
+    try:
+        if (
+            database.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'alembic_version'").fetchone()
+            is None
+        ):
+            return None
+        revisions = [str(row[0]) for row in database.execute("SELECT version_num FROM alembic_version")]
+    finally:
+        database.close()
+    head = head_revision()
+    if len(revisions) != 1 or revisions[0] == head:
+        return None
+    config = Config()
+    config.set_main_option("script_location", str(SCRIPT_LOCATION))
+    try:
+        known = ScriptDirectory.from_config(config).get_revision(revisions[0])
+    except CommandError:
+        known = None
+    return None if known is None else (revisions[0], head)
 
 
 def _check_known(connection: Connection, script: ScriptDirectory) -> None:

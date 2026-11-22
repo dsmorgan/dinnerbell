@@ -212,7 +212,7 @@ def test_the_cli_configures_logs_with_the_label(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setenv("DINNERBELL_INSTANCE_LABEL", LABEL)
     seen: list[tuple[str, str]] = []
     monkeypatch.setattr(cli, "configure_logging", lambda level, instance="": seen.append((level, instance)))
-    monkeypatch.setattr(cli, "_migrate", lambda settings: True)
+    monkeypatch.setattr(cli, "_migrate", lambda settings, **options: True)
     monkeypatch.setattr(uvicorn, "run", lambda app, **kwargs: None)
     assert cli.main(["serve"]) == 0
     assert seen == [("INFO", LABEL)]
