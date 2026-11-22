@@ -85,7 +85,8 @@ LATE_MENU = "late_menu"
 Each option's value is a ``late_value``."""
 SHUFFLE = "shuffle"
 """**Shuffle proposals** in the proposals message footer (#87): the coordinator's. Its value is a
-``card_value``, naming the run the message showed."""
+``shuffle_value``, naming the run the message showed and the shuffles used so far (#330). A
+``card_value``, without the count, stays for messages drawn before it."""
 BREAK_TIE = "break_tie"
 """**Break the tie** on a proposals message posted before ``PICK_MENU`` (#214), which still works.
 Its value is a ``proposal_value``."""
@@ -193,6 +194,7 @@ _PAIR = re.compile(r"^([0-9]{1,19}):([0-9]{1,19})$")
 _MENU = re.compile(r"(cancel|close|move):([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
 _WINDOW = re.compile(r"(respond|vote):([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
 _CARD = re.compile(r"([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
+_SHUFFLE = re.compile(r"([1-9][0-9]{0,18}):([1-9][0-9]{0,18})(?::(0|[1-9][0-9]{0,2}))?")
 _GUEST = re.compile(r"([1-9][0-9]{0,18}):([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
 _WAY = re.compile(
     r"(pickup|delivery|either-pickup|either-delivery):([1-9][0-9]{0,18}):([1-9][0-9]{0,18}):([1-9][0-9]{0,18})"
@@ -296,6 +298,25 @@ def parse_card(value: object) -> tuple[int, int]:
     if match is None:
         raise BadValue("not a card value")
     return _row_id(match.group(1)), _row_id(match.group(2))
+
+
+def shuffle_value(event_id: int, run: int, shuffles: int | None) -> str:
+    """``<id>:<run>:<shuffles>``: Shuffle on a proposals message drawn after ``shuffles`` shuffles
+    of that run, so a second tap of it is refused (#330). ``card_value`` when the count isn't
+    known, as on a message queued before it was."""
+    if shuffles is None:
+        return card_value(event_id, run)
+    return f"{event_id}:{run}:{shuffles}"
+
+
+def parse_shuffle(value: object) -> tuple[int, int, int | None]:
+    """The event ID, the run, and the shuffle count, exactly as ``shuffle_value`` writes them; a
+    ``card_value`` from a message drawn before the count was in it gives None for the count."""
+    match = _SHUFFLE.fullmatch(value) if isinstance(value, str) else None
+    if match is None:
+        raise BadValue("not a shuffle value")
+    count = match.group(3)
+    return _row_id(match.group(1)), _row_id(match.group(2)), None if count is None else int(count)
 
 
 class LateSwitch(StrEnum):

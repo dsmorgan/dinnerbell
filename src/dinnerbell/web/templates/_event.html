@@ -320,7 +320,7 @@
   {% if v.can.shuffle %}
   <div class="button-row shuffle-row" role="group" aria-label="Coordinator actions for the proposals">
     <span class="coordinator-label">Coordinator</span>
-    {{ act(e.id, base ~ "/shuffle", labels.SHUFFLE, "button small", {"run": e.run}, confirm=labels.web_confirm(labels.SHUFFLE_TITLE, labels.SHUFFLE_EFFECT)) }}
+    {{ act(e.id, base ~ "/shuffle", labels.SHUFFLE, "button small", {"run": e.run, "shuffles": e.shuffles}, confirm=labels.web_confirm(labels.SHUFFLE_TITLE, labels.SHUFFLE_EFFECT)) }}
     <span class="small muted">{{ v.shuffles_left }} left</span>
   </div>
   {% endif %}

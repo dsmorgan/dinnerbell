@@ -621,7 +621,8 @@ def proposals_message(notification: note.ProposalsReady | note.ProposalsUpdated,
         footer.append(button("Add proposal", ids.ADD_PROPOSAL, ids.event_value(event.id)))
         if notification.shuffles_left:
             shuffle = confirm(labels.SHUFFLE_TITLE, labels.SHUFFLE_EFFECT, labels.SHUFFLE_SUBMIT)
-            footer.append(button(labels.SHUFFLE, ids.SHUFFLE, ids.card_value(event.id, event.run), confirm=shuffle))
+            value = ids.shuffle_value(event.id, event.run, notification.shuffles)
+            footer.append(button(labels.SHUFFLE, ids.SHUFFLE, value, confirm=shuffle))
     footer.append(_web_button(ctx, event))
     blocks.append(actions(*footer, block_id="more"))
     text = f"Proposals for {_slot(event)} on {day_label(event.day)}: " + ", ".join(

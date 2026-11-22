@@ -84,7 +84,15 @@ from dinnerbell.domain.members import Member
 from dinnerbell.services import call_context as cc
 from dinnerbell.services import calls, coordinator, lifecycle
 from dinnerbell.services.assistant.acting import ToolRefusal
-from dinnerbell.services.assistant.call_drafts import NOTHING_TO_DO, ActionConfirmed, DraftSpec, find_pick, pick_name
+from dinnerbell.services.assistant.call_drafts import (
+    NOTHING_TO_DO,
+    ActionConfirmed,
+    DraftSpec,
+    check_same_pick,
+    find_pick,
+    pick_name,
+    pick_payload,
+)
 from dinnerbell.services.assistant.candidates import CallRef, call_basics
 from dinnerbell.services.call_context import CallContext, load
 from dinnerbell.services.calls import handoff_target
@@ -333,7 +341,7 @@ async def decide(
         raise EventRuleViolation(coordinator.NOT_TIED, code="not_tied")
     shown = plain(shown)
     when, slot = _words(event, today)
-    payload: dict[str, Any] = {"proposal_id": pick.id, "name": shown, "mode": pick.mode.value, "tie": tie}
+    payload: dict[str, Any] = {**pick_payload(pick), "name": shown, "mode": pick.mode.value, "tie": tie}
     named: dict[AssignmentRole, str] = {}
     way: Mode | None = None
     if roles.any:
@@ -653,7 +661,7 @@ async def confirm(
         when, slot = _words(event, today)
         run = draft.run
         if draft.kind is DraftKind.DECIDE:
-            proposal_id, roles = int(payload["proposal_id"]), _roles_named(payload)
+            proposal_id, roles = check_same_pick(await load(db, event), payload).id, _roles_named(payload)
             try:
                 if payload["tie"]:
                     await coordinator.break_tie(db, actor, event.id, proposal_id, run=run, roles=roles, now=now)

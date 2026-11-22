@@ -598,13 +598,25 @@ def who_is_in(ctx: CallContext) -> tuple[note.PersonInfo, ...]:
 
 def proposals_updated(ctx: CallContext) -> note.ProposalsUpdated:
     return note.ProposalsUpdated(
-        event_info(ctx), proposals(ctx), ctx.head_count, late_joiners(ctx), who_is_in(ctx), shuffles_left(ctx)
+        event_info(ctx),
+        proposals(ctx),
+        ctx.head_count,
+        late_joiners(ctx),
+        who_is_in(ctx),
+        shuffles_left(ctx),
+        ctx.event.shuffles,
     )
 
 
 def proposals_ready(ctx: CallContext) -> note.ProposalsReady:
     return note.ProposalsReady(
-        event_info(ctx), proposals(ctx), ctx.head_count, late_joiners(ctx), who_is_in(ctx), shuffles_left(ctx)
+        event_info(ctx),
+        proposals(ctx),
+        ctx.head_count,
+        late_joiners(ctx),
+        who_is_in(ctx),
+        shuffles_left(ctx),
+        ctx.event.shuffles,
     )
 
 

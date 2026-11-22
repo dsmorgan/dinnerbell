@@ -479,10 +479,10 @@ NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
     "late_join_changed": lambda: note.LateJoinChanged(VOTING, KIM, False, ALEX, VOTING.respond_deadline),
     "late_join_changed_back": lambda: note.LateJoinChanged(VOTING, KIM, True, ALEX, VOTING.respond_deadline),
     "proposals_updated_tied": lambda: note.ProposalsUpdated(
-        VOTING, TIED_PROPOSALS, 3, participants=(ALEX, SAM), shuffles_left=3
+        VOTING, TIED_PROPOSALS, 3, participants=(ALEX, SAM), shuffles_left=3, shuffles=0
     ),
     "proposals_updated_shuffled": lambda: note.ProposalsUpdated(
-        SHUFFLED_VOTING, PROPOSALS, 3, participants=(ALEX, SAM), shuffles_left=2
+        SHUFFLED_VOTING, PROPOSALS, 3, participants=(ALEX, SAM), shuffles_left=2, shuffles=1
     ),
     "decision_made_tie": lambda: note.DecisionMade(DECIDED, TIE_DECISION),
     "decision_made_roles_pending": lambda: note.DecisionMade(DECIDED, PENDING_DECISION),

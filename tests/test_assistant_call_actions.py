@@ -35,7 +35,7 @@ from dinnerbell.domain.events import (
 from dinnerbell.domain.guests import GuestInput
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Member
-from dinnerbell.services import calls, guests, offers
+from dinnerbell.services import calls, coordinator, guests, offers
 from dinnerbell.services.assistant import admin, call_drafts, drafts, tools
 from dinnerbell.services.assistant.call_drafts import ActionConfirmed
 from dinnerbell.services.assistant.conversation import Assistant, converse
@@ -368,6 +368,55 @@ async def test_a_vote_is_refused_when_the_service_would_refuse_it(house: House) 
     not_in = await tool(house, "draft_vote", vote_args("Siam Garden", vote=False), who="Kim")
     assert not_in == ToolResult("Only people who are in can vote.", is_error=True)
     assert await rows(house) == []
+
+
+async def set_payload(house: House, draft: int, **changes: Any) -> None:
+    """Change a stored draft's payload, keys set to None removed, as an older or stale draft has it."""
+    async with house.sessionmaker() as db:
+        row = await db.get(AssistantDraftRow, draft)
+        assert row is not None
+        row.payload = {k: v for k, v in (dict(row.payload) | changes).items() if v is not None}
+        await db.commit()
+
+
+async def test_a_vote_confirmed_after_a_shuffle_is_refused_and_votes_for_nothing(house: House) -> None:
+    """Kim drafts a vote for a pick; Alex, an admin, shuffles every pick away; Kim confirms (#330).
+    The card named a place that isn't a pick anymore, so nothing is voted for and the draft stays
+    unused."""
+    for n in range(1, 4):
+        await house.add_item(f"Place {n}", Mode.PICKUP, cuisine="Thai")
+    event_id = await to_voting(house)
+    ctx = await house.context(event_id)
+    first = min(ctx.picks, key=lambda p: p.rank)
+    name = ctx.items[first.item_id or 0].name
+    draft = draft_id(await tool(house, "draft_vote", vote_args(name, mode="pickup"), who="Kim"))
+    await act(house, coordinator.shuffle, house["Alex"], event_id, run=1)
+    assert first.id not in {p.id for p in (await house.context(event_id)).picks}
+    with pytest.raises(EventRuleViolation, match=re.escape(call_drafts.PICK_CHANGED)):
+        await confirm(house, "Kim", draft)
+    assert not any((await house.context(event_id)).votes.values())
+    [row] = await rows(house)
+    assert row.used_at is None
+
+
+async def test_a_vote_whose_pick_now_names_another_place_is_refused(house: House) -> None:
+    """Confirm checks the pick's place, not only its ID: a draft whose ID now names another place,
+    as a pick's ID could before revision 0045, votes for nothing. A draft written before the place
+    was in it is checked by ID alone."""
+    event_id = await to_voting(house)
+    picks = {p.item_id: p for p in (await house.context(event_id)).picks}
+    siam, taqueria = house.items["Siam Garden"].id, house.items["Taqueria"].id
+    assert {siam, taqueria} <= set(picks)
+    draft = draft_id(await tool(house, "draft_vote", vote_args("Siam Garden"), who="Kim"))
+    await set_payload(house, draft, item_id=taqueria)
+    with pytest.raises(EventRuleViolation, match=re.escape(call_drafts.PICK_CHANGED)):
+        await confirm(house, "Kim", draft)
+    assert not any((await house.context(event_id)).votes.values())
+
+    older = draft_id(await tool(house, "draft_vote", vote_args("Siam Garden"), who="Kim"))
+    await set_payload(house, older, item_id=None)
+    await confirm(house, "Kim", older)
+    assert house["Kim"].id in (await house.context(event_id)).votes[picks[siam].id]
 
 
 # Suggestions ------------------------------------------------------------------------------------

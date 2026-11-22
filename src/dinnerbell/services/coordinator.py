@@ -58,6 +58,7 @@ from dinnerbell.domain.events import (
     check_can_move_decision_time,
     check_can_set_way,
     check_can_shuffle,
+    check_expected_shuffles,
     check_run,
     default_roles,
     friendly,
@@ -137,7 +138,15 @@ class Shuffled:
     shuffles_left: int
 
 
-async def shuffle(db: AsyncSession, actor: Member, event_id: int, *, run: int | None = None, now: datetime) -> Shuffled:
+async def shuffle(
+    db: AsyncSession,
+    actor: Member,
+    event_id: int,
+    *,
+    run: int | None = None,
+    shuffles: int | None = None,
+    now: datetime,
+) -> Shuffled:
     """**Shuffle picks**: redraw the ranked picks (``domain.events.shuffle_candidates``), with
     the next seed (``ranking_seed(..., shuffle=n)``), at most ``MAX_SHUFFLES`` times a call.
 
@@ -150,12 +159,17 @@ async def shuffle(db: AsyncSession, actor: Member, event_id: int, *, run: int | 
     comes back keeps its row and isn't counted as replaced. A shuffle that would change nothing
     is refused and isn't counted, and records nothing. The proposals message says who shuffled
     and how many were replaced, and a note goes in the call's thread. Audited as
-    ``event.shuffled``; logged as ``shuffle`` with the counts."""
+    ``event.shuffled``; logged as ``shuffle`` with the counts.
+
+    ``run``, when given, is the run the person saw (``check_run``), and ``shuffles`` the shuffle
+    count their button was drawn at (``check_expected_shuffles``, #330): a second tap of the same
+    button, or two people tapping together, is refused and changes nothing."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
         await guest_rules.gate(db, event, actor, GuestAction.COORDINATE)
         check_run(event, run)
         ctx = await cc.load(db, event)
         capacity = check_can_shuffle(event, actor)
+        check_expected_shuffles(event, shuffles)
         out = cc.shuffle_picks(ctx)
         if not out:
             raise EventRuleViolation(NOTHING_TO_SHUFFLE, code="nothing_to_shuffle")

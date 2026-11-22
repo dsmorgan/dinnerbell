@@ -455,7 +455,11 @@ class SuggestionRow(Base):
 
 class ProposalRow(Base):
     """A candidate for a call: a catalog item, or free text with a cuisine that becomes a
-    catalog item only if it wins (FR-13). ``reasons`` is a JSON list of sentences."""
+    catalog item only if it wins (FR-13). ``reasons`` is a JSON list of sentences.
+
+    AUTOINCREMENT, because a shuffle or a re-run deletes picks and adds new ones (#330), and
+    SQLite would otherwise give the new picks the deleted ones' IDs. Slack buttons, page forms,
+    and assistant drafts name a pick by ID, so a tap on a stale message would act on another place."""
 
     __tablename__ = "proposal"
     __table_args__ = (
@@ -463,6 +467,7 @@ class ProposalRow(Base):
         CheckConstraint("(item_id IS NULL) <> (free_text IS NULL)", name="one_target"),
         CheckConstraint("mode IN ('cook', 'pickup', 'delivery')", name="mode"),
         CheckConstraint("source IN ('system', 'coordinator', 'member')", name="source"),
+        {"sqlite_autoincrement": True},
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
