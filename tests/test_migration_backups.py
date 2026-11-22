@@ -51,7 +51,7 @@ def test_migrate_backs_up_a_database_that_needs_migrating(behind: Settings, capl
         assert cli._command(argparse.Namespace(command="migrate"), behind) == 0
     (name,) = files_in(behind.backup_dir)
     to = head_revision().split("_")[0]
-    assert re.fullmatch(rf"pre-migrate-0040-to-{to}-\d{{8}}T\d{{6}}Z\.db", name)
+    assert re.fullmatch(rf"pre-migrate-0040-to-{to}-\d{{8}}T\d{{6}}\.\d{{6}}Z\.db", name)
     copy = behind.backup_dir / name
     assert revision(copy) == OLD  # the database as the upgrade found it
     with sqlite3.connect(copy) as db:
@@ -152,15 +152,52 @@ def one_off(folder: Path, name: str) -> Path:
     return path
 
 
-def test_pruning_keeps_the_newest_five_of_each_one_off_kind(migrated: Settings) -> None:
+def test_pruning_keeps_the_newest_five_migration_backups_and_every_other_one_off(migrated: Settings) -> None:
     folder = migrated.backup_dir
     upgrades = [one_off(folder, f"pre-upgrade-0.{i}.0-202611{i + 1:02d}T013000Z.db") for i in range(7)]
-    resets = [one_off(folder, f"pre-reset-0.3.0-2025010{i}T000000Z.db") for i in range(1, 3)]
-    migrations = [one_off(folder, f"pre-migrate-00{i}0-to-0044-202611{i:02d}T010000Z.db") for i in range(1, 7)]
-    unnamed = one_off(folder, "pre-upgrade-before-the-move.db")  # no time in its name: left alone
+    resets = [one_off(folder, f"pre-reset-0.3.0-2025010{i}T000000Z.db") for i in range(1, 8)]
+    migrations = [one_off(folder, f"pre-migrate-00{i}0-to-0044-202611{i:02d}T010000.000000Z.db") for i in range(1, 8)]
+    renamed = one_off(folder, "pre-migrate-0010-to-0044-before-the-move.db")  # no time in its name: left alone
     result = backups.run_backup(migrated.database_path, folder, date(2026, 11, 22), now=NOW)
-    assert sorted(result.deleted) == sorted([*upgrades[:2], migrations[0]])
-    assert all(p.exists() for p in [*upgrades[2:], *resets, *migrations[1:], unnamed, result.path])
+    assert sorted(result.deleted) == migrations[:2]
+    assert all(p.exists() for p in [*upgrades, *resets, *migrations[2:], renamed, result.path])
+
+
+def test_two_migration_backups_in_the_same_second_get_different_names(migrated: Settings) -> None:
+    """Regression: ``migrate`` run twice within a second, or while ``serve`` starts, picked the
+    same name, and the second backup failed with FileExistsError and refused to migrate."""
+    first = backups.migration_backup_name(OLD, head_revision(), NOW)
+    second = backups.migration_backup_name(OLD, head_revision(), NOW.replace(microsecond=1))
+    assert first != second and first.startswith("pre-migrate-0040-to-")
+    for name in (first, second):
+        backups.run_one_off_backup(migrated.database_path, migrated.backup_dir, name)
+    assert files_in(migrated.backup_dir) == [first, second]
+    assert set(backups.existing_migration_backups(migrated.backup_dir)) == {first, second}
+
+
+def test_migrate_twice_in_a_row_backs_up_both_times(behind: Settings, settings: Settings) -> None:
+    """Two migrations from the same revision in quick succession, as the migration tests run
+    them: each takes its own backup."""
+    assert cli._command(argparse.Namespace(command="migrate"), behind) == 0
+    engine = migration_engine(behind.sync_database_url)
+    try:
+        with migrating(engine) as connection:
+            command.downgrade(_alembic_config(connection), OLD)
+    finally:
+        engine.dispose()
+    assert cli._command(argparse.Namespace(command="migrate"), behind) == 0
+    assert len(files_in(behind.backup_dir)) == 2
+    assert revision(behind.database_path) == head_revision()
+
+
+def test_a_file_that_is_not_a_database_is_refused_cleanly(settings: Settings, caplog: pytest.LogCaptureFixture) -> None:
+    settings.database_path.parent.mkdir(parents=True, exist_ok=True)
+    settings.database_path.write_bytes(b"not a database " * 300)
+    assert cli._command(argparse.Namespace(command="migrate"), settings) == 1
+    (record,) = [r for r in caplog.records if r.levelno == logging.CRITICAL]
+    assert record.getMessage().startswith(f"Can't read the database at {settings.database_path} (DatabaseError)")
+    assert record.exc_info is None
+    assert files_in(settings.backup_dir) == []
 
 
 def test_a_restart_loop_keeps_only_a_few_migration_backups(behind: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -180,5 +217,5 @@ def test_a_restart_loop_keeps_only_a_few_migration_backups(behind: Settings, mon
     for _ in range(8):
         assert cli._command(argparse.Namespace(command="serve", host="127.0.0.1", port=8013), behind) == 1
     names = files_in(behind.backup_dir)
-    assert len(names) == 5 and names[-1].endswith("T120007Z.db")
+    assert len(names) == 5 and names[-1].endswith("T120007.000000Z.db")
     assert os.stat(behind.database_path).st_size > 0 and revision(behind.database_path) == OLD

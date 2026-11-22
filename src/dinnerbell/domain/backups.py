@@ -1,17 +1,17 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Backup retention: keep the newest N daily copies and the newest copy from each of the last M
-weeks, and the newest few one-off copies of each kind."""
+weeks, and the newest few copies taken before a migration."""
 
 from __future__ import annotations
 
-from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from datetime import date
 
 DAILY_COPIES = 14
 WEEKLY_COPIES = 8
-ONE_OFF_COPIES = 5
-"""How many one-off backups of each kind (``pre-upgrade``, ``pre-reset``, ``pre-migrate``) to keep."""
+MIGRATION_COPIES = 5
+"""How many ``pre-migrate-*`` backups to keep. A migration that fails restarts the container, and
+each start takes one, so they're pruned; ``pre-upgrade-*`` and ``pre-reset-*`` copies never are."""
 
 
 def backups_to_keep(
@@ -39,17 +39,11 @@ def backups_to_delete(backup_dates: Iterable[date], **limits: int) -> set[date]:
     return dates - backups_to_keep(dates, **limits)
 
 
-def one_offs_to_delete(one_offs: Mapping[str, tuple[str, str]], *, keep: int = ONE_OFF_COPIES) -> set[str]:
-    """Return the names of the one-off backups to delete: all but the ``keep`` newest of each kind.
+def migration_backups_to_delete(stamps: Mapping[str, str], *, keep: int = MIGRATION_COPIES) -> set[str]:
+    """Return the names of the ``pre-migrate-*`` backups to delete: all but the ``keep`` newest.
 
-    ``one_offs`` maps each backup's name to its kind, such as ``"upgrade"``, and the UTC time in
-    its name, such as ``"20261023T123005Z"``, which sorts in time order as text.
+    ``stamps`` maps each backup's name to the UTC time in it, such as ``"20261023T123005.000123Z"``,
+    which sorts in time order as text.
     """
-    by_kind: defaultdict[str, list[tuple[str, str]]] = defaultdict(list)
-    for name, (kind, stamp) in one_offs.items():
-        by_kind[kind].append((stamp, name))
-    doomed: set[str] = set()
-    for copies in by_kind.values():
-        copies.sort(reverse=True)
-        doomed.update(name for _, name in copies[keep:])
-    return doomed
+    newest_first = sorted(stamps, key=lambda name: (stamps[name], name), reverse=True)
+    return set(newest_first[keep:])
