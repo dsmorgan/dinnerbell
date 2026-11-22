@@ -33,11 +33,13 @@ LABEL org.opencontainers.image.title="Dinnerbell" \
       org.opencontainers.image.description="Household meal coordination" \
       org.opencontainers.image.licenses="AGPL-3.0-or-later" \
       org.opencontainers.image.source="https://github.com/dsmorgan/dinnerbell"
-# Debian's security fix for zlib (CVE-2026-85091, CVE-2026-76844), which this base digest predates.
-# Pinned so every build gets the same zlib. When Debian replaces this version, the build fails:
-# update the pin, or remove this step if python:3.12-slim has the fix.
+# Debian's security fixes for zlib (CVE-2026-85091, CVE-2026-76844) and glibc (CVE-2026-5435,
+# CVE-2026-19499), which this base digest predates. Pinned so every build gets the same packages.
+# When Debian replaces a version, the build fails: update the pin, or remove it once
+# python:3.12-slim has the fix.
 RUN apt-get update \
  && apt-get install --yes --no-install-recommends zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1 \
+      libc6=2.41-12+deb13u5 libc-bin=2.41-12+deb13u5 \
  && rm -rf /var/lib/apt/lists/*
 # Remove pip and ensurepip's bundled pip wheel: the app runs from /app/.venv, which has none, and
 # nothing in the image installs packages. This keeps pip's advisories out of the image scan.

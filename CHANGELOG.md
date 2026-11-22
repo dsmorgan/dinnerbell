@@ -17,6 +17,10 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 - **`dinnerbell config check` no longer prints warnings that `serve` logs.** Before, `deploy/dinnerbell-test up` printed a `... is set in the environment` warning in your terminal for each secret in `.env.test`, and the service then logged it again. Now the check prints only errors and `Configuration is valid.`, and the warnings appear only in the service's log. A line in the env file that python-dotenv can't parse still shows a warning, because only the check reads the file that way.
 
+### Security
+
+- **The image installs Debian's fixed glibc** (CVE-2026-5435 and CVE-2026-19499, both high). No `python:3.12-slim` digest has it yet, so the image installs `libc6` and `libc-bin` 2.41-12+deb13u5 from Debian until one does, beside the fixed zlib (#236). The first is in deprecated DNS printing functions and the second in `strfmon`; Dinnerbell calls neither, but every program in the image loads glibc.
+
 ### Upgrade notes
 
 - **Migration 0041** adds `member.notify_via`, empty for everyone, for each member's choice of Slack, the web app, or both (#138). Nobody's default is stored: it comes from whether the member is linked to Slack. The web app stays off until an admin turns it on: members see no change, and Slack delivery is unchanged. Admins see a new **Web app** tab on **Admin**. A downgrade to 0040 drops the column and everyone's choice.
