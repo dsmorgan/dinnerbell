@@ -243,6 +243,8 @@ def test_a_member_makes_their_own_code_and_it_shows_once(
     # On a line of its own, never broken, with Copy (app.js shows it where the clipboard works).
     row = response.text.split('<p class="code-row">', 1)[1].split("</p>", 1)[0]
     assert '<button type="button" class="button small" data-copy="issued-code-value" hidden>Copy</button>' in row
+    css = on.get("/static/app.css").text  # .button sets display, so hidden needs its own rule
+    assert "button[hidden], .button[hidden] { display: none; }" in css
     assert code not in on.get("/preferences").text  # never again
     [row] = codes(migrated)
     plain = normalize_code(code)

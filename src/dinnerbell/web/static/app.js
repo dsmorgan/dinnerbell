@@ -500,17 +500,27 @@
   document.addEventListener("click", function (event) {
     var button = event.target instanceof Element ? event.target.closest("button[data-copy]") : null;
     var source = button && document.getElementById(button.getAttribute("data-copy"));
-    if (!source) {
+    if (!source || !navigator.clipboard) {
       return;
     }
-    navigator.clipboard.writeText(source.textContent.trim()).then(
-      function () {
-        button.textContent = "Copied";
-      },
-      function () {
-        button.textContent = "Couldn't copy";
-      }
-    );
+    function say(text) {
+      button.textContent = text;
+      window.setTimeout(function () {
+        button.textContent = "Copy";
+      }, 3000);
+    }
+    try {
+      navigator.clipboard.writeText(source.textContent.trim()).then(
+        function () {
+          say("Copied");
+        },
+        function () {
+          say("Couldn't copy");
+        }
+      );
+    } catch (e) {
+      say("Couldn't copy");
+    }
   });
   showCopyButtons();
   document.addEventListener("htmx:afterSettle", showCopyButtons);

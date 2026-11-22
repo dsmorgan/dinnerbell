@@ -26,7 +26,7 @@
   {#- This device's notifications, on the member's own page only (an admin can't turn them on for
       someone else's device). -#}
   {% if not editing and push_key and not principal.member.is_guest %}
-  <div class="stack" id="notifications" aria-labelledby="this-device-heading" hidden>
+  <div class="stack" id="notifications" role="group" aria-labelledby="this-device-heading" hidden>
     <h3 id="this-device-heading">This device</h3>
     {% include "_push_controls.html" %}
   </div>

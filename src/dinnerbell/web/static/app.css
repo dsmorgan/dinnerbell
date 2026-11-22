@@ -866,5 +866,7 @@ fieldset.card > .button.block { margin-bottom: 0; }
 .member-actions { flex-wrap: wrap; }
 /* Turn on notifications: push.js shows the card, the part that fits this device, and one button
    at a time; inside the installed app, the nudge until the member answers. */
-#notifications[hidden], #notifications p[hidden], #push-nudge[hidden], .push-actions .button[hidden] { display: none; }
+#notifications[hidden], #push-nudge[hidden] { display: none; }
+/* .button sets display, which would beat the hidden attribute (Copy, and push.js's buttons). */
+button[hidden], .button[hidden] { display: none; }
 .push-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
