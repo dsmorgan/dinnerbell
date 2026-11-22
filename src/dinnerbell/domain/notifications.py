@@ -471,6 +471,9 @@ class CallAbandoned(_Notification):
     needs_unmet: bool = False
     """Nothing fit, and it was the dietary needs that ruled out what else would have: say so,
     without saying whose (#38)."""
+    audience: tuple[PersonInfo, ...] = ()
+    """The active members who were in or maybe, maybes the deadline turned out included: whom
+    its push goes to (spec 6.15). Empty on rows queued before it existed."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -650,6 +653,9 @@ class OfferPosted(_Notification):
     offer: OfferInfo
     roster: tuple[RosterEntry, ...] = ()
     head_count: int = 0
+    audience: tuple[PersonInfo, ...] = ()
+    """The active members it's offered to: everyone but the offerer and those away that day,
+    whom its push goes to (spec 6.15). Empty on rows queued before it existed."""
 
 
 @dataclass(frozen=True, slots=True)

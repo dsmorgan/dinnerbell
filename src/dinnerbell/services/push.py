@@ -38,6 +38,10 @@ from dinnerbell.services.web_app import require_web_app, web_app_enabled
 log = logging.getLogger(__name__)
 
 BATCH = 50
+PER_DEVICE = 3
+"""Pushes one device may take in a pass. A device's pushes go out one batch at a time, each
+within ``SEND_DEADLINE``, so without a cap one device with many due, behind a push service
+that hangs, holds the pass for minutes while other devices' pushes wait outside it."""
 LEASE = timedelta(minutes=2)
 """How long a claim lasts. A send times out within 10 seconds, so a batch fits easily."""
 MAX_ATTEMPTS = 8
@@ -177,14 +181,15 @@ async def drain(
     limit: int = BATCH,
     deadline: float = SEND_DEADLINE,
 ) -> PushDrainResult:
-    """Send the pushes that are due, oldest first, ``PARALLEL`` at a time. Safe to run beside
+    """Send the pushes that are due, oldest first, ``PARALLEL`` at a time and at most
+    ``PER_DEVICE`` to each device; the rest wait for the next pass. Safe to run beside
     itself: each row is claimed with a conditional UPDATE before it's sent. Any error with one
     row retries or closes that row and never ends the pass; a row whose claim is lost to a crash
     comes back after ``LEASE``, its attempt counted, and closes after ``MAX_ATTEMPTS``."""
     result = PushDrainResult()
     async with sessionmaker() as db:
         repo = PushRepository(db)
-        waiting = await repo.due(limit, clock())
+        waiting = await repo.due(limit, clock(), per_device=PER_DEVICE)
         await db.rollback()
         while waiting:
             batch, waiting = _one_per_device(waiting)
@@ -340,10 +345,21 @@ async def _stale(db: AsyncSession, queued: QueuedPush, now: datetime) -> str | N
     return EXPIRED if now - queued.created_at > MAX_AGE else None
 
 
-def _lost(queued: QueuedPush) -> None:
-    """The row's claim ran out before it settled, and another drainer may hold it: this one
-    changes nothing more, so a stale claim never counts a strike or deletes a device twice."""
-    log.warning("push claim ran out before it settled", extra=_about(queued))
+async def _lost(db: AsyncSession, queued: QueuedPush) -> None:
+    """The row didn't settle: this drainer changes nothing more, so a stale claim never counts a
+    strike or deletes a device twice. Either the row is gone, deleted while the push was out with
+    its device (notifications turned off, a sign-out, or the switch turned off) or its outbox row
+    (a reset), which is routine, or its claim ran out and another drainer may hold it."""
+    try:
+        gone = not await PushRepository(db).exists(queued.id)
+        await db.rollback()
+    except Exception:
+        await db.rollback()
+        gone = False
+    if gone:
+        log.info("push deleted while it was out; nothing to settle", extra=_about(queued))
+    else:
+        log.warning("push claim ran out before it settled", extra=_about(queued))
 
 
 async def _close(db: AsyncSession, queued: QueuedPush, token: str, clock: Clock, note: str) -> bool:
@@ -351,7 +367,7 @@ async def _close(db: AsyncSession, queued: QueuedPush, token: str, clock: Clock,
     closed = await PushRepository(db).close(queued.id, token, clock(), note)
     await db.commit()
     if not closed:
-        _lost(queued)
+        await _lost(db, queued)
     return closed
 
 
@@ -386,7 +402,7 @@ async def _answer(
     if found is Outcome.SENT:
         if not await repo.sent(queued.id, token, now):
             await db.commit()
-            _lost(queued)
+            await _lost(db, queued)
             return
         await repo.succeeded(subscription_id, now)
         await db.commit()
@@ -456,7 +472,7 @@ async def _retry(
     retried = await repo.retry(queued.id, token, at=now + wait, note=error)
     await db.commit()
     if not retried:
-        _lost(queued)
+        await _lost(db, queued)
         return
     result.retrying += 1
     log.warning("push failed, will retry", extra=_about(queued, attempts=queued.attempts, error=error))

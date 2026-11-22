@@ -21,7 +21,7 @@ from dinnerbell.channels.webpush import encryption, sender, vapid
 from dinnerbell.domain import notifications as note
 from dinnerbell.domain import push
 from dinnerbell.domain.catalog import ItemKind, Mode
-from dinnerbell.domain.events import AssignmentRole, EventState, ProposalSource
+from dinnerbell.domain.events import AssignmentRole, EndReason, EventKind, EventState, ProposalSource, Status
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Capabilities, Member, NotifyVia, Role
 from tests.support.clock import FakeClock
@@ -60,11 +60,21 @@ def test_every_kind_is_classified_on_purpose() -> None:
         "picks_shuffled",
         "decision_made",
         "event_cancelled",
+        "call_abandoned",  # a member without Slack hears there's no vote coming (#332)
+        "offer_posted",  # and about an offer before it closes
     } == push.CHANNEL_PUSHES
     for kind in push.DIRECT_PUSHES:
         cls = note.NOTIFICATION_TYPES[kind]
         assert "recipient_id" in dir(cls) and kind not in push.CHANNEL_PUSHES, kind
-    for kind in ("badges_earned", "monthly_recap", "call_updated", "guest_invited", "offer_full", "link_needed"):
+    for kind in (
+        "badges_earned",
+        "monthly_recap",
+        "schedule_changed",
+        "call_updated",
+        "guest_invited",
+        "offer_full",
+        "link_needed",
+    ):
         assert not push.pushes(kind)
 
 
@@ -88,6 +98,10 @@ def test_channel_posts_push_to_the_members_they_concern() -> None:
     assert push.audience(off) == (KIM.id, LEE.id)  # not whoever called it off
     assert push.audience(note.EventCancelled(EVENT, (KIM, SAM))) == (KIM.id, SAM.id)  # a row from before audience
     assert push.audience(note.CallAbandoned(EVENT, note.EndReason.TOO_FEW)) == ()  # type: ignore[attr-defined]
+    on_own = note.CallAbandoned(EVENT, EndReason.TOO_FEW, audience=(KIM, LEE))
+    assert push.audience(on_own) == (KIM.id, LEE.id)  # everyone who was in or maybe
+    offered = note.OfferPosted(EVENT, OFFER, audience=(KIM, SAM, LEE))
+    assert push.audience(offered) == (SAM.id, LEE.id)  # never whoever offered it
 
 
 def test_only_active_members_on_the_web_app_or_both_want_pushes() -> None:
@@ -123,6 +137,11 @@ def test_muted_reminders_dont_push_but_everything_else_does() -> None:
         ("decision_made", EventState.CANCELLED, 2, note.SUPERSEDED_BY_CALL_OFF),
         ("event_cancelled", EventState.CANCELLED, 2, None),
         ("event_cancelled", EventState.COLLECTING, 3, push.STARTED_AGAIN),  # started again since
+        ("call_abandoned", EventState.ABANDONED, 2, None),
+        ("call_abandoned", EventState.COLLECTING, 3, push.STARTED_AGAIN),  # re-run since
+        ("offer_posted", EventState.COLLECTING, 2, None),
+        ("offer_posted", EventState.DECIDED, 2, push.MOVED_ON),  # its time came
+        ("offer_posted", EventState.CANCELLED, 2, note.SUPERSEDED_BY_CALL_OFF),
     ],
 )
 def test_a_channel_posts_push_goes_stale_with_its_step(
@@ -207,6 +226,9 @@ def test_a_refused_endpoints_host_is_all_that_is_logged() -> None:
 
 OFFER = note.OfferInfo(KIM, ITEM, Mode.PICKUP, NOW, 3, 0)
 PAT = note.PersonInfo(9, "Pat")
+ON_OWN = replace(EVENT, state=EventState.ABANDONED)
+OFFERED = replace(EVENT, id=8, path="/events/8", kind=EventKind.OFFER, slot=Slot.LUNCH)
+SAMS_OFFER = note.OfferInfo(SAM, ITEM, Mode.PICKUP, NOW + timedelta(hours=2), 3, 0)
 SAMPLES: dict[str, note.Notification] = {
     n.kind: n
     for n in (
@@ -229,6 +251,8 @@ SAMPLES: dict[str, note.Notification] = {
         note.LateJoinChanged(EVENT, KIM, False, SAM, NOW),
         note.StartedCallCancelled(EVENT, KIM, SAM),
         note.AssignmentCancelled(EVENT, KIM, (AssignmentRole.COOK,), DECISION, cancelled_by=SAM),
+        note.CallAbandoned(ON_OWN, EndReason.TOO_FEW, 1, audience=(KIM,)),
+        note.OfferPosted(OFFERED, SAMS_OFFER, audience=(KIM, SAM)),
     )
 }
 """One of each kind that pushes."""
@@ -270,6 +294,37 @@ def test_the_new_direct_messages_say_what_happened_to_the_member() -> None:
     guest = note.AssignmentCancelled(EVENT, PAT, (AssignmentRole.PICKUP,), DECISION, via=KIM)
     assert push.audience(guest) == (KIM.id,) and push.message(guest, NOW).body == "Your guest is no longer picking up."
     assert "called off" in push.message(SAMPLES["started_call_cancelled"], NOW).title
+
+
+def test_everyone_on_their_own_says_why_and_replaces_the_calls_earlier_pushes() -> None:
+    shown = push.message(SAMPLES["call_abandoned"], NOW)
+    assert shown == push.PushMessage(
+        "Dinner: you're on your own",
+        "Not enough people were in. There's no group dinner today. Make your own plans.",
+        "/events/7",
+        push.topic_for(EVENT_OPENED),  # the same tag as "Are you in?", which it replaces on the lock screen
+    )
+    assert push.topic_for(SAMPLES["call_abandoned"]) == push.topic(1, 7, 2)
+    nothing_fit = note.CallAbandoned(ON_OWN, EndReason.NO_COVERAGE, audience=(KIM,))
+    assert push.message(nothing_fit, NOW).body.startswith("Nobody was free to cook or fetch any of the picks.")
+    needs = note.CallAbandoned(ON_OWN, EndReason.NO_COVERAGE, needs_unmet=True, audience=(KIM,))
+    assert push.message(needs, NOW).body.startswith("Nothing in the catalog fit everyone's dietary needs.")
+    early = note.CallAbandoned(replace(ON_OWN, day=date(2026, 10, 23)), EndReason.TOO_FEW, audience=(KIM,))
+    assert "no group dinner tomorrow." in push.message(early, NOW).body
+    later = note.CallAbandoned(replace(ON_OWN, day=date(2026, 10, 24)), EndReason.TOO_FEW, audience=(KIM,))
+    assert "no group dinner on Saturday." in push.message(later, NOW).body
+    assert push.ttl(SAMPLES["call_abandoned"], NOW + timedelta(hours=3)) == 24 * 3600  # no deadline left
+
+
+def test_an_offer_names_the_place_the_way_and_the_time_and_opens_the_offer() -> None:
+    shown = push.message(SAMPLES["offer_posted"], NOW)
+    assert (shown.title, shown.body, shown.path) == (
+        "Lunch offer: want in?",
+        "Siam Garden, picked up, at 5:00 PM. Join on its page.",
+        "/events/8",
+    )
+    assert shown.tag == push.topic(1, 8, 2) == push.topic_for(note.EventCancelled(OFFERED))  # its call off replaces it
+    assert push.urgency("offer_posted") == "normal"
 
 
 def payload(notification: note.Notification, now: datetime = NOW) -> dict[str, object]:
@@ -324,6 +379,8 @@ def test_a_push_never_names_anyones_answer_or_note() -> None:
         note.RolesToChoose(EVENT, KIM, DECISION, NOW + timedelta(minutes=15)),
         note.CoordinatorPicked(EVENT, KIM),
         note.FeedbackReminder(EVENT, KIM, "Siam Garden", date(2026, 10, 29)),
+        note.CallAbandoned(ON_OWN, EndReason.TOO_FEW, audience=(KIM, SAM)),
+        note.OfferPosted(OFFERED, SAMS_OFFER, (note.RosterEntry(SAM, Status.IN, note="Zq7x"),), audience=(KIM,)),
     ]
     for notification in every:
         assert notification.kind in push.PUSHED_KINDS

@@ -10,7 +10,7 @@ import base64
 import hashlib
 import json
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from enum import StrEnum
 from typing import Protocol
 from urllib.parse import urlsplit
@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 
 from dinnerbell.domain import notifications as note
 from dinnerbell.domain.catalog import Mode
-from dinnerbell.domain.events import AssignmentRole, EventState
+from dinnerbell.domain.events import AssignmentRole, EndReason, EventState
 from dinnerbell.domain.members import Member, NotifyVia
 
 # What pushes ----------------------------------------------------------------------------------
@@ -49,6 +49,8 @@ CHANNEL_PUSHES = frozenset(
         note.PicksShuffled.kind,
         note.DecisionMade.kind,
         note.EventCancelled.kind,
+        note.CallAbandoned.kind,
+        note.OfferPosted.kind,
     }
 )
 """Channel posts that push to the web-app members they concern."""
@@ -61,12 +63,9 @@ NOT_PUSHED_KINDS = frozenset(
         note.DecisionUpdated.kind,
         note.OfferUpdated.kind,
         note.CallDiscarded.kind,
-        # Badge posts and the recap.
+        # Badge posts, the recap, and schedule changes: nobody acts on them from a phone.
         note.BadgesEarned.kind,
         note.MonthlyRecap.kind,
-        # Channel posts nobody acts on from a phone, or that spec 6.15 doesn't name.
-        note.CallAbandoned.kind,
-        note.OfferPosted.kind,
         note.ScheduleChanged.kind,
         # Direct messages about offers, which aren't calls a phone acts on.
         note.OfferFull.kind,
@@ -89,7 +88,9 @@ def audience(notification: note.Notification) -> tuple[int, ...]:
     direct message's recipient (for a guest's, the member answering for them), or a channel
     post's members at the moment it was queued. A call opening: every member it invites. Voting
     opening and the decision: everyone in. A shuffle: everyone in but whoever shuffled. A call
-    off: everyone in or maybe, and the coordinator, but not whoever called it off."""
+    off: everyone in or maybe, and the coordinator, but not whoever called it off. Everyone on
+    their own: everyone who was in or maybe. An offer: every member it's offered to, never the
+    offerer."""
     if notification.kind not in PUSHED_KINDS:
         return ()
     if notification.kind in DIRECT_PUSHES:
@@ -110,7 +111,11 @@ def audience(notification: note.Notification) -> tuple[int, ...]:
         by = notification.cancelled_by.id if notification.cancelled_by else None
         everyone = notification.audience if notification.audience is not None else notification.participants
         people = tuple(p for p in everyone if p.id != by)
-    else:  # pragma: no cover - CHANNEL_PUSHES names only the five above
+    elif isinstance(notification, note.CallAbandoned):
+        people = notification.audience
+    elif isinstance(notification, note.OfferPosted):
+        people = tuple(p for p in notification.audience if p.id != notification.offer.offerer.id)
+    else:  # pragma: no cover - CHANNEL_PUSHES names only the seven above
         raise ValueError(f"no audience for {notification.kind}")
     return tuple(dict.fromkeys(p.id for p in people))
 
@@ -131,6 +136,8 @@ CHANNEL_STEPS: dict[str, frozenset[EventState]] = {
     note.PicksShuffled.kind: frozenset({EventState.VOTING}),
     note.DecisionMade.kind: frozenset({EventState.DECIDED}),
     note.EventCancelled.kind: frozenset({EventState.CANCELLED}),
+    note.CallAbandoned.kind: frozenset({EventState.ABANDONED}),
+    note.OfferPosted.kind: frozenset({EventState.COLLECTING}),
 }
 """The states a channel post's push still makes sense in: "Are you in?" once the call went to a
 vote, or "It's decided" once it was called off, only confuses."""
@@ -299,7 +306,8 @@ class PushMessage:
     """The page a tap opens, relative to the base URL."""
     tag: str | None = None
     """For a channel post's push, the call's ``topic``: a newer one replaces it on the lock
-    screen. None for a direct message, so a device keeps every one."""
+    screen, as everyone on their own replaces "Are you in?". None for a direct message, so a
+    device keeps every one."""
 
     def payload(self, base_url: str) -> bytes:
         """Declarative Web Push (WebKit): iOS 18.4 and later shows it without the service worker,
@@ -335,6 +343,18 @@ def _roles(roles: tuple[AssignmentRole, ...]) -> str:
 
 
 _WAYS = {Mode.COOK: "Cooked at home", Mode.PICKUP: "Picked up", Mode.DELIVERY: "Ordered for delivery"}
+_ABANDONED = {
+    EndReason.TOO_FEW: "Not enough people were in.",
+    EndReason.NO_COVERAGE: "Nobody was free to cook or fetch any of the picks.",
+}
+
+
+def _day(day: date, zone: ZoneInfo, now: datetime) -> str:
+    """ "today", "tomorrow", or "on Friday": the call's day as a push names it."""
+    today = now.astimezone(zone).date()
+    if day == today:
+        return "today"
+    return "tomorrow" if day == today + timedelta(days=1) else f"on {day:%A}"
 
 
 def message(notification: note.Notification, now: datetime) -> PushMessage:
@@ -375,6 +395,16 @@ def message(notification: note.Notification, now: datetime) -> PushMessage:
         title, body = f"{meal} is decided", f"{decision.proposal.item.name}, at {at(decision.meal_time)}."
     elif isinstance(notification, note.EventCancelled):
         title, body = f"{meal} is called off", f"There's no {lower} call now."
+    elif isinstance(notification, note.CallAbandoned):
+        title = f"{meal}: you're on your own"
+        why = _ABANDONED.get(notification.reason, "The call has ended.")
+        if notification.needs_unmet:
+            why = "Nothing in the catalog fit everyone's dietary needs."
+        body = f"{why} There's no group {lower} {_day(event.day, zone, now)}. Make your own plans."
+    elif isinstance(notification, note.OfferPosted):
+        offer = notification.offer
+        title = f"{meal} offer: want in?"
+        body = f"{offer.item.name}, {_WAYS[offer.mode].lower()}, at {at(offer.at)}. Join on its page."
     elif isinstance(notification, note.AssignmentMade):
         decision = notification.decision
         title = f"{meal}: {whose(notification.via)} {_roles(notification.roles)}"
@@ -455,9 +485,10 @@ def topic(household_id: int, event_id: int | None, run: int) -> str | None:
 
 def topic_for(notification: note.Notification) -> str | None:
     """The ``Topic`` and notification ``tag`` of a channel post's push, shared by one call's
-    opening, voting, shuffles, decision, and call off, so a newer one replaces the older both at the push
-    service and on the lock screen. None for a direct message, so an offline device keeps every
-    one that asks something of the member."""
+    opening, voting, shuffles, decision, call off, and everyone on their own (and by an offer and
+    its call off), so a newer one replaces the older both at the push service and on the lock
+    screen. None for a direct message, so an offline device keeps every one that asks something
+    of the member."""
     if notification.kind not in CHANNEL_PUSHES:
         return None
     event = getattr(notification, "event", None)
