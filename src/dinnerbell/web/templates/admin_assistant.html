@@ -18,8 +18,8 @@
     <p class="small muted" id="cap-help">The most the household spends on the assistant in a calendar month, from ${{ limits['cap'][0] }} to ${{ limits['cap'][1] }}. Dinnerbell sets aside each request's most it could cost before sending it, so spending never passes the cap. At the cap, the assistant is unavailable until next month, and everything else works.</p>
     <label class="field"><span>Conversation hours</span><input type="number" inputmode="numeric" min="{{ limits['hours'][0] }}" max="{{ limits['hours'][1] }}" name="conversation_hours" value="{{ values['conversation_hours'] }}" aria-describedby="hours-help" required></label>
     <p class="small muted" id="hours-help">How long Dinnerbell keeps a conversation after its last message, so follow-ups such as "something cheaper" work: 0 to {{ limits['hours'][1] }} hours (a week). At 0, each message stands alone. Lowering it deletes older conversations at once.</p>
+    <button type="submit" class="button primary block">Save assistant settings</button>
   </fieldset>
-  <button type="submit" class="button primary block">Save assistant settings</button>
 </form>
 <section class="card" aria-labelledby="usage-title">
   <h2 id="usage-title">Usage in {{ month }}</h2>
