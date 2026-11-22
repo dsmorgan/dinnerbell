@@ -306,7 +306,7 @@ async def test_only_the_kinds_that_push_queue_pushes(house: House) -> None:
     await enqueue(
         house,
         note.CallUpdated(event),
-        note.PicksShuffled(event, kim, 1, 1),
+        note.PicksShuffled(event, kim, 1, 1),  # queued before shuffles pushed: no one to push to
         note.CallAbandoned(event, note.EndReason.TOO_FEW),  # type: ignore[attr-defined]
         note.ResponseReminder(event, kim),
     )
@@ -316,6 +316,15 @@ async def test_only_the_kinds_that_push_queue_pushes(house: House) -> None:
             k for (k,) in await db.execute(text("SELECT o.kind FROM push_queue p JOIN outbox o ON o.id = p.outbox_id"))
         ]
     assert kinds == ["response_reminder"]
+
+
+async def test_a_shuffle_pushes_to_everyone_in_but_whoever_shuffled(house: House) -> None:
+    await switch(house, True)
+    await device(house, "Kim")
+    await device(house, "Lee")
+    event = await a_call(house)
+    await enqueue(house, note.PicksShuffled(event, who(house, "Lee")[0], 2, 1, who(house, "Kim", "Lee")))
+    assert [name for name, *_ in await queued(house)] == ["Kim"]
 
 
 async def test_a_muted_member_gets_no_reminder_push_and_slack_only_members_get_none(house: House) -> None:

@@ -451,6 +451,9 @@ class PicksShuffled(_Notification):
     by: PersonInfo
     replaced: int
     count: int
+    participants: tuple[PersonInfo, ...] = ()
+    """Everyone who's in, for the web app's push (spec 6.15). Empty on rows queued before it
+    existed, which then push to no one."""
 
     @property
     def idempotency_key(self) -> str:

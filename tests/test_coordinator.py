@@ -1094,6 +1094,9 @@ async def test_the_button_counts_down_and_everyone_sees_the_note_but_nobody_is_m
     assert "<@" not in json.dumps(note_block)  # plain names: an edit adds no mention (#92)
     (said,) = await sent(house, "picks_shuffled")  # and a short note in the call's thread
     assert (said.by.name, said.replaced, said.count) == ("Alex", 3, 1)
+    # Everyone in, for the web app's push (spec 6.15), which leaves out whoever shuffled.
+    assert [p.name for p in said.participants] == [p.name for p in cc.who_is_in(await house.context(event_id))]
+    assert said.participants
     assert said.thread_key == f"event:{event_id}:run1:call" and said.recipient_id is None
     assert "<@" not in json.dumps(
         render(said, RenderContext("https://dinnerbell.example.com", Directory({"Alex": "U01ALEX"}))).payload()
@@ -1369,7 +1372,10 @@ async def test_a_shuffle_with_a_veto_in_play_sends_nothing_that_names_it(house: 
     event_id = await to_voting(house, "Sam", "Kim")
     await shuffle(house, "Alex", event_id)
     (said,) = await sent(house, "picks_shuffled")
-    text = json.dumps(note_payload(said)).lower()
+    # Who's in (for the push's audience) is on the proposals message already, and names no stance.
+    payload = note_payload(said)
+    assert [p["name"] for p in payload.pop("participants")] == ["Alex", "Kim", "Sam"]
+    text = json.dumps(payload).lower()
     assert "veto" not in text and "kim" not in text and "thai" not in text
     (update,) = [u for u in await sent(house, "proposals_updated") if u.event.shuffle_note]
     assert update.event.shuffle_note == "Alex shuffled the proposals (3 replaced)."

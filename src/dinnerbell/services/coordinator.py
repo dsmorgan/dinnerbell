@@ -198,7 +198,11 @@ async def shuffle(db: AsyncSession, actor: Member, event_id: int, *, run: int | 
         ctx = await cc.load(db, event)
         by = ctx.person(actor.id)
         await publish(
-            db, ctx, cc.proposals_updated(ctx), note.PicksShuffled(cc.event_info(ctx), by, replaced, number), now=now
+            db,
+            ctx,
+            cc.proposals_updated(ctx),
+            note.PicksShuffled(cc.event_info(ctx), by, replaced, number, cc.who_is_in(ctx)),
+            now=now,
         )
         counts: dict[str, Any] = {
             "replaced": replaced,
