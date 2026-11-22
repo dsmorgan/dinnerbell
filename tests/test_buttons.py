@@ -265,23 +265,32 @@ ADMIN_ONLY = ("admin_*.html", "event_discard.html")
 
 def test_every_button_in_the_admin_only_templates_is_admin_or_danger_with_the_key() -> None:
     """The templates themselves, so a button that only shows in a state the render test doesn't
-    reach, such as Link anyway or Back to automatic, can't slip back to primary or secondary."""
+    reach, such as Link anyway or Back to automatic, can't slip back to primary or secondary.
+    Every ``<button`` and every link styled as one must match the strict form below, so none can
+    escape the check. A ``{{ }}`` in the class may only choose between admin and danger; ``{% %}``
+    isn't allowed, since a condition could leave the role out. ``_code_value.html``, admin only on
+    Admin > Members, is checked by the render test below."""
     files = [*sorted({f for pattern in ADMIN_ONLY for f in TEMPLATES.glob(pattern)}), TEMPLATES / "_member_row.html"]
     assert len(files) >= 9
+    strict = re.compile(r'<(?:a|button)\b[^>]*?\bclass="(button\b[^"]*)"[^>]*>(\{\{ key_icon\(\) \}\})?')
     found = 0
     for f in files:
         source = f.read_text()
         if f.name != "_member_row.html":
             assert "{% set admin_page = true %}" in source, f.name
-        for tag in re.findall(r'<(?:a|button)\b[^>]*\bclass="button\b[^"]*"[^>]*>(?:\{\{ key_icon\(\) \}\})?', source):
-            found += 1
-            cls = re.search(r'class="([^"]*)"', tag)
-            assert cls is not None
-            roles = cls.group(1)
-            assert "primary" not in roles, f"{f.name}: {tag}"
-            assert re.search(r"\badmin\b|\bdanger\b", roles), f"{f.name}: {tag}"
-            assert tag.endswith("{{ key_icon() }}"), f"{f.name}: no key on {tag}"
-    assert found >= 30
+        everything = re.findall(r"<button\b|<a\b[^>]*\bclass=[\"'][^\"']*\bbutton\b", source)
+        tags = strict.findall(source)
+        assert len(tags) == len(everything), f"{f.name}: {len(everything) - len(tags)} buttons in an unchecked form"
+        for roles, key in tags:
+            assert "{%" not in roles and "primary" not in roles.split(), f"{f.name}: {roles}"
+            chosen = re.findall(r"\{\{(.*?)\}\}", roles)
+            if chosen:
+                assert all(set(re.findall(r"'(\w+)'", c)) <= {"admin", "danger"} for c in chosen), f"{f.name}: {roles}"
+            else:
+                assert re.search(r"\b(admin|danger)\b", roles), f"{f.name}: {roles}"
+            assert key, f"{f.name}: no key on {roles}"
+        found += len(tags)
+    assert found >= 32
 
 
 @pytest.mark.parametrize("settings_overrides", [{"anthropic_api_key": "sk-ant-test-not-a-real-key"}])
