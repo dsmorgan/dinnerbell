@@ -120,7 +120,7 @@ def test_admin_changes_each_kind_of_preference(
     }
     assert stances(migrated, "admin@example.com") == {}
     # I can usually and reminders.
-    settings = submit(client, f"{base(house)}/settings", {"can_order": "on"})  # Send me reminders unchecked
+    settings = submit(client, f"{base(house)}/settings", {"can_order": "on", "reminders_form": "2"})  # reminders off
     assert settings.headers["location"] == f"{base(house)}?notice=settings"
     sam = member(migrated, "sam@example.com")
     assert (sam.can_cook, sam.can_pickup, sam.can_order, sam.mute_dm_reminders, sam.feedback_reminder) == (
@@ -166,7 +166,11 @@ def test_each_change_is_audited_with_the_admin_and_the_member(
 ) -> None:
     target = f"member:{house['sam']}"
     htmx(client, f"{base(house)}/stance", {"target": f"tag:{house['thai']}", "level": "0"})
-    submit(client, f"{base(house)}/settings", {"can_cook": "on", "send_reminders": "on", "feedback_reminder": "on"})
+    submit(
+        client,
+        f"{base(house)}/settings",
+        {"can_cook": "on", "reminders_form": "2", "send_reminders": "on", "feedback_reminder": "on"},
+    )
     submit(client, f"{base(house)}/needs", {"needs": [str(house["veg"])]})
     submit(client, f"{base(house)}/fun", {"fun": "off"})
     submit(client, f"{base(house)}/color-mode", {"mode": "light"})
@@ -187,21 +191,43 @@ def test_an_admin_turns_a_members_reminders_off_and_on(
 ) -> None:
     """#322, on an admin's view of Sam: Send me reminders saves the opposite of mute, and Sam's
     How was it? stays as Sam set it while reminders are off, audited as what changed."""
-    submit(client, f"{base(house)}/settings", {"can_cook": "on", "send_reminders": "on", "feedback_reminder": "on"})
+    submit(
+        client,
+        f"{base(house)}/settings",
+        {"can_cook": "on", "reminders_form": "2", "send_reminders": "on", "feedback_reminder": "on"},
+    )
     view = page(client.get(base(house)))
     assert "> Send me reminders</label>" in view and '> Remind me "How was it?"</label>' in view
     assert 'name="send_reminders" aria-describedby="reminders-where" checked' in view
-    submit(client, f"{base(house)}/settings", {"can_cook": "on"})  # reminders off; the dimmed box posts nothing
+    submit(client, f"{base(house)}/settings", {"can_cook": "on", "reminders_form": "2"})  # reminders off
     sam = member(migrated, "sam@example.com")
     assert (sam.mute_dm_reminders, sam.feedback_reminder) == (True, True)
     view = page(client.get(base(house)))
     assert 'name="send_reminders" aria-describedby="reminders-where">' in view
     assert 'name="feedback_reminder" checked' in view
-    submit(client, f"{base(house)}/settings", {"can_cook": "on", "send_reminders": "on", "feedback_reminder": "on"})
+    submit(
+        client,
+        f"{base(house)}/settings",
+        {"can_cook": "on", "reminders_form": "2", "send_reminders": "on", "feedback_reminder": "on"},
+    )
     assert not member(migrated, "sam@example.com").mute_dm_reminders
     payloads = [a.payload for a in admin_audit(migrated, "member.settings_updated")]
     assert payloads == [{"feedback_reminder": True}, {"mute_dm_reminders": True}, {"mute_dm_reminders": False}]
     assert member(migrated, "admin@example.com").mute_dm_reminders is False  # the admin's own: untouched
+
+
+def test_an_admins_form_from_before_the_upgrade_keeps_its_old_meaning(
+    client: TestClient, migrated: Settings, house: dict[str, Any]
+) -> None:
+    """#322: an admin's view of Sam left open across the upgrade posts no reminders_form. Sam's
+    reminders stay on unless its Mute direct-message reminders box was checked."""
+    submit(client, f"{base(house)}/settings", {"can_cook": "on", "feedback_reminder": "on"})
+    sam = member(migrated, "sam@example.com")
+    assert (sam.mute_dm_reminders, sam.feedback_reminder) == (False, True)
+    submit(client, f"{base(house)}/settings", {"can_cook": "on", "mute_dm_reminders": "on", "feedback_reminder": "on"})
+    assert member(migrated, "sam@example.com").mute_dm_reminders
+    payloads = [a.payload for a in admin_audit(migrated, "member.settings_updated")]
+    assert payloads == [{"feedback_reminder": True}, {"mute_dm_reminders": True}]
 
 
 def test_the_stance_row_keeps_its_admin_url_when_a_save_fails(
@@ -340,7 +366,10 @@ def test_a_save_that_changes_nothing_writes_no_audit_row(
     """Settings, dietary needs, fun mode, and light or dark saved as they are write nothing to the audit log. A
     stance is always audited: saving one resets what the member's ratings say (FR-55)."""
     assert (
-        submit(client, f"{base(house)}/settings", {"can_cook": "on", "send_reminders": "on"}).status_code == 303
+        submit(
+            client, f"{base(house)}/settings", {"can_cook": "on", "reminders_form": "2", "send_reminders": "on"}
+        ).status_code
+        == 303
     )  # Sam's as they are
     assert submit(client, f"{base(house)}/needs", {}).status_code == 303
     assert submit(client, f"{base(house)}/fun", {"fun": "on"}).status_code == 303
@@ -365,7 +394,7 @@ def test_a_members_own_changes_stay_unaudited_except_dietary_needs(
 ) -> None:
     sign_in_as(client, provider, "subject-sam", "sam@example.com")
     htmx(client, "/preferences/stance", {"target": f"tag:{house['thai']}", "level": "2"})
-    submit(client, "/preferences/settings", {"can_order": "on", "send_reminders": "on"})
+    submit(client, "/preferences/settings", {"can_order": "on", "reminders_form": "2", "send_reminders": "on"})
     submit(client, "/me/fun", {"fun": "off"})
     submit(client, "/me/color-mode", {"mode": "dark"})
     assert not any_admin_audit(migrated)

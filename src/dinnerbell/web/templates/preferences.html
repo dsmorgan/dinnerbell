@@ -53,9 +53,11 @@
     <p class="small muted">When you answer In on a call, these turn on your offers to cook, pick up, or order. You can turn any off for that call.</p>
   </fieldset>
   {#- Stored as mute_dm_reminders, the opposite of the box (#322). While it's unchecked, the
-      nested box is dimmed and the server keeps its stored value, whatever it posts. -#}
+      nested box is dimmed and the server keeps its stored value, whatever it posts. The marker
+      tells this form from one drawn before #322, which posts mute_dm_reminders instead. -#}
   <fieldset class="field check-group" id="reminders">
     <legend>Reminders</legend>
+    <input type="hidden" name="reminders_form" value="2">
     <label class="check"><input type="checkbox" name="send_reminders" aria-describedby="reminders-where"{% if not me.mute_dm_reminders %} checked{% endif %}> Send me reminders</label>
     <p class="small muted check-hint" id="reminders-where">{% if web_app %}Reminders come as Slack direct messages, and as notifications on <strong>Web app</strong> or <strong>Both</strong>.{% else %}Reminders come as Slack direct messages.{% endif %}</p>
     <div class="check-nested">

@@ -120,7 +120,13 @@ def test_inactive_items_are_listed_only_if_rated(
 
 def test_settings(client: TestClient, provider: FakeProvider, migrated: Settings) -> None:
     sign_in(client, provider)
-    form = {"can_cook": "on", "can_order": "on", "send_reminders": "on", "feedback_reminder": "on"}
+    form = {
+        "can_cook": "on",
+        "can_order": "on",
+        "reminders_form": "2",
+        "send_reminders": "on",
+        "feedback_reminder": "on",
+    }
     response = submit(client, "/preferences/settings", form)
     assert response.status_code == 303
     assert "Settings saved." in page(client.get(response.headers["location"]))
@@ -132,7 +138,7 @@ def test_settings(client: TestClient, provider: FakeProvider, migrated: Settings
         False,
         True,
     )
-    submit(client, "/preferences/settings", {})  # every box unchecked: reminders off, How was it? kept
+    submit(client, "/preferences/settings", NEW_FORM)  # every box unchecked: reminders off, How was it? kept
     me = member(migrated, "admin@example.com")
     assert (me.can_cook, me.can_order, me.mute_dm_reminders, me.feedback_reminder) == (False, False, True, True)
     shown = client.get("/preferences").text
@@ -150,6 +156,10 @@ def test_settings(client: TestClient, provider: FakeProvider, migrated: Settings
 # Privacy (FR-29) ------------------------------------------------------------------------------------
 
 
+NEW_FORM = {"reminders_form": "2"}
+"""What the You form posts with every box unchecked since #322."""
+
+
 def reminders_group(html: str) -> str:
     """Preferences > Reminders, from its fieldset to the end of the nested box."""
     return html.split('id="reminders"', 1)[1].split("</fieldset>", 1)[0]
@@ -161,15 +171,39 @@ def test_send_me_reminders_is_stored_as_the_opposite_of_mute(
     """#322: checked means reminders are on. An unchecked box posts nothing, which mutes them."""
     sign_in(client, provider)
     assert 'name="send_reminders" aria-describedby="reminders-where" checked' in client.get("/preferences").text
-    submit(client, "/preferences/settings", {"can_cook": "on"})
+    submit(client, "/preferences/settings", NEW_FORM | {"can_cook": "on"})
     assert member(migrated, "admin@example.com").mute_dm_reminders
     assert 'name="send_reminders" aria-describedby="reminders-where">' in client.get("/preferences").text
-    submit(client, "/preferences/settings", {"can_cook": "on", "send_reminders": "on"})
+    submit(client, "/preferences/settings", {"can_cook": "on", "reminders_form": "2", "send_reminders": "on"})
     assert not member(migrated, "admin@example.com").mute_dm_reminders
     assert 'name="send_reminders" aria-describedby="reminders-where" checked' in client.get("/preferences").text
-    # The old field name means nothing now: without send_reminders, reminders are off.
-    submit(client, "/preferences/settings", {"mute_dm_reminders": "on"})
+
+
+@pytest.mark.parametrize("muted", [False, True])
+def test_a_form_from_before_the_upgrade_keeps_its_old_meaning(
+    client: TestClient, provider: FakeProvider, migrated: Settings, muted: bool
+) -> None:
+    """#322: a page left open across the upgrade posts Mute direct-message reminders and no
+    reminders_form. It's read as before, so saving it never turns reminders off on its own."""
+    sign_in(client, provider)
+    old = {"can_cook": "on", "feedback_reminder": "on"} | ({"mute_dm_reminders": "on"} if muted else {})
+    submit(client, "/preferences/settings", old)
+    me = member(migrated, "admin@example.com")
+    assert (me.can_cook, me.mute_dm_reminders, me.feedback_reminder) == (True, muted, True)
+    # The old form's unchecked feedback box turns it off, as it always did.
+    submit(client, "/preferences/settings", {"mute_dm_reminders": "on"} if muted else {})
+    me = member(migrated, "admin@example.com")
+    assert (me.mute_dm_reminders, me.feedback_reminder) == (muted, False)
+    # send_reminders without the marker isn't the new form either: the old box decides.
+    submit(client, "/preferences/settings", {"send_reminders": "on", "mute_dm_reminders": "on"})
     assert member(migrated, "admin@example.com").mute_dm_reminders
+
+
+def test_the_form_marks_itself_as_the_new_shape(client: TestClient, provider: FakeProvider) -> None:
+    sign_in(client, provider)
+    group = reminders_group(client.get("/preferences").text)
+    assert '<input type="hidden" name="reminders_form" value="2">' in group
+    assert 'name="mute_dm_reminders"' not in group
 
 
 @pytest.mark.parametrize("stored", [True, False])
@@ -179,14 +213,20 @@ def test_how_was_it_keeps_its_value_while_reminders_are_off(
     """#322: while Send me reminders is off, the nested box is dimmed, and whatever it posts,
     checked or not, the stored value stays. Turning reminders back on shows it again."""
     sign_in(client, provider)
-    submit(client, "/preferences/settings", {"send_reminders": "on"} | ({"feedback_reminder": "on"} if stored else {}))
-    for posted in ({}, {"feedback_reminder": "on"}):
+    submit(
+        client,
+        "/preferences/settings",
+        {"reminders_form": "2", "send_reminders": "on"} | ({"feedback_reminder": "on"} if stored else {}),
+    )
+    for posted in (NEW_FORM, NEW_FORM | {"feedback_reminder": "on"}):
         submit(client, "/preferences/settings", posted)
         me = member(migrated, "admin@example.com")
         assert (me.mute_dm_reminders, me.feedback_reminder) == (True, stored), posted
         shown = reminders_group(client.get("/preferences").text)
         assert ('name="feedback_reminder" checked' in shown) is stored
-    submit(client, "/preferences/settings", {"send_reminders": "on"})  # back on, the box unchecked: off
+    submit(
+        client, "/preferences/settings", {"reminders_form": "2", "send_reminders": "on"}
+    )  # back on, the box unchecked: off
     me = member(migrated, "admin@example.com")
     assert (me.mute_dm_reminders, me.feedback_reminder) == (False, False)
 
