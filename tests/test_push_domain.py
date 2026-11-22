@@ -92,7 +92,7 @@ def test_channel_posts_push_to_the_members_they_concern() -> None:
 def test_only_active_members_on_the_web_app_or_both_want_pushes() -> None:
     assert push.wants_push(person(), "call_opened")  # no Slack user: the web app
     assert push.wants_push(person(slack_user_id="U03KIM", notify_via=NotifyVia.BOTH), "call_opened")
-    assert not push.wants_push(person(slack_user_id="U03KIM"), "call_opened")  # Slack by default
+    assert push.wants_push(person(slack_user_id="U03KIM"), "call_opened")  # Both by default
     assert not push.wants_push(person(slack_user_id="U03KIM", notify_via=NotifyVia.SLACK), "call_opened")
     assert not push.wants_push(person(active=False), "call_opened")
     assert not push.wants_push(person(role=Role.GUEST, email=None), "call_opened")

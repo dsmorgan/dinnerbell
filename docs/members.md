@@ -37,7 +37,7 @@ Joining needs no extra scopes for a public channel. A private channel needs `gro
 While it's on:
 
 - Members can add Dinnerbell to their phone's Home Screen. **Get the app**, linked from the sign-in page, from **Preferences**, and from **Admin** > **Web app**, shows the steps for iPhone and Android.
-- **Preferences** has **Notifications**: **Slack**, **Web app**, or **Both**. A member linked to Slack starts on **Slack**. A member without a Slack link has only **Web app**, and moves to **Slack** once they're linked, unless they chose otherwise while linked before.
+- **Preferences** has **Notifications**: **Slack**, **Web app**, or **Both**. A member linked to Slack starts on **Both**, so Slack keeps reaching them and a device where they turn notifications on gets pushes too. A member without a Slack link has only **Web app**, and moves to **Both** once they're linked, unless they chose otherwise while linked before.
 - Slack skips direct messages, such as reminders, to members on **Web app**, instead of failing to send them. Channel posts still go to the channel.
 - Members can [sign in with a code](#sign-in-with-a-code), and see and sign out their [devices](#devices).
 

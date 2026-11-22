@@ -49,8 +49,8 @@ def person(**values: object) -> Member:
 # The domain ----------------------------------------------------------------------------------------
 
 
-def test_a_member_with_slack_starts_on_slack_and_one_without_on_the_web_app() -> None:
-    assert person(slack_user_id="U03KIM").delivery is NotifyVia.SLACK
+def test_a_member_with_slack_starts_on_both_and_one_without_on_the_web_app() -> None:
+    assert person(slack_user_id="U03KIM").delivery is NotifyVia.BOTH
     assert person().delivery is NotifyVia.WEB
     assert notify_choices(person(slack_user_id="U03KIM")) == (NotifyVia.SLACK, NotifyVia.WEB, NotifyVia.BOTH)
     assert notify_choices(person()) == (NotifyVia.WEB,)
@@ -157,10 +157,10 @@ async def test_turning_it_off_keeps_each_choice(house: House) -> None:
     await link(house, "Kim", "U03KIM")
     await switch(house, True)
     async with house.sessionmaker() as db:
-        await web_app.set_my_notify_via(db, house["Kim"], NotifyVia.BOTH, now=house.clock())
+        await web_app.set_my_notify_via(db, house["Kim"], NotifyVia.SLACK, now=house.clock())
     await switch(house, False)
     await house.refresh("Kim")
-    assert house["Kim"].notify_via is NotifyVia.BOTH
+    assert house["Kim"].notify_via is NotifyVia.SLACK
 
 
 async def test_a_choice_needs_the_switch_on_and_slack_for_slack(house: House) -> None:
@@ -183,7 +183,7 @@ async def test_a_choice_needs_the_switch_on_and_slack_for_slack(house: House) ->
     await house.refresh("Lee")
     assert house["Lee"].notify_via is None
     await link(house, "Lee", "U04LEE")
-    assert house["Lee"].delivery is NotifyVia.SLACK
+    assert house["Lee"].delivery is NotifyVia.BOTH
     assert await audits(house, "member.notify_via_set") == []  # a member's own choice isn't audited
 
 
@@ -191,13 +191,13 @@ async def test_an_admins_choice_for_a_member_is_audited(house: House) -> None:
     await link(house, "Kim", "U03KIM")
     await switch(house, True)
     async with house.sessionmaker() as db:
-        await web_app.set_member_notify_via(db, house["Alex"], house["Kim"].id, NotifyVia.SLACK, now=house.clock())
         await web_app.set_member_notify_via(db, house["Alex"], house["Kim"].id, NotifyVia.BOTH, now=house.clock())
+        await web_app.set_member_notify_via(db, house["Alex"], house["Kim"].id, NotifyVia.SLACK, now=house.clock())
         with pytest.raises(Forbidden):
             await web_app.set_member_notify_via(db, house["Sam"], house["Kim"].id, NotifyVia.WEB, now=house.clock())
     rows = await audits(house, "member.notify_via_set")
     assert [(r.actor_member_id, r.target, r.payload) for r in rows] == [
-        (house["Alex"].id, f"member:{house['Kim'].id}", {"from": "slack", "to": "both"})
+        (house["Alex"].id, f"member:{house['Kim'].id}", {"from": "both", "to": "slack"})
     ]
 
 
@@ -284,7 +284,7 @@ async def test_switched_on_a_dm_to_a_member_on_the_web_app_is_skipped_not_failed
     rows = await closed(house)
     for name in ("Kim", "Lee"):
         assert rows[house[name].id] == (True, False, outbox.SKIPPED_WEB_APP), name
-    for name in ("Sam", "Alex"):  # Both, and Slack by default, still get Slack
+    for name in ("Sam", "Alex"):  # Both, chosen or by default, still get Slack
         assert rows[house[name].id] == (True, False, None), name
     assert sorted(c.args["channel"] for c in slack.fake.of("chat.postMessage")) == ["U01ALEX", "U02SAM"]
     # /healthz counts: nothing waits and nothing failed, so it isn't degraded.

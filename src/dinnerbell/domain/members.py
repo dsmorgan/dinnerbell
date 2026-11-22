@@ -129,15 +129,16 @@ class Member:
     @property
     def delivery(self) -> NotifyVia:
         """Where they get notifications while the web app is on (spec 6.15). A member with a
-        Slack user gets their choice, Slack until they make one. A member without one gets the
-        web app, the only choice they have, so linking them to Slack later moves them to Slack
+        Slack user gets their choice, Both until they make one, so Slack keeps reaching them and
+        a device they turn notifications on for gets pushes too. A member without one gets the
+        web app, the only choice they have, so linking them to Slack later moves them to Both
         unless they chose otherwise while linked before. A guest stays on Slack: guests never
         get pushes, and what Slack sends them doesn't change."""
         if self.is_guest:
             return NotifyVia.SLACK
         if self.slack_user_id is None:
             return NotifyVia.WEB
-        return self.notify_via or NotifyVia.SLACK
+        return self.notify_via or NotifyVia.BOTH
 
     @property
     def is_admin(self) -> bool:
