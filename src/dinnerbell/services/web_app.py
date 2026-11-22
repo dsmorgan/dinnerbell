@@ -120,7 +120,7 @@ async def set_member_notify_via(
 ) -> Member:
     """An admin's choice for another member (#181), with the same rules as the member's own.
     Audited as ``member.notify_via_set``, with the choice that counted before and the new one,
-    unless it already counted."""
+    whenever a choice is stored."""
     member = await member_for_admin(db, actor, member_id)
     await require_web_app(db, actor.household_id)
     return await _set(db, actor, member, choice, now=now)
@@ -128,8 +128,10 @@ async def set_member_notify_via(
 
 async def _set(db: AsyncSession, actor: Member, member: Member, choice: NotifyVia, *, now: datetime) -> Member:
     check_notify_via(member, choice)
-    if member.delivery is choice:
-        return member  # already what counts: storing it would change nothing they get
+    # A choice is stored even when it matches the default, so a later change to the default never
+    # moves someone who chose. Without Slack, Web app is the only choice, so there's nothing to keep.
+    if member.slack_user_id is None or member.notify_via is choice:
+        return member
     updated = await MemberRepository(db).update(member.household_id, member.id, now, notify_via=choice)
     if actor.id != member.id:
         payload = {"from": member.delivery.value, "to": choice.value}
