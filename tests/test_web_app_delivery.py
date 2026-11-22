@@ -197,7 +197,8 @@ async def test_an_admins_choice_for_a_member_is_audited(house: House) -> None:
             await web_app.set_member_notify_via(db, house["Sam"], house["Kim"].id, NotifyVia.WEB, now=house.clock())
     rows = await audits(house, "member.notify_via_set")
     assert [(r.actor_member_id, r.target, r.payload) for r in rows] == [
-        (house["Alex"].id, f"member:{house['Kim'].id}", {"from": "both", "to": "slack"})
+        (house["Alex"].id, f"member:{house['Kim'].id}", {"from": "both", "to": "both"}),  # stored, not just the default
+        (house["Alex"].id, f"member:{house['Kim'].id}", {"from": "both", "to": "slack"}),
     ]
 
 

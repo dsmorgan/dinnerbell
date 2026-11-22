@@ -273,6 +273,9 @@ def test_a_member_with_slack_starts_on_both_and_chooses(admin: TestClient, migra
     switch(admin, True)
     me = member(migrated, "admin@example.com").id
     link_slack(admin, me, "U01ADMIN")
+    assert member(migrated, "admin@example.com").notify_via is None  # Both, by default
+    assert submit(admin, "/preferences/notify", {"via": "both"}).status_code == 303
+    assert member(migrated, "admin@example.com").notify_via == "both"  # chosen, so a new default won't move it
     prefs = admin.get("/preferences").text
     assert 'action="/preferences/notify"' in card(prefs)
     assert 'name="via" value="both" checked' in card(prefs) and card(prefs).count(" checked") == 1
