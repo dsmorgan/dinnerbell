@@ -240,7 +240,7 @@ The reset deletes every call and everything in it (answers, suggestions, proposa
    - **Days off kept** lists today's and later days whose call was skipped or called off. They stay off. To have a call on one after all, start it from App Home, Today, or `/dinnerbell call`.
    - If it says the scheduler posts today's call again, today's call has finished but its answers are still open. To avoid a second call, run the reset after the answer deadline.
 
-   Then type `reset`. Without a terminal, run the command again with `--yes`. The command first backs up the database to `/data/backups/pre-reset-VERSION-TIME.db`, which nightly pruning never deletes, then deletes the history in one transaction, and writes a `history.reset` audit row.
+   Then type `reset`. Without a terminal, run the command again with `--yes`. The command first backs up the database to `/data/backups/pre-reset-VERSION-TIME.db`, which nightly pruning keeps until five newer `pre-reset` copies replace it, then deletes the history in one transaction, and writes a `history.reset` audit row.
 
 4. Check that History and Stats are empty, Today and App Home show no old calls, the catalog, Members, Preferences, and Schedule are unchanged, and the **Kept** counts the command printed match its preview's **Keeps** counts.
 
@@ -250,9 +250,44 @@ To undo the reset, follow [Roll back](#roll-back) with the `pre-reset-*.db` file
 
 ## Back up
 
-Every night at 03:30 household time, Dinnerbell backs up its database to `/data/backups/`, and also at start if the newest backup is more than a day old. It keeps the 14 newest daily copies and the newest copy from each of the last 8 weeks. It checks each copy with SQLite's `quick_check` and retries once. If both tries fail, it logs `database backup failed its check`, and `/healthz` reports `"backup": {"failing": true}` and `degraded` until a backup succeeds. It also deletes any unfinished `pre-*.partial` file after an hour.
+Every night at 03:30 household time, Dinnerbell backs up its database to `/data/backups/`, and also at start if the newest backup is more than a day old. On the night the clocks go forward past 03:30, it backs up once, an hour later by the clock. A host that sleeps through 03:30 backs up when it wakes. It checks each copy with SQLite's `quick_check` and retries once. If both tries fail, it logs `database backup failed its check`, and `/healthz` reports `"backup": {"failing": true}` and `degraded` until a backup succeeds. It also deletes any unfinished `pre-*.partial` file after an hour.
 
-<a id="what-the-audit-log-and-backups-hold"></a>Backups include the audit log, which holds member emails and Slack user IDs, so keep every copy as private as the database. Audit rows stay for good, except `auth.sign_in_refused` rows, which hold a non-member's email: an hourly job deletes them after 30 days, and Dinnerbell writes at most one per person and reason per hour.
+Besides the nightly `dinnerbell-YYYY-MM-DD.db` copies, Dinnerbell takes a one-off copy before anything hard to undo. Each is named for what it came before, with the UTC time:
+
+- `pre-upgrade-VERSION-TIME.db`: [`dinnerbell backup`](#back-up-now), which you run before an upgrade.
+- `pre-migrate-FROM-TO-TIME.db`, such as `pre-migrate-0040-to-0044-20261122T013000Z.db`: `serve` or `migrate`, when the database needs migrating. See [Upgrade](#upgrade).
+- `pre-reset-VERSION-TIME.db`: `reset-history`. See [Going live](#going-live).
+
+### What pruning keeps
+
+After each nightly backup, Dinnerbell deletes the copies it no longer needs. It keeps:
+
+- The 14 newest nightly copies, and the newest nightly copy from each of the last 8 weeks.
+- The five newest one-off copies of each kind: `pre-upgrade`, `pre-migrate`, and `pre-reset`.
+
+Pruning deletes only files named the way Dinnerbell names them. To keep a one-off copy for good, copy it off the host, or rename it without the time, such as `pre-upgrade-before-the-move.db`.
+
+### What a backup holds
+
+<a id="what-the-audit-log-and-backups-hold"></a>Each copy holds the whole database as it was then, so keep every copy as private as the database. That includes:
+
+- The audit log, which holds member emails and Slack user IDs. Audit rows stay for good, except `auth.sign_in_refused` rows, which hold a non-member's email: an hourly job deletes them after 30 days, and Dinnerbell writes at most one per person and reason per hour.
+- Assistant conversations and drafts.
+- Devices that get notifications, and the members' preferences, vetoes, and dietary needs.
+
+Retention settings, such as the assistant's **Conversation hours**, draft expiry, and the 30 days for refused sign-ins, delete rows from the live database only. A copy keeps what it held until pruning deletes the copy: two weeks for most nightly copies, about two months for weekly ones, and until five newer copies of its kind replace it for a one-off copy. Copies you made off the host stay until you delete them.
+
+### What else to back up
+
+The database copies aren't enough to run Dinnerbell on another host. Also back up these files from your clone or bundle directory:
+
+- `.env`, the settings.
+- `secrets/`, if you [keep secrets in files](#keep-secrets-in-files).
+- `compose.override.yaml`, if you have one.
+
+`DINNERBELL_SECRET_KEY`, in `.env` or `secrets/`, matters most. Dinnerbell derives the web push key and the sign-in code key from it, so losing it ends every device's notifications and every unused sign-in code. Store these files apart from the database copies, such as in a password manager, so that one lost or stolen copy never holds both the household's data and the keys to its Slack app and sign-ins. Copy them again whenever you change them.
+
+### Copy backups off the host
 
 The backups share a volume with the database, so copy them off the host with your own backup routine. Copy `/data/backups/` only, never the live `dinnerbell.db` or its WAL file.
 
@@ -274,13 +309,46 @@ podman unshare chown -R 0:0 ~/dinnerbell-backups
 
 ### Back up now
 
-Before an upgrade, take a fresh backup in the running container:
+Before an upgrade, or any change you might want to undo, take a fresh backup in the running container:
 
 ```sh
-podman-compose exec dinnerbell python -c "import os, sqlite3, time; from dinnerbell import __version__ as v; os.umask(0o077); name = time.strftime(f'/data/backups/pre-upgrade-{v}-%Y%m%dT%H%M%SZ.db', time.gmtime()); src = sqlite3.connect('file:/data/dinnerbell.db?mode=ro', uri=True); dst = sqlite3.connect(name); src.backup(dst); dst.close(); src.close(); print(name)"
+podman-compose exec dinnerbell dinnerbell backup
 ```
 
-The command prints the backup's name, with the running version and the UTC time, such as `/data/backups/pre-upgrade-0.16.0-20261112T013000Z.db`. Write it down: [Roll back](#roll-back) needs it. Nightly pruning never deletes these files, so delete old ones yourself. Copy the backup off the host.
+The command copies the database to `/data/backups/pre-upgrade-VERSION-TIME.db`, with the running version and the UTC time, checks the copy with `quick_check`, flushes it to disk, and prints its name, such as `Backed up the database to /data/backups/pre-upgrade-0.16.0-20261112T013000Z.db`. It never migrates or changes the database. If the copy fails its check, the command deletes it, says why, and exits with status 1. Write the name down: [Roll back](#roll-back) needs it. Copy the backup off the host.
+
+### Restore on a new host
+
+To move Dinnerbell to a new host, or rebuild it after losing one, restore a database copy and the files from [What else to back up](#what-else-to-back-up). Anything recorded after the copy is lost.
+
+1. Stop Dinnerbell on the old host if it still runs. Two instances on one Slack app both answer.
+2. On the new host, follow [Prerequisites](#prerequisites) and [Clone the repository](#0-clone-the-repository), or extract the release bundle as in the [quick install](install.md). Keep the directory name `dinnerbell`, because compose names the data volume after it. Check out the release that wrote the copy, replacing `vX.Y.Z`: the version in a `pre-upgrade-*` or `pre-reset-*` name, the release before the upgrade for a `pre-migrate-*` copy, or the release the old host ran for a nightly copy.
+
+   ```sh
+   git checkout vX.Y.Z
+   ```
+
+3. Put `.env`, `secrets/`, and `compose.override.yaml` back in the clone. Give `.env` and the files in `secrets/` mode 600, as [Keep secrets in files](#keep-secrets-in-files) does.
+4. Pull the image, and create the data volume without starting Dinnerbell. The one-off container runs `true`, so the volume gets the image's owner and permissions and nothing else.
+
+   ```sh
+   podman-compose pull
+   podman-compose run --rm --entrypoint true dinnerbell
+   ```
+
+5. Copy the database copy into the volume as `dinnerbell.db`, owned by UID 10001, replacing the file name. Under rootful podman or Docker, run the same `cp` and `chown` as root, without `podman unshare`.
+
+   ```sh
+   data="$(podman volume inspect dinnerbell_dinnerbell-data --format '{{.Mountpoint}}')"
+   podman unshare sh -c 'umask 077 && cp "$1" "$2/dinnerbell.db" && chown 10001:10001 "$2/dinnerbell.db"' \
+     sh ~/dinnerbell-backups/pre-upgrade-X.Y.Z-YYYYMMDDTHHMMSSZ.db "$data"
+   ```
+
+6. Start the service, as in [Run Dinnerbell](#9-run-dinnerbell), with the compose files you used on the old host.
+7. Point your reverse proxy at the new host, as in [Expose Dinnerbell through your reverse proxy](#8-expose-dinnerbell-through-your-reverse-proxy).
+8. Check that the footer shows the release you checked out, that `/healthz` returns 200 with `"slack":"connected"`, and that History shows the calls you expect.
+
+If you restored a `.env` without the old secret key, every member taps **Turn on notifications** again on each device, and unused sign-in codes stop working. To move to a newer release too, restore first, then [upgrade](#upgrade).
 
 ## Upgrade
 
@@ -320,6 +388,8 @@ If you keep secrets in files, add `-f compose.yaml -f compose.secrets.yaml` to e
 
 Migrations run on start and only move forward: an older version refuses to open the upgraded database. To go back, see [Roll back](#roll-back).
 
+Before it migrates, Dinnerbell backs up the database to `/data/backups/pre-migrate-FROM-TO-TIME.db`, checked like the nightly copies, and logs `database backed up before migrating` with the file name. A new, empty database gets no backup. If the backup fails, Dinnerbell logs `Can't back up the database before migrating it`, changes nothing, and exits, and the container restarts until you fix the cause, such as a full disk. Each start takes another copy, and pruning keeps the five newest. This backup doesn't replace step 2: it stays on the host, and a release without a migration takes none.
+
 If the upgrade notes say the Slack manifest changed, paste the new manifest under **App Manifest** in the app settings, set your hostname in it again, then select **Install App** > **Reinstall to Workspace** and approve. The bot token stays the same. Until you reinstall, Dinnerbell keeps working and shows text where a feature needs a new scope, and a removed scope stays granted.
 
 ## Roll back
@@ -338,7 +408,7 @@ To roll back, run the previous release on the backup you took before the upgrade
    git checkout vX.Y.Z
    ```
 
-3. List the backups, and find the one you took before the upgrade.
+3. List the backups, and find the one you took before the upgrade: the `pre-upgrade-*` file from [Back up now](#back-up-now), or the `pre-migrate-*` file the upgrade took if it migrated. A `pre-migrate-*` file is newer, so it loses less.
 
    ```sh
    podman-compose run --rm --entrypoint ls dinnerbell -l /data/backups

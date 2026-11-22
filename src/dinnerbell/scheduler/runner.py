@@ -274,6 +274,10 @@ def build_scheduler(ctx: JobContext) -> AsyncIOScheduler:
     )
     # A catch-up backup at start runs as the nightly job itself (its first run is moved to now),
     # not as a second job, so max_instances=1 keeps two backups from ever overlapping.
+    # No misfire grace: a host suspended across 03:30 for longer than the hour every other job
+    # allows backs up when it wakes (coalesced to one run) instead of skipping the night. Where
+    # 03:30 doesn't exist one night (a spring-forward gap), APScheduler runs it once, an hour
+    # later on the wall clock; where it happens twice, the second run finds the day's copy.
     ctx.state.last_backup = backups.last_backup_time(ctx.backup_dir)
     catch_up = ctx.state.last_backup is None or ctx.clock() - ctx.state.last_backup > BACKUP_CATCH_UP_AFTER
     scheduler.add_job(
@@ -281,6 +285,7 @@ def build_scheduler(ctx: JobContext) -> AsyncIOScheduler:
         CronTrigger(hour=BACKUP_HOUR, minute=BACKUP_MINUTE, timezone=ctx.zone),
         args=[ctx],
         id="nightly_backup",
+        misfire_grace_time=None,
         **({"next_run_time": start} if catch_up else {}),
     )
     scheduler.add_job(
