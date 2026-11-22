@@ -16,6 +16,7 @@ dependencies = [
     "cryptography>=50.0.2",
     "fastapi>=0.160.0",
     "httpx>=0.28.1",
+    "httpx2>=2.16.0",  # the Anthropic SDK's HTTP library; anthropic_client builds its transport
     "jinja2>=3.1.6",
     "joserfc>=1.7.7",
     "pydantic>=2.14",

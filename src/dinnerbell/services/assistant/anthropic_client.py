@@ -6,10 +6,12 @@ from __future__ import annotations
 
 import logging
 import re
+import socket
 from collections.abc import Mapping, Sequence
 from typing import Any
 
 import anthropic
+import httpx2
 from anthropic.types.beta import BetaMessage
 from pydantic import SecretStr
 
@@ -31,9 +33,12 @@ class AnthropicModelClient:
     may still run and bill, and each request is covered by one reservation, so a retry would
     spend outside the cap."""
 
-    def __init__(self, api_key: SecretStr, *, http_client: Any = None) -> None:
+    def __init__(self, api_key: SecretStr, *, http_client: httpx2.AsyncClient | None = None) -> None:
         self._client = anthropic.AsyncAnthropic(
-            api_key=api_key.get_secret_value(), max_retries=0, timeout=TIMEOUT_SECONDS, http_client=http_client
+            api_key=api_key.get_secret_value(),
+            max_retries=0,
+            timeout=TIMEOUT_SECONDS,
+            http_client=http_client or new_http_client(),
         )
 
     async def create(
@@ -74,6 +79,26 @@ class AnthropicModelClient:
 
     async def close(self) -> None:
         await self._client.close()
+
+
+def new_http_client() -> httpx2.AsyncClient:
+    """The client for Anthropic's API, which never follows a redirect. ``trust_env=False`` on
+    the client and its transport ignores proxy and CA bundle variables, such as ``HTTPS_PROXY``
+    and ``SSL_CERT_FILE``, and verifies TLS against the bundled certificate authorities, as
+    pushes, menu links, and the weather do (#328). The SDK's own default client mounts the
+    environment's proxies whatever ``trust_env`` says, so this builds the transport itself, with
+    the SDK's TCP keepalives so a long stream's connection isn't dropped while idle."""
+    transport = httpx2.AsyncHTTPTransport(trust_env=False, socket_options=_keepalive())
+    return httpx2.AsyncClient(transport=transport, trust_env=False, follow_redirects=False)
+
+
+def _keepalive() -> list[tuple[int, int, int]]:
+    """Probe an idle connection after a minute, every minute, and give up after five misses."""
+    options = [(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)]
+    for name, value in (("TCP_KEEPIDLE", 60), ("TCP_KEEPINTVL", 60), ("TCP_KEEPCNT", 5)):
+        if hasattr(socket, name):
+            options.append((socket.IPPROTO_TCP, getattr(socket, name), value))
+    return options
 
 
 MAX_DETAIL_CHARS = 300

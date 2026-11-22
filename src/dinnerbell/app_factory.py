@@ -86,7 +86,7 @@ def create_app(
                 await catalog_service.seed_from_file(db, household, settings.seed_file, now=clock())
                 await contributions.ensure_backfilled(db, household.id, now=clock())
                 await push_service.check_base_url(db, household.id, settings.base_url)
-            http = httpx.AsyncClient(transport=oidc_transport, timeout=OIDC_TIMEOUT_SECONDS, follow_redirects=False)
+            http = oidc_http_client(oidc_transport)
             stack.push_async_callback(http.aclose)
             secret = settings.secret_key.get_secret_value()
             state = SchedulerState(started_at=clock())
@@ -206,6 +206,14 @@ def _assistant(settings: Settings, client: ModelClient | None, clock: Clock) -> 
     if client is None or settings.anthropic_api_key is None:
         return None
     return Assistant(AssistantConfig.from_settings(settings), client, clock)
+
+
+def oidc_http_client(transport: httpx.AsyncBaseTransport | None = None) -> httpx.AsyncClient:
+    """The sign-in provider's client: no redirects, and a 10-second timeout. ``trust_env=False``
+    ignores proxy and CA bundle variables, such as ``HTTPS_PROXY`` and ``SSL_CERT_FILE``, and
+    verifies TLS against the bundled certificate authorities, as pushes, menu links, the
+    weather, and the assistant do (#328)."""
+    return httpx.AsyncClient(transport=transport, timeout=OIDC_TIMEOUT_SECONDS, follow_redirects=False, trust_env=False)
 
 
 def _oidc_client(settings: Settings, http: httpx.AsyncClient, clock: Clock) -> OIDCClient:
