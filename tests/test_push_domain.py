@@ -620,6 +620,6 @@ async def test_the_push_client_ignores_proxy_and_ca_variables(
     client = sender.new_client()
     try:
         assert client.trust_env is False
-        assert not client._mounts  # no proxy transport for any URL
+        assert not client._mounts  # private in httpx 0.28: no proxy transport for any URL
     finally:
         await client.aclose()
