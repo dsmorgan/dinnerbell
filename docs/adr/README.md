@@ -14,3 +14,4 @@ Each ADR records one decision and the reasoning behind it, in under about 1,000 
 | [0008](0008-feedback-informed-ranking.md) | Ratings move the rater's own score, and the household sees a hint | Accepted |
 | [0009](0009-optional-assistant.md) | An optional assistant drafts through the domain API, and a member confirms | Accepted |
 | [0010](0010-optional-web-app.md) | An optional web app with push notifications, beside Slack | Accepted |
+| [0011](0011-local-weather.md) | Local weather for Dinnerbone's Den, from Open-Meteo, only if an admin turns it on | Proposed |
