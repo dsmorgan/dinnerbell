@@ -92,17 +92,17 @@ On an iPhone or iPad (iOS 16.4 or later), notifications work only in the app on 
 
 1. Add Dinnerbell to the Home Screen, as **Get the app** shows, and open it from there.
 2. Sign in in the app, such as with a code (see [Sign in with a code](#sign-in-with-a-code)). It keeps its own sign-in, apart from Safari's.
-3. Open **Get the app**, and tap **Turn on notifications**.
+3. Tap the banner's **turn them on** link, or open **Preferences**, and under **Notifications**, tap **Turn on notifications**.
 4. Tap **Allow**.
 
 On Android, in Chrome or in the installed app:
 
-1. Open **Get the app**, and tap **Turn on notifications**.
+1. On **Preferences**, under **Notifications**, tap **Turn on notifications**.
 2. Tap **Allow**.
 
-**Get the app** then says "Notifications are on for this device." To stop them, tap **Turn off** there.
+It then says "Notifications are on for this device." To stop them, tap **Turn off** there. **Get the app** has the same buttons. You need **Web app** or **Both** chosen above them.
 
-Notifications go with the sign-in that turned them on. Signing out on the device, or the sign-in running out, stops them there. When you sign in again in the installed app, the first page you open turns them back on by itself, as long as the device still allows them. In a browser outside the app, open **Get the app** to turn them back on. If someone else signs in in the app on the device, it gets their notifications instead of yours, and none still waiting for you. If it says notifications are blocked, allow them for Dinnerbell in the device's settings (on iPhone, **Settings** > **Notifications** > **Dinnerbell**), and open the page again.
+Notifications go with the sign-in that turned them on. Signing out on the device, or the sign-in running out, stops them there. When you sign in again in the installed app, the first page you open turns them back on by itself, as long as the device still allows them. In a browser outside the app, open **Preferences** to turn them back on. If someone else signs in in the app on the device, it gets their notifications instead of yours, and none still waiting for you. If it says notifications are blocked, allow them for Dinnerbell in the device's settings (on iPhone, **Settings** > **Notifications** > **Dinnerbell**), and open the page again.
 
 Each member can have up to 10 devices; turning on an eleventh drops the one turned on longest ago. Pushes go through the device's push service, from Apple, Google, Mozilla, or Microsoft, which sees when a device gets one and how big it is, but not what it says.
 

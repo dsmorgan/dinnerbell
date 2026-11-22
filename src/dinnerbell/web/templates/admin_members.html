@@ -8,8 +8,9 @@
 {% if error %}<p class="alert error" role="alert">{{ error }}</p>{% endif %}
 {% if issued %}
 <div class="alert ok stack" role="status" id="issued-code">
-  <p>Sign-in code for {{ issued.member.display_name }}: <span class="issued-code">{{ issued.code }}</span></p>
-  <p class="small">It works once, until {{ issued.expires_at|clock(principal.household.timezone) }}. Give it to {{ issued.member.display_name }} in person or by text. On their device, they open Dinnerbell, tap <strong>Sign in with a code</strong>, and type it. This is the only time it's shown.</p>
+  <p>Sign-in code for {{ issued.member.display_name }}:</p>
+  {% include "_code_value.html" %}
+  <p class="small">Works once, until {{ issued.expires_at|clock(principal.household.timezone) }}. Give it to {{ issued.member.display_name }} in person or by text; they tap <strong>Sign in with a code</strong> and enter it. This is the only time it's shown.</p>
 </div>
 {% endif %}
 {% if conflict %}

@@ -23,5 +23,13 @@
   {% else %}
   <p class="small">Web app. Without a linked Slack account, Dinnerbell can reach {{ "them" if editing else "you" }} only in the web app.</p>
   {% endif %}
+  {#- This device's notifications, on the member's own page only (an admin can't turn them on for
+      someone else's device). -#}
+  {% if not editing and push_key and not principal.member.is_guest %}
+  <div class="stack" id="notifications" aria-labelledby="this-device-heading" hidden>
+    <h3 id="this-device-heading">This device</h3>
+    {% include "_push_controls.html" %}
+  </div>
+  {% endif %}
   <p class="small"><a href="/app">Get the app</a></p>
 </section>

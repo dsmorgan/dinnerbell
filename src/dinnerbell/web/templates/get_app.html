@@ -9,18 +9,12 @@
   <h2 id="installed-heading">You're in the app</h2>
   <p>Dinnerbell is on your Home Screen. Open it from there.</p>
 </section>
-{#- Turn on notifications (spec 6.15, "The installable app"): the tap iOS requires. Hidden until
-    push.js finds push here: on iPhone and iPad only inside the installed app, elsewhere wherever
-    the browser has PushManager. Signed-in members only: guests never get pushes. -#}
+{#- Turn on notifications (spec 6.15): the tap iOS requires. Signed-in members only: guests never
+    get pushes. push.js shows the card and what fits this device. -#}
 {% if principal and not principal.member.is_guest and push_key %}
 <section class="card stack" id="notifications" aria-labelledby="notifications-heading" hidden>
   <h2 id="notifications-heading">Notifications</h2>
-  <p id="push-state" role="status">Checking this device…</p>
-  <p class="push-actions">
-    <button type="button" class="button primary" id="push-on" hidden>Turn on notifications</button>
-    <button type="button" class="button" id="push-off" hidden>Turn off</button>
-  </p>
-  <p class="small muted">Dinnerbell sends notifications through your phone's push service, from Apple, Google, Mozilla, or Microsoft. It sees when your device gets one and how big it is, not what it says.</p>
+  {% include "_push_controls.html" %}
 </section>
 {% endif %}
 <section class="card stack in-browser" id="iphone" aria-labelledby="iphone-heading">

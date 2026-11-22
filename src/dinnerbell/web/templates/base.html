@@ -85,6 +85,11 @@
   </header>
   <div id="save-error" class="alert error save-banner" role="alert" hidden></div>
   <main class="page">
+    {#- Inside the installed app, push.js shows this until the member answers the permission
+        prompt on Preferences (spec 6.15). -#}
+    {%- if web_app and push_key and principal and not principal.member.is_guest and principal.member.delivery.value != "slack" %}
+    <p class="alert editing" id="push-nudge" hidden>Get notifications on this phone: <a href="/preferences#notify-via">turn them on</a>.</p>
+    {%- endif %}
     {% block content %}{% endblock %}
   </main>
   <footer class="site-footer small muted">Dinnerbell {{ version }}</footer>

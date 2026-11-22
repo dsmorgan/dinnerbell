@@ -2,9 +2,9 @@
 // Web push in the browser (spec 6.15). Loaded from /static on a member's pages while the web app
 // is on, so the CSP needs no inline code.
 //
-// On Get the app, it runs the Notifications card. The card stays hidden unless this browser can
-// take pushes: on iPhone and iPad only inside the installed app, elsewhere wherever PushManager
-// exists. Turning on asks for permission (iOS needs the tap), registers /sw.js for the whole site
+// On Get the app and Preferences, it runs the Notifications controls. Where this browser can't
+// take pushes (on iPhone and iPad, anywhere but the installed app; elsewhere, without
+// PushManager), it says why instead. Turning on asks for permission (iOS needs the tap), registers /sw.js for the whole site
 // if it isn't already, drops a subscription made with a different key (a changed secret key, say),
 // subscribes, and sends the subscription to Dinnerbell with the page's CSRF token. Turn off
 // unsubscribes and tells Dinnerbell.
@@ -24,6 +24,13 @@
   var ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
   var installed = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
   if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window) || (ios && !installed)) {
+    // Say why, rather than leave the card out: on an iPhone or iPad, only the Home Screen app
+    // gets pushes (Safari and in-app browsers such as Slack's have no push at all).
+    if (card) {
+      document.getElementById("push-state").hidden = true;
+      document.getElementById(ios ? "push-install" : "push-unsupported").hidden = false;
+      card.hidden = false;
+    }
     return;
   }
 
@@ -159,8 +166,13 @@
       });
   }
 
-  // Every page but Get the app, inside the installed app: send an existing subscription again.
+  // Every other page, inside the installed app: until the member answers the permission prompt,
+  // point them to it; once they allow, send an existing subscription again.
   if (!card) {
+    var nudge = document.getElementById("push-nudge");
+    if (installed && nudge && Notification.permission === "default") {
+      nudge.hidden = false;
+    }
     if (!installed || Notification.permission !== "granted") {
       return;
     }

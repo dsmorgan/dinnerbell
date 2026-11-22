@@ -110,7 +110,8 @@ def test_the_admin_turns_it_on_and_off_and_each_change_is_audited(admin: TestCli
     assert inline_code(settings_page.text)[1] == []
     assert 'id="not-built-yet"' not in settings_page.text  # push and code sign-in both exist now
     note = page(settings_page).split('id="web-app-pushes">', 1)[1].split("</p>", 1)[0]
-    assert "get push notifications once they turn them on" in note and "sign in with a code" in note
+    assert "get push notifications" in note and "sign in with a code" in note
+    assert "nothing changes for members" in page(settings_page)
     switch(admin, True)
     on = page(admin.get("/admin/web-app?notice=on"))
     assert "The web app is on." in on and 'value="on" aria-describedby="web-app-about" checked>' in on
@@ -293,6 +294,38 @@ def test_a_member_with_slack_starts_on_slack_and_chooses(admin: TestClient, migr
     assert 'name="via"' not in card(admin.get("/preferences").text)
     link_slack(admin, me, "U01ADMIN")
     assert 'name="via" value="web" checked' in card(admin.get("/preferences").text)
+
+
+def test_preferences_turns_on_this_devices_notifications(admin: TestClient, migrated: Settings) -> None:
+    """Inside the installed app, Turn on notifications is on Preferences, beside the choice, and a
+    banner on every page points there until the member answers; a member on Slack is told why
+    their device gets nothing."""
+    switch(admin, True)
+    me = member(migrated, "admin@example.com").id
+    link_slack(admin, me, "U01ADMIN")
+    prefs = admin.get("/preferences").text
+    device = card(prefs).split('id="notifications"', 1)[1]
+    assert "hidden" in device.split(">", 1)[0] and "Turn on notifications" in device
+    assert 'id="push-install" hidden' in device and '<a href="/app">Get the app</a> shows how.' in device
+    assert 'id="push-slack"' in device  # on Slack: this device gets nothing
+    assert 'id="push-nudge"' not in admin.get("/").text
+    assert inline_code(prefs)[1] == []
+    assert submit(admin, "/preferences/notify", {"via": "both"}).status_code == 303
+    prefs = admin.get("/preferences").text
+    assert 'id="push-slack"' not in prefs and 'id="notifications"' in card(prefs)
+    today = admin.get("/").text
+    nudge = today.split('id="push-nudge"', 1)[1].split("</p>", 1)[0]
+    assert nudge.startswith(" hidden>") and 'href="/preferences#notify-via"' in nudge
+    app = admin.get("/app").text  # the same controls, without a link to the page they're on
+    assert 'id="push-install" hidden' in app and "shows how." not in app
+    switch(admin, False)
+    assert 'id="push-nudge"' not in admin.get("/").text and 'id="notifications"' not in admin.get("/preferences").text
+
+
+def test_an_admin_never_sees_another_members_device_controls(admin: TestClient, sam: int, migrated: Settings) -> None:
+    switch(admin, True)
+    html = admin.get(f"/admin/members/{sam}/preferences").text
+    assert 'id="notify-via"' in html and 'id="notifications"' not in html
 
 
 def test_an_admin_sets_a_members_choice_and_it_is_audited(
