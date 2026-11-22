@@ -267,25 +267,27 @@ def test_every_button_in_the_admin_only_templates_is_admin_or_danger_with_the_ke
     """The templates themselves, so a button that only shows in a state the render test doesn't
     reach, such as Link anyway or Back to automatic, can't slip back to primary or secondary.
     Every ``<button`` and every link styled as one must match the strict form below, so none can
-    escape the check. A ``{{ }}`` in the class may only choose between admin and danger; ``{% %}``
+    escape the check. A ``{{ }}`` in the class must be ``'admin' if ... else 'danger'`` or the
+    reverse; ``{% %}``
     isn't allowed, since a condition could leave the role out. ``_code_value.html``, admin only on
     Admin > Members, is checked by the render test below."""
     files = [*sorted({f for pattern in ADMIN_ONLY for f in TEMPLATES.glob(pattern)}), TEMPLATES / "_member_row.html"]
     assert len(files) >= 9
-    strict = re.compile(r'<(?:a|button)\b[^>]*?\bclass="(button\b[^"]*)"[^>]*>(\{\{ key_icon\(\) \}\})?')
+    strict = re.compile(r'<(?:a|button)\b[^>]*?(?<![\w-])class="(button\b[^"]*)"[^>]*>(\{\{ key_icon\(\) \}\})?', re.I)
+    choice = re.compile(r"\s*'(admin|danger)'\s+if\s+[^']+?\s+else\s+'(admin|danger)'\s*")
     found = 0
     for f in files:
         source = f.read_text()
         if f.name != "_member_row.html":
             assert "{% set admin_page = true %}" in source, f.name
-        everything = re.findall(r"<button\b|<a\b[^>]*\bclass=[\"'][^\"']*\bbutton\b", source)
+        everything = re.findall(r"<button\b|<a\b[^>]*(?<![\w-])class=[\"'][^\"']*\bbutton\b", source, re.I)
         tags = strict.findall(source)
         assert len(tags) == len(everything), f"{f.name}: {len(everything) - len(tags)} buttons in an unchecked form"
         for roles, key in tags:
             assert "{%" not in roles and "primary" not in roles.split(), f"{f.name}: {roles}"
             chosen = re.findall(r"\{\{(.*?)\}\}", roles)
             if chosen:
-                assert all(set(re.findall(r"'(\w+)'", c)) <= {"admin", "danger"} for c in chosen), f"{f.name}: {roles}"
+                assert all(choice.fullmatch(c) for c in chosen), f"{f.name}: {roles}"
             else:
                 assert re.search(r"\b(admin|danger)\b", roles), f"{f.name}: {roles}"
             assert key, f"{f.name}: no key on {roles}"
