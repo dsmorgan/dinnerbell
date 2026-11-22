@@ -240,7 +240,7 @@ The reset deletes every call and everything in it (answers, suggestions, proposa
    - **Days off kept** lists today's and later days whose call was skipped or called off. They stay off. To have a call on one after all, start it from App Home, Today, or `/dinnerbell call`.
    - If it says the scheduler posts today's call again, today's call has finished but its answers are still open. To avoid a second call, run the reset after the answer deadline.
 
-   Then type `reset`. Without a terminal, run the command again with `--yes`. The command first backs up the database to `/data/backups/pre-reset-VERSION-TIME.db`, which nightly pruning keeps until five newer `pre-reset` copies replace it, then deletes the history in one transaction, and writes a `history.reset` audit row.
+   Then type `reset`. Without a terminal, run the command again with `--yes`. The command first backs up the database to `/data/backups/pre-reset-VERSION-TIME.db`, which nightly pruning never deletes, then deletes the history in one transaction, and writes a `history.reset` audit row.
 
 4. Check that History and Stats are empty, Today and App Home show no old calls, the catalog, Members, Preferences, and Schedule are unchanged, and the **Kept** counts the command printed match its preview's **Keeps** counts.
 
@@ -255,7 +255,7 @@ Every night at 03:30 household time, Dinnerbell backs up its database to `/data/
 Besides the nightly `dinnerbell-YYYY-MM-DD.db` copies, Dinnerbell takes a one-off copy before anything hard to undo. Each is named for what it came before, with the UTC time:
 
 - `pre-upgrade-VERSION-TIME.db`: [`dinnerbell backup`](#back-up-now), which you run before an upgrade.
-- `pre-migrate-FROM-TO-TIME.db`, such as `pre-migrate-0040-to-0044-20261122T013000Z.db`: `serve` or `migrate`, when the database needs migrating. See [Upgrade](#upgrade).
+- `pre-migrate-FROM-TO-TIME.db`, such as `pre-migrate-0040-to-0044-20261122T013000.123456Z.db`: `serve` or `migrate`, when the database needs migrating. See [Upgrade](#upgrade).
 - `pre-reset-VERSION-TIME.db`: `reset-history`. See [Going live](#going-live).
 
 ### What pruning keeps
@@ -263,9 +263,9 @@ Besides the nightly `dinnerbell-YYYY-MM-DD.db` copies, Dinnerbell takes a one-of
 After each nightly backup, Dinnerbell deletes the copies it no longer needs. It keeps:
 
 - The 14 newest nightly copies, and the newest nightly copy from each of the last 8 weeks.
-- The five newest one-off copies of each kind: `pre-upgrade`, `pre-migrate`, and `pre-reset`.
+- The five newest `pre-migrate-*` copies. A migration that fails restarts the container, and each start takes another copy, so these would otherwise fill the disk.
 
-Pruning deletes only files named the way Dinnerbell names them. To keep a one-off copy for good, copy it off the host, or rename it without the time, such as `pre-upgrade-before-the-move.db`.
+Pruning never deletes `pre-upgrade-*` or `pre-reset-*` copies, or any file it didn't name, so delete old ones yourself. To keep a `pre-migrate-*` copy for good, copy it off the host, or rename it without the time, such as `pre-migrate-0040-to-0044-before-the-move.db`.
 
 ### What a backup holds
 
@@ -275,7 +275,7 @@ Pruning deletes only files named the way Dinnerbell names them. To keep a one-of
 - Assistant conversations and drafts.
 - Devices that get notifications, and the members' preferences, vetoes, and dietary needs.
 
-Retention settings, such as the assistant's **Conversation hours**, draft expiry, and the 30 days for refused sign-ins, delete rows from the live database only. A copy keeps what it held until pruning deletes the copy: two weeks for most nightly copies, about two months for weekly ones, and until five newer copies of its kind replace it for a one-off copy. Copies you made off the host stay until you delete them.
+Retention settings, such as the assistant's **Conversation hours**, draft expiry, and the 30 days for refused sign-ins, delete rows from the live database only. A copy keeps what it held until pruning deletes the copy: two weeks for most nightly copies, about two months for weekly ones, until five newer copies replace it for a `pre-migrate-*` copy, and until you delete it for a `pre-upgrade-*` or `pre-reset-*` copy. Copies you made off the host stay until you delete them.
 
 ### What else to back up
 
@@ -315,7 +315,7 @@ Before an upgrade, or any change you might want to undo, take a fresh backup in 
 podman-compose exec dinnerbell dinnerbell backup
 ```
 
-The command copies the database to `/data/backups/pre-upgrade-VERSION-TIME.db`, with the running version and the UTC time, checks the copy with `quick_check`, flushes it to disk, and prints its name, such as `Backed up the database to /data/backups/pre-upgrade-0.16.0-20261112T013000Z.db`. It never migrates or changes the database. If the copy fails its check, the command deletes it, says why, and exits with status 1. Write the name down: [Roll back](#roll-back) needs it. Copy the backup off the host.
+The command copies the database to `/data/backups/pre-upgrade-VERSION-TIME.db`, with the running version and the UTC time, checks the copy with `quick_check`, flushes it to disk, and prints its name, such as `Backed up the database to /data/backups/pre-upgrade-0.16.0-20261112T013000Z.db`. It never migrates or changes the database. If the copy fails its check, the command deletes it, says why, and exits with status 1. Write the name down: [Roll back](#roll-back) needs it. Nightly pruning never deletes these files, so delete old ones yourself. Copy the backup off the host.
 
 ### Restore on a new host
 

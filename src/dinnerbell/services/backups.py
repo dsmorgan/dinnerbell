@@ -14,7 +14,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from dinnerbell.db.migrate import pending_upgrade
-from dinnerbell.domain.backups import backups_to_delete, one_offs_to_delete
+from dinnerbell.domain.backups import backups_to_delete, migration_backups_to_delete
 
 log = logging.getLogger(__name__)
 PREFIX = "dinnerbell-"
@@ -25,9 +25,8 @@ BACKUP_ATTEMPTS = 2
 # ``pre-*.partial`` was left by a crash.
 STALE_PARTIAL_AFTER = timedelta(hours=1)
 _NAME = re.compile(r"^dinnerbell-(\d{4}-\d{2}-\d{2})\.db$")
-_ONE_OFF = re.compile(r"^pre-([a-z]+)-.+-(\d{8}T\d{6}Z)\.db$")
-"""A one-off backup's name, as ``one_off_name`` and ``migration_backup_name`` make it: its kind
-and its UTC time."""
+_MIGRATION = re.compile(r"^pre-migrate-\d+-to-\d+-(\d{8}T\d{6}\.\d{6}Z)\.db$")
+"""A backup taken before migrating, as ``migration_backup_name`` makes it, and its UTC time."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,16 +51,16 @@ def existing_backups(backup_dir: Path) -> dict[date, Path]:
     return found
 
 
-def existing_one_offs(backup_dir: Path) -> dict[str, tuple[str, str]]:
-    """Each one-off backup's name, with its kind and the UTC time in its name. A ``pre-*`` file
-    named any other way isn't counted, so pruning leaves it alone."""
+def existing_migration_backups(backup_dir: Path) -> dict[str, str]:
+    """Each ``pre-migrate-*`` backup's name, with the UTC time in it. A file named any other way
+    isn't counted, so pruning leaves it alone."""
     if not backup_dir.is_dir():
         return {}
-    found: dict[str, tuple[str, str]] = {}
+    found: dict[str, str] = {}
     for path in backup_dir.iterdir():
-        match = _ONE_OFF.match(path.name)
+        match = _MIGRATION.match(path.name)
         if match and path.is_file():
-            found[path.name] = (match.group(1), match.group(2))
+            found[path.name] = match.group(1)
     return found
 
 
@@ -118,8 +117,11 @@ def one_off_name(purpose: str, version: str, now: datetime) -> str:
 
 def migration_backup_name(from_revision: str, to_revision: str, now: datetime) -> str:
     """The name of the backup taken before migrating, such as
-    ``pre-migrate-0040-to-0044-20261122T013000Z.db``: the two revisions' numbers and the UTC time."""
-    return f"pre-migrate-{_revision_number(from_revision)}-to-{_revision_number(to_revision)}-{_stamp(now)}{SUFFIX}"
+    ``pre-migrate-0040-to-0044-20261122T013000.123456Z.db``: the two revisions' numbers and the
+    UTC time to the microsecond, so two starts in the same second, such as ``migrate`` while
+    ``serve`` starts, or a quick restart, never pick the same name."""
+    stamp = f"{now.astimezone(UTC):%Y%m%dT%H%M%S.%fZ}"
+    return f"pre-migrate-{_revision_number(from_revision)}-to-{_revision_number(to_revision)}-{stamp}{SUFFIX}"
 
 
 def _stamp(now: datetime) -> str:
@@ -140,9 +142,10 @@ def run_one_off_backup(
 ) -> Path:
     """Back up ``database_path`` now, as ``name`` in ``backup_dir``, and check the copy before
     anything relies on it: SQLite's ``quick_check`` passes, every table in ``require_tables``
-    is there, and the file is on disk (fsync). Pruning keeps the newest ``ONE_OFF_COPIES`` of
-    each kind (``domain.backups``). Raises FileExistsError rather than replace a backup, and
-    BackupCheckFailed, deleting the copy, when a check fails. Leaves no partial copy."""
+    is there, and the file is on disk (fsync). Pruning never deletes it, except a
+    ``pre-migrate-*`` copy past the newest ``MIGRATION_COPIES`` (``domain.backups``). Raises
+    FileExistsError rather than replace a backup, and BackupCheckFailed, deleting the copy, when
+    a check fails. Leaves no partial copy."""
     backup_dir.mkdir(parents=True, exist_ok=True)
     target = backup_dir / name
     if target.exists():
@@ -163,17 +166,26 @@ def run_one_off_backup(
 
 
 class MigrationBackupFailed(Exception):
-    """The backup before migrating failed, so the database wasn't migrated."""
+    """The database couldn't be read, or the backup before migrating failed, so the database
+    wasn't migrated."""
 
 
 def backup_before_migrating(database_path: Path, backup_dir: Path, *, now: datetime) -> Path | None:
     """If the database exists at a known revision older than this build's newest, back it up as
-    ``pre-migrate-FROM-TO-TIME.db`` and return the copy's path, then prune old one-off copies, so a
-    migration that fails and restarts in a loop keeps only a few. Returns None, backing up
-    nothing, for a missing or empty database, one already current, or one at a revision this
-    build doesn't know (``run_migrations`` refuses that). Raises MigrationBackupFailed, with a
-    message for the operator that holds no database contents, when the backup fails."""
-    pending = pending_upgrade(database_path)
+    ``pre-migrate-FROM-TO-TIME.db`` and return the copy's path, then prune old ``pre-migrate-*``
+    copies, so a migration that fails and restarts in a loop keeps only a few. Returns None,
+    backing up nothing, for a missing or empty database, one already current, or one at a
+    revision this build doesn't know (``run_migrations`` refuses that). Raises
+    MigrationBackupFailed, with a message for the operator that holds no database contents, when
+    the database can't be read or the backup fails."""
+    try:
+        pending = pending_upgrade(database_path)
+    except (OSError, sqlite3.Error) as exc:
+        raise MigrationBackupFailed(
+            f"Can't read the database at {database_path} ({type(exc).__name__}): it isn't a SQLite "
+            "database, or it's damaged or unreadable. Nothing was changed. Restore a backup from "
+            f"{backup_dir}, or check the file's permissions."
+        ) from exc
     if pending is None:
         return None
     current, head = pending
@@ -224,13 +236,14 @@ def _fsync(path: Path) -> None:
 
 def prune(backup_dir: Path) -> tuple[Path, ...]:
     """Delete the nightly copies past their daily and weekly retention, and all but the newest
-    few one-off copies of each kind. Leaves every other file alone."""
+    few ``pre-migrate-*`` copies. Leaves every other file alone, ``pre-upgrade-*`` and
+    ``pre-reset-*`` included: the operator deletes those."""
     backups = existing_backups(backup_dir)
-    one_offs = existing_one_offs(backup_dir)
+    migrations = existing_migration_backups(backup_dir)
     doomed = tuple(
         sorted(
             [backups[day] for day in backups_to_delete(backups)]
-            + [backup_dir / name for name in one_offs_to_delete(one_offs)]
+            + [backup_dir / name for name in migration_backups_to_delete(migrations)]
         )
     )
     for path in doomed:
