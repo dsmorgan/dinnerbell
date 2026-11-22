@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import json
 import pathlib
+import ssl
 from collections.abc import Callable, Iterable
 from typing import Any
 
+import certifi
 import httpx2
 import pytest
 from anthropic.types.beta import BetaMessage
@@ -421,5 +423,9 @@ async def test_the_anthropic_client_ignores_proxy_and_ca_variables(
         assert http.trust_env is False
         assert http.follow_redirects is False
         assert not http._mounts  # private in httpx2: no proxy transport for any URL
+        trusted = http._transport._pool._ssl_context  # private in httpx2 and httpcore2
+        bundled = ssl.create_default_context(cafile=certifi.where())
+        # httpx2's default is the system's store (truststore on macOS), not certifi.
+        assert trusted.get_ca_certs() == bundled.get_ca_certs()
     finally:
         await model.close()
