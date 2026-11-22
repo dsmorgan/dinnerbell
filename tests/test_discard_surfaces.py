@@ -35,6 +35,7 @@ from tests.support.fake_oidc import FakeProvider
 from tests.support.slack import Slack, wire
 from tests.support.web import submit
 from tests.test_auth_flow import rows
+from tests.test_buttons import assert_admin_only
 from tests.test_events_web import sign_in_as, start
 from tests.test_scrub import LABEL, Terminal, cli_env  # noqa: F401 - cli_env is a fixture
 
@@ -72,6 +73,8 @@ def test_an_admin_discards_a_call_on_the_web_and_starts_a_fresh_one(
     text = page(confirm)
     assert "Discard dinner for" in text and "Answers: 1" in text and "Notifications not yet sent: 2" in text
     assert f'action="/events/{event_id}/admin/discard"' in text
+    assert '<main class="page admin-page">' in text  # only admins see it (#317)
+    assert assert_admin_only("discard", text) == 2  # Discard (test) is danger, Keep it admin, both keyed
 
     assert admin.post(f"/events/{event_id}/admin/discard", data={}).status_code == 403  # no CSRF token
     assert len(rows(migrated, EventRow)) == 1

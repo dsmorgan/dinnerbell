@@ -10,6 +10,7 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import date
 from html.parser import HTMLParser
+from pathlib import Path
 
 import httpx
 import pytest
@@ -256,6 +257,31 @@ def assert_admin_only(where: str, html: str) -> int:
     for tag in tags:
         assert tag.split(">", 1)[1].startswith(KEY), f"{where}: no key on {tag}"
     return len(actions)
+
+
+TEMPLATES = Path(__file__).parents[1] / "src" / "dinnerbell" / "web" / "templates"
+ADMIN_ONLY = ("admin_*.html", "event_discard.html")
+
+
+def test_every_button_in_the_admin_only_templates_is_admin_or_danger_with_the_key() -> None:
+    """The templates themselves, so a button that only shows in a state the render test doesn't
+    reach, such as Link anyway or Back to automatic, can't slip back to primary or secondary."""
+    files = [*sorted({f for pattern in ADMIN_ONLY for f in TEMPLATES.glob(pattern)}), TEMPLATES / "_member_row.html"]
+    assert len(files) >= 9
+    found = 0
+    for f in files:
+        source = f.read_text()
+        if f.name != "_member_row.html":
+            assert "{% set admin_page = true %}" in source, f.name
+        for tag in re.findall(r'<(?:a|button)\b[^>]*\bclass="button\b[^"]*"[^>]*>(?:\{\{ key_icon\(\) \}\})?', source):
+            found += 1
+            cls = re.search(r'class="([^"]*)"', tag)
+            assert cls is not None
+            roles = cls.group(1)
+            assert "primary" not in roles, f"{f.name}: {tag}"
+            assert re.search(r"\badmin\b|\bdanger\b", roles), f"{f.name}: {tag}"
+            assert tag.endswith("{{ key_icon() }}"), f"{f.name}: no key on {tag}"
+    assert found >= 30
 
 
 @pytest.mark.parametrize("settings_overrides", [{"anthropic_api_key": "sk-ant-test-not-a-real-key"}])
