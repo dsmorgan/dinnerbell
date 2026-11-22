@@ -1018,4 +1018,4 @@ The table is in build order. M0 through M2 are the minimum for the household to 
 | [0008](adr/0008-feedback-informed-ranking.md) | Ratings move the rater's own score, and the household sees a hint |
 | [0009](adr/0009-optional-assistant.md) | An optional assistant drafts through the domain API, and a member confirms |
 | [0010](adr/0010-optional-web-app.md) | An optional web app with push notifications, beside Slack |
-| [0011](adr/0011-local-weather.md) | Local weather for Dinnerbone's Den, from Open-Meteo, only if an admin turns it on (proposed) |
+| [0011](adr/0011-local-weather.md) | Local weather for Dinnerbone's Den, from Open-Meteo, only if an admin turns it on |

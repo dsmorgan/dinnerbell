@@ -704,15 +704,19 @@ def test_the_refresh_asks_once_then_waits_one_to_three_hours(
     assert refresh(admin) == 1
 
 
-def test_a_save_while_on_asks_again_at_the_next_check(admin: TestClient, open_meteo: FakeOpenMeteo) -> None:
-    """Any save that leaves it on, such as turning it off and on or another code, asks at the next
-    check, whenever the last fetch was (spec 11)."""
+def test_turning_it_on_or_another_code_asks_again_at_the_next_check(
+    admin: TestClient, open_meteo: FakeOpenMeteo
+) -> None:
+    """Turning it back on, or another code, asks at the next check, whenever the last fetch was; a
+    save that changes nothing asks nothing (spec 11)."""
     save(admin)
     assert refresh(admin) == 1
     save(admin, on=False)
     save(admin)
     assert refresh(admin) == 1
     assert len(open_meteo.forecasts()) == 2
+    save(admin)  # the same code again: nothing changes, so nothing is asked
+    assert refresh(admin) == 0
     save(admin, postal_code=OTHER_POSTAL_CODE)  # another code, with it on all along
     assert refresh(admin) == 1
     assert len(open_meteo.forecasts()) == 3

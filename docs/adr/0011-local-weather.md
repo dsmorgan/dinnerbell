@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Proposed |
+| Status | Accepted |
 | Date | 2026-11-22 |
 | Builds on | [ADR 0009](0009-optional-assistant.md) (fetching from the internet), [ADR 0010](0010-optional-web-app.md) (a fixed host allowlist for push) |
 | Issue | [#319](https://github.com/dsmorgan/dinnerbell/issues/319), spec 11 ("Fun mode") |
