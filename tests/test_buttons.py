@@ -113,13 +113,10 @@ def assert_one_primary_per_card(html: str) -> None:
     assert not crowded, f"cards with more than one primary: {crowded}"
 
 
-PAGE_FORM = "a form whose fields span several cards; its one Save sits under them, for the whole form"
-OUTSIDE_CARDS: dict[str, str] = {
-    "Save ranking": PAGE_FORM,  # Admin > Ranking
-    "Save badge counts": PAGE_FORM,  # Admin > Badges: three ladders, one card each
-    "Save assistant settings": PAGE_FORM,  # Admin > Assistant
+OUTSIDE_CARDS: dict[tuple[str, str], str] = {
+    ("/admin/badges", "Save badge counts"): "three ladders, one card each, saved together by one Save under them",
 }
-"""Primaries allowed outside any card, by label, each with the reason."""
+"""Primaries allowed outside any card, by page and label, each with the reason."""
 
 
 def check_page(where: str, html: str, *, min_cards: int = 1) -> list[Button]:
@@ -133,7 +130,7 @@ def check_page(where: str, html: str, *, min_cards: int = 1) -> list[Button]:
         if "choice" in b.classes:
             assert b.attrs.get("aria-pressed") in {"true", "false"}, f"{where}: a toggle without aria-pressed: {b}"
         if b.primary and b.card is None:
-            assert b.text in OUTSIDE_CARDS, f"{where}: a primary outside any card: {b.text!r}"
+            assert (where, b.text) in OUTSIDE_CARDS, f"{where}: a primary outside any card: {b.text!r}"
     return [b for b in parsed.buttons if b.primary]
 
 
@@ -336,6 +333,12 @@ def test_each_card_has_at_most_one_primary(
     seen |= {b.text for b in check_page("Sam answers In", answered.text)}
 
     assert seen >= EXPECTED, f"primaries no page showed: {sorted(EXPECTED - seen)}"
+    # Signed out: the sign-in page and, with the web app on, code sign-in.
+    out = TestClient(admin.app, base_url=str(admin.base_url), headers={"Origin": str(admin.base_url).rstrip("/")})
+    for path in ("/", "/auth/code"):
+        response = out.get(path)
+        assert response.status_code == 200, path
+        assert check_page(f"signed out: {path}", response.text), path  # each has its one primary
 
 
 @pytest.mark.parametrize("settings_overrides", [{"slack_team_id": TEAM, "oidc_issuer": SLACK_ISSUER}])

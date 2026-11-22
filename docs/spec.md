@@ -705,7 +705,7 @@ Each button style means one thing, the same on every page (#317). Toggles aren't
 
 - **Admin pages keep the plain roles.** Under **Admin**, every action is an admin's, so the admin style would say nothing. The exception is a member's page reused under **Admin**: an admin's view of someone's Preferences (`/admin/members/{id}/preferences`) uses the admin style, so its saves don't look like the member's own.
 - **Danger wins.** An admin-only action that destroys something, such as **Re-run**, **Discard (test)**, or **Merge**, is danger.
-- **A primary outside any card** is allowed only for a form whose fields span several cards, such as **Save ranking**; `tests/test_buttons.py` lists each one with its reason.
+- **A primary outside any card** is allowed only for a form whose fields span several cards, such as **Save badge counts** on **Admin** > **Badges**; `tests/test_buttons.py` lists each one with its reason.
 - **Looks.** Primary is the accent fill. Secondary is `--text` on a tinted fill (`--button`) inside a darker edge (`--button-line`). Danger is `--danger` on `--danger-soft` inside `--danger-line`. Admin is `--admin` on `--admin-fill` inside `--admin-line`, and a call's **Admin** section sits in a box of `--admin-line`, its summary the key and "Admin" in `--admin`. Every edge has at least 3:1 contrast on `--surface` and `--bg`, and every label at least 4.5:1 on its fill, in both themes, pressed too. A pressed button darkens, or lightens in dark mode: primary by `--press-filled`, the other action roles by `--press-tint`. Toggles, In, Maybe, and Out, and the quiet takeout pair keep their own press.
 
 ## 12. Metrics and badges
