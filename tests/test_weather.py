@@ -704,8 +704,9 @@ def test_the_refresh_asks_once_then_waits_one_to_three_hours(
     assert refresh(admin) == 1
 
 
-def test_a_change_of_code_asks_again_at_the_next_check(admin: TestClient, open_meteo: FakeOpenMeteo) -> None:
-    """Turning it off and on, or another code, asks at the next check, whenever the last fetch was."""
+def test_a_save_while_on_asks_again_at_the_next_check(admin: TestClient, open_meteo: FakeOpenMeteo) -> None:
+    """Any save that leaves it on, such as turning it off and on or another code, asks at the next
+    check, whenever the last fetch was (spec 11)."""
     save(admin)
     assert refresh(admin) == 1
     save(admin, on=False)
