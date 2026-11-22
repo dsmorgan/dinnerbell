@@ -233,16 +233,21 @@ async def _failed_row(
 
 
 def _settings(
+    member: Member,
     can_cook: str | None,
     can_pickup: str | None,
     can_order: str | None,
-    mute_dm_reminders: str | None,
+    send_reminders: str | None,
     feedback_reminder: str | None,
 ) -> preference_service.MySettings:
+    """The You form's settings for ``member``. **Send me reminders** is stored the other way
+    round, as ``mute_dm_reminders`` (#322). While it's off, the nested **Remind me "How was
+    it?"** is dimmed and keeps the member's stored value, whatever the form posts for it."""
+    send = checked(send_reminders)
     return preference_service.MySettings(
         capabilities=Capabilities(checked(can_cook), checked(can_pickup), checked(can_order)),
-        mute_dm_reminders=checked(mute_dm_reminders),
-        feedback_reminder=checked(feedback_reminder),
+        mute_dm_reminders=not send,
+        feedback_reminder=checked(feedback_reminder) if send else member.feedback_reminder,
     )
 
 
@@ -344,11 +349,12 @@ async def save_settings(
     can_cook: Checkbox = None,
     can_pickup: Checkbox = None,
     can_order: Checkbox = None,
-    mute_dm_reminders: Checkbox = None,
+    send_reminders: Checkbox = None,
     feedback_reminder: Checkbox = None,
 ) -> Response:
-    settings = _settings(can_cook, can_pickup, can_order, mute_dm_reminders, feedback_reminder)
-    await _own(principal).save_settings(db, context, settings)
+    whose = _own(principal)
+    settings = _settings(whose.member, can_cook, can_pickup, can_order, send_reminders, feedback_reminder)
+    await whose.save_settings(db, context, settings)
     return RedirectResponse("/preferences?notice=settings", status_code=303)
 
 
@@ -424,11 +430,11 @@ async def save_member_settings(
     can_cook: Checkbox = None,
     can_pickup: Checkbox = None,
     can_order: Checkbox = None,
-    mute_dm_reminders: Checkbox = None,
+    send_reminders: Checkbox = None,
     feedback_reminder: Checkbox = None,
 ) -> Response:
-    settings = _settings(can_cook, can_pickup, can_order, mute_dm_reminders, feedback_reminder)
     whose = await _theirs(principal, db, member_id)
+    settings = _settings(whose.member, can_cook, can_pickup, can_order, send_reminders, feedback_reminder)
     await whose.save_settings(db, context, settings)
     return local_redirect("/admin/members/{}/preferences?notice=settings", whose.member.id)
 

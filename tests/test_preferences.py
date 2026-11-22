@@ -120,7 +120,8 @@ def test_inactive_items_are_listed_only_if_rated(
 
 def test_settings(client: TestClient, provider: FakeProvider, migrated: Settings) -> None:
     sign_in(client, provider)
-    response = submit(client, "/preferences/settings", {"can_cook": "on", "can_order": "on", "feedback_reminder": "on"})
+    form = {"can_cook": "on", "can_order": "on", "send_reminders": "on", "feedback_reminder": "on"}
+    response = submit(client, "/preferences/settings", form)
     assert response.status_code == 303
     assert "Settings saved." in page(client.get(response.headers["location"]))
     me = member(migrated, "admin@example.com")
@@ -131,10 +132,12 @@ def test_settings(client: TestClient, provider: FakeProvider, migrated: Settings
         False,
         True,
     )
-    submit(client, "/preferences/settings", {"mute_dm_reminders": "on"})
+    submit(client, "/preferences/settings", {})  # every box unchecked: reminders off, How was it? kept
     me = member(migrated, "admin@example.com")
-    assert (me.can_cook, me.can_order, me.mute_dm_reminders, me.feedback_reminder) == (False, False, True, False)
-    assert 'name="mute_dm_reminders" checked' in client.get("/preferences").text
+    assert (me.can_cook, me.can_order, me.mute_dm_reminders, me.feedback_reminder) == (False, False, True, True)
+    shown = client.get("/preferences").text
+    assert 'name="send_reminders" aria-describedby="reminders-where">' in shown
+    assert 'name="feedback_reminder" checked' in shown
     # The usual settings start a call's offers on when you answer In (#180), and ordering isn't
     # only delivery any more (#178).
     text = page(client.get("/preferences"))
@@ -145,6 +148,83 @@ def test_settings(client: TestClient, provider: FakeProvider, migrated: Settings
 
 
 # Privacy (FR-29) ------------------------------------------------------------------------------------
+
+
+def reminders_group(html: str) -> str:
+    """Preferences > Reminders, from its fieldset to the end of the nested box."""
+    return html.split('id="reminders"', 1)[1].split("</fieldset>", 1)[0]
+
+
+def test_send_me_reminders_is_stored_as_the_opposite_of_mute(
+    client: TestClient, provider: FakeProvider, migrated: Settings
+) -> None:
+    """#322: checked means reminders are on. An unchecked box posts nothing, which mutes them."""
+    sign_in(client, provider)
+    assert 'name="send_reminders" aria-describedby="reminders-where" checked' in client.get("/preferences").text
+    submit(client, "/preferences/settings", {"can_cook": "on"})
+    assert member(migrated, "admin@example.com").mute_dm_reminders
+    assert 'name="send_reminders" aria-describedby="reminders-where">' in client.get("/preferences").text
+    submit(client, "/preferences/settings", {"can_cook": "on", "send_reminders": "on"})
+    assert not member(migrated, "admin@example.com").mute_dm_reminders
+    assert 'name="send_reminders" aria-describedby="reminders-where" checked' in client.get("/preferences").text
+    # The old field name means nothing now: without send_reminders, reminders are off.
+    submit(client, "/preferences/settings", {"mute_dm_reminders": "on"})
+    assert member(migrated, "admin@example.com").mute_dm_reminders
+
+
+@pytest.mark.parametrize("stored", [True, False])
+def test_how_was_it_keeps_its_value_while_reminders_are_off(
+    client: TestClient, provider: FakeProvider, migrated: Settings, stored: bool
+) -> None:
+    """#322: while Send me reminders is off, the nested box is dimmed, and whatever it posts,
+    checked or not, the stored value stays. Turning reminders back on shows it again."""
+    sign_in(client, provider)
+    submit(client, "/preferences/settings", {"send_reminders": "on"} | ({"feedback_reminder": "on"} if stored else {}))
+    for posted in ({}, {"feedback_reminder": "on"}):
+        submit(client, "/preferences/settings", posted)
+        me = member(migrated, "admin@example.com")
+        assert (me.mute_dm_reminders, me.feedback_reminder) == (True, stored), posted
+        shown = reminders_group(client.get("/preferences").text)
+        assert ('name="feedback_reminder" checked' in shown) is stored
+    submit(client, "/preferences/settings", {"send_reminders": "on"})  # back on, the box unchecked: off
+    me = member(migrated, "admin@example.com")
+    assert (me.mute_dm_reminders, me.feedback_reminder) == (False, False)
+
+
+def test_the_reminders_group_names_where_reminders_go(
+    client: TestClient, provider: FakeProvider, migrated: Settings
+) -> None:
+    """#322: a positive parent box with a hint, and How was it? nested under it."""
+    sign_in(client, provider)
+    group = reminders_group(client.get("/preferences").text)
+    assert "<legend>Reminders</legend>" in group
+    assert "> Send me reminders</label>" in group
+    assert (
+        '<p class="small muted check-hint" id="reminders-where">Reminders come as Slack direct messages.</p>' in group
+    )
+    nested = group.split('<div class="check-nested">', 1)[1]
+    assert 'name="feedback_reminder"' in nested and '> Remind me "How was it?"</label>' in nested
+    assert "Mute direct" not in group and "Muting direct messages" not in group and "asking how it was" not in group
+    # While the web app is on, the hint names its notifications too.
+    assert submit(client, "/admin/web-app", {"on": "on"}).status_code == 303
+    group = reminders_group(client.get("/preferences").text)
+    assert (
+        "Reminders come as Slack direct messages, and as notifications on <strong>Web app</strong> or "
+        "<strong>Both</strong>." in group
+    )
+
+
+def test_the_nested_box_dims_with_css_only() -> None:
+    """#322: the CSP forbids inline script, so the stylesheet dims How was it? and stops taps on
+    it while Send me reminders is unchecked."""
+    from pathlib import Path
+
+    import dinnerbell.web
+
+    css = (Path(dinnerbell.web.__file__).parent / "static" / "app.css").read_text()
+    off = ".check-group:has(> .check > input:not(:checked)) .check-nested"
+    assert f"{off} {{ color: var(--muted); pointer-events: none; }}" in css
+    assert f"{off} input {{ opacity: 0.7; }}" in css
 
 
 @pytest.fixture

@@ -319,6 +319,6 @@ def test_the_preferences_page_turns_the_reminder_on(
     client: TestClient, household: dict[str, int], migrated: Settings
 ) -> None:
     prefs = page(client.get("/preferences"))
-    assert "send me one direct message asking how it was. Muting direct messages also stops this." in prefs
-    submit(client, "/preferences/settings", {"feedback_reminder": "on"})
+    assert 'Remind me "How was it?"' in prefs and "Muting direct messages" not in prefs
+    submit(client, "/preferences/settings", {"send_reminders": "on", "feedback_reminder": "on"})
     assert member(migrated, "admin@example.com").feedback_reminder

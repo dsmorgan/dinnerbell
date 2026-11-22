@@ -99,7 +99,7 @@ def test_start_a_call_and_respond(admin: TestClient, migrated: Settings) -> None
 def test_in_turns_on_your_usual_offers_once(admin: TestClient, migrated: Settings) -> None:
     """#180: with Cook and Order on Preferences, In turns on I can cook and I'll order. One
     turned off stays off when you answer In again; Maybe turns nothing on."""
-    submit(admin, "/preferences/settings", {"can_cook": "on", "can_order": "on"})
+    submit(admin, "/preferences/settings", {"can_cook": "on", "can_order": "on", "send_reminders": "on"})
     event_id = start(admin)
 
     def pressed(card: str) -> list[str]:
@@ -119,7 +119,7 @@ def test_in_turns_on_your_usual_offers_once(admin: TestClient, migrated: Setting
 
 def test_details_before_answering_turn_on_your_usual_offers(admin: TestClient, migrated: Settings) -> None:
     """#180: saving Details first counts you in, as In does, so your usual offers turn on."""
-    submit(admin, "/preferences/settings", {"can_pickup": "on"})
+    submit(admin, "/preferences/settings", {"can_pickup": "on", "send_reminders": "on"})
     event_id = start(admin)
     submit(admin, f"/events/{event_id}/details", {"note": "Home by six"})
     (response,) = rows(migrated, ResponseRow)

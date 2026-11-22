@@ -284,6 +284,15 @@ input:disabled { opacity: 0.7; }
 .check { display: flex; align-items: flex-start; gap: 0.6rem; min-height: 44px; padding: calc((44px - 1lh) / 2) 0; }
 .check input { flex: none; width: 22px; height: 22px; margin: calc((1lh - 22px) / 2) 0 0; font: inherit; accent-color: var(--accent); }
 
+/* A checkbox that controls the ones nested under it (Preferences > Reminders, #322). The hint
+   and the nested boxes line up with the parent's label text. While the parent is unchecked, the
+   nested boxes look disabled and ignore taps: muted text, and the box faded as input:disabled
+   is. The server keeps their stored values then. */
+.check-group .check-hint { margin: -0.3rem 0 0.2rem calc(22px + 0.6rem); }
+.check-group .check-nested { padding-left: calc(22px + 0.6rem); }
+.check-group:has(> .check > input:not(:checked)) .check-nested { color: var(--muted); pointer-events: none; }
+.check-group:has(> .check > input:not(:checked)) .check-nested input { opacity: 0.7; }
+
 .alert { padding: 0.7rem 0.9rem; border-radius: var(--radius-input); margin-bottom: 1rem; }
 .alert.ok { background: var(--ok-soft); color: var(--ok); }
 .alert.error { background: var(--danger-soft); color: var(--danger); }

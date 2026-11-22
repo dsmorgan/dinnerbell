@@ -86,7 +86,7 @@ Making a code writes a `member.sign_in_code_created` audit row, and signing in w
 
 ### Turn notifications on or off
 
-A member on **Web app** or **Both** gets a push on each device where they turned notifications on: for each direct message Slack would send them, such as a reminder, "You're cooking", or "Dinner moved to Taqueria", and for a call opening, voting opening, a shuffle of the picks (unless you shuffled), the decision, and a call off. A newer push about a call's posts replaces the older one on the lock screen; direct messages stay until you clear them. **Mute direct-message reminders** on **Preferences** mutes reminder pushes too. A push names the meal, the time, and what to do, and a tap opens the call's page. Guests don't get pushes.
+A member on **Web app** or **Both** gets a push on each device where they turned notifications on: for each direct message Slack would send them, such as a reminder, "You're cooking", or "Dinner moved to Taqueria", and for a call opening, voting opening, a shuffle of the picks (unless you shuffled), the decision, and a call off. A newer push about a call's posts replaces the older one on the lock screen; direct messages stay until you clear them. Turning off **Send me reminders** on **Preferences** stops reminder pushes too. A push names the meal, the time, and what to do, and a tap opens the call's page. Guests don't get pushes.
 
 On an iPhone or iPad (iOS 16.4 or later), notifications work only in the app on the Home Screen, not in Safari:
 

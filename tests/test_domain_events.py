@@ -969,7 +969,7 @@ def test_an_action_from_an_earlier_run_is_stale() -> None:
     assert issubclass(ev.StaleRun, EventRuleViolation)  # surfaces that don't know it still show it kindly
 
 
-def test_muting_direct_messages_stops_the_feedback_reminder() -> None:
+def test_turning_reminders_off_stops_the_feedback_reminder() -> None:
     asked = replace(member(1), feedback_reminder=True)
     assert wants_feedback_reminder(asked)
     assert not wants_feedback_reminder(replace(asked, mute_dm_reminders=True))
