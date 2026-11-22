@@ -731,8 +731,12 @@ fieldset.card > .button.block { margin-bottom: 0; }
    lines, and inputs line up along the bottom when the labels wrap to different lengths. */
 .trio { display: grid; gap: 0.9rem 0.5rem; align-items: end; }
 @media (min-width: 36rem) { .trio { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.35fr); } }
-.tabs { display: flex; gap: 0.25rem; margin: 0.25rem 0 0.5rem; }
-.tabs a { display: inline-flex; align-items: center; min-height: 44px; padding: 0 0.8rem; border-radius: var(--radius-input); color: var(--muted); text-decoration: none; }
+.tabs { display: flex; flex-wrap: wrap; gap: 0 0.25rem; margin: 0.25rem 0 0.5rem; }
+.tabs a { display: inline-flex; align-items: center; min-height: 44px; padding: 0 0.8rem; border-radius: var(--radius-input); color: var(--muted); text-decoration: none; white-space: nowrap; }
+/* Admin's five tabs don't fit one phone row: they wrap, each label kept whole. */
+@media (max-width: 26rem) {
+  .tabs a { padding: 0 0.6rem; }
+}
 .tabs a[aria-current="page"] { color: var(--accent-soft-text); background: var(--accent-soft); font-weight: 600; }
 
 /* ---- Test instance (DINNERBELL_INSTANCE_LABEL) --------------------------------------------- */
@@ -851,13 +855,16 @@ fieldset.card > .button.block { margin-bottom: 0; }
 /* Sign in (spec 6.15): inside the installed app, Sign in with a code comes first and is the primary button. */
 .signin-options { display: flex; flex-direction: column; }
 .code-input { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; letter-spacing: 0.08em; text-transform: uppercase; }
-.issued-code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 1.5rem; font-weight: 700; letter-spacing: 0.08em; }
+/* A new code sits on a line of its own, never broken, with Copy beside it. */
+.code-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; }
+.issued-code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 1.5rem; font-weight: 700; letter-spacing: 0.08em; white-space: nowrap; user-select: all; -webkit-user-select: all; }
 @media (display-mode: standalone) {
   .signin-options .signin-code { order: -1; background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
   .signin-options .signin-provider { background: var(--surface); border-color: var(--line); color: var(--text); }
 }
 /* With the web app on, a member's row has more buttons (spec 6.15): let them wrap on a phone. */
 .member-actions { flex-wrap: wrap; }
-/* Turn on notifications: push.js shows the card and one button at a time. */
-#notifications[hidden], .push-actions .button[hidden] { display: none; }
+/* Turn on notifications: push.js shows the card, the part that fits this device, and one button
+   at a time; inside the installed app, the nudge until the member answers. */
+#notifications[hidden], #notifications p[hidden], #push-nudge[hidden], .push-actions .button[hidden] { display: none; }
 .push-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }

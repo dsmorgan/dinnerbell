@@ -240,6 +240,9 @@ def test_a_member_makes_their_own_code_and_it_shows_once(
     code = issued(response.text)
     assert "until 1:15 PM" in page(response)  # 18:00 UTC is 1:00 PM in Chicago, plus 15 minutes
     assert "This is the only time it's shown." in page(response)
+    # On a line of its own, never broken, with Copy (app.js shows it where the clipboard works).
+    row = response.text.split('<p class="code-row">', 1)[1].split("</p>", 1)[0]
+    assert '<button type="button" class="button small" data-copy="issued-code-value" hidden>Copy</button>' in row
     assert code not in on.get("/preferences").text  # never again
     [row] = codes(migrated)
     plain = normalize_code(code)
@@ -542,7 +545,7 @@ def test_past_200_wrong_codes_an_hour_the_admin_is_told_and_nobody_waits(
     assert phone.post("/auth/code", data={"code": "ABCDE-FGHJK"}).status_code == 400
     assert wrong.failures(clock()) == 201
     notice = page(on.get("/admin/web-app")).split('id="wrong-codes">', 1)[1].split("</p>", 1)[0]
-    assert "Someone may be guessing sign-in codes." in notice and "Nobody is slowed down or locked out." in notice
+    assert "Someone may be guessing sign-in codes." in notice and "nobody is locked out." in notice
     redeem(phone, code)  # a right code works at once
     assert wrong.failures(clock()) == 201  # and isn't counted
     clock.advance(timedelta(hours=1))

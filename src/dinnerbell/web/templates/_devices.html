@@ -7,8 +7,9 @@
   {% if devices_notice %}<p class="alert ok" role="status">That device is signed out.</p>{% endif %}
   {% if issued %}
   <div class="alert ok stack" role="status" id="issued-code">
-    <p>Your sign-in code: <span class="issued-code">{{ issued.code }}</span></p>
-    <p class="small">It works once, until {{ issued.expires_at|clock(tz) }}. On the other device, open Dinnerbell, tap <strong>Sign in with a code</strong>, and type it. This is the only time it's shown.</p>
+    <p>Your sign-in code:</p>
+    {% include "_code_value.html" %}
+    <p class="small">Works once, until {{ issued.expires_at|clock(tz) }}. On the other device, tap <strong>Sign in with a code</strong> and enter it. This is the only time it's shown.</p>
   </div>
   {% endif %}
   <form method="post" action="/preferences/sign-in-code" class="stack">

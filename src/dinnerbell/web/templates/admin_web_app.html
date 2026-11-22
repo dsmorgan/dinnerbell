@@ -5,23 +5,19 @@
 {% include "_admin_tabs.html" %}
 <h1>Web app</h1>
 {% if notice %}<p class="alert ok" role="status">{{ notice }}</p>{% endif %}
-{% if wrong_codes %}<p class="alert error" role="status" id="wrong-codes"><strong>Someone may be guessing sign-in codes.</strong> Over 200 wrong sign-in codes were typed in the last hour. Each address can try only 20 sign-ins a minute, and a code lasts 15 minutes, so guessing one is very unlikely. Nobody is slowed down or locked out. This notice goes an hour after the wrong codes stop.</p>{% endif %}
-<p class="small muted">The web app lets members add Dinnerbell to their phone's Home Screen and choose, on <strong>Preferences</strong>, whether Dinnerbell reaches them in Slack, the web app, or both. A member without a Slack account can only use the web app. While it's on, Slack skips direct messages to members who chose the web app, instead of failing to send them. Channel posts still go to the channel.</p>
-<p class="small muted" id="web-app-pushes">Members on <strong>Web app</strong> or <strong>Both</strong> get push notifications once they turn them on, on <strong>Get the app</strong>: on an iPhone or iPad, inside the app on the Home Screen. Until they do, a member on <strong>Web app</strong> gets no direct messages outside the web pages. Members without Slack sign in with a code.</p>
+{% if wrong_codes %}<p class="alert error" role="status" id="wrong-codes"><strong>Someone may be guessing sign-in codes.</strong> Over 200 wrong codes were typed in the last hour. Guessing one is very unlikely, and nobody is locked out.</p>{% endif %}
+{#- The push queue's warning about rejected pushes (spec 6.15, "The push queue"). -#}
+{% if push.rejected_at %}
+<p class="alert error" role="alert" id="push-rejected"><strong>Push services are refusing notifications.</strong> Since {{ push.rejected_at|local_date(principal.household.timezone)|day }} at {{ push.rejected_at|clock(principal.household.timezone) }}. Check the server's clock, and that <code>DINNERBELL_SECRET_KEY</code> hasn't changed.</p>
+{% endif %}
+<p class="small muted" id="web-app-pushes">Members can add Dinnerbell to their Home Screen, sign in with a code, and get push notifications. Each member picks Slack, Web app, or Both on <strong>Preferences</strong>.</p>
 <form method="post" action="/admin/web-app" class="card stack" id="web-app-switch">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <label class="check"><input type="checkbox" name="on" value="on" aria-describedby="web-app-about"{% if on %} checked{% endif %}> Turn on the web app</label>
-  <p class="small muted" id="web-app-about">Off by default. While it's off, members see no change, Slack delivery is unchanged, and the app's pages don't exist. Turning it off keeps each member's choice for when it's on again.</p>
+  <p class="small muted" id="web-app-about">While it's off, nothing changes for members.</p>
   <button type="submit" class="button primary">Save</button>
 </form>
 {% if on %}
-<p><a href="/app">Get the app</a> shows members how to add Dinnerbell to their Home Screen.</p>
-{% endif %}
-{#- The push queue's warning about rejected pushes (spec 6.15, "The push queue"). -#}
-{% if push.rejected_at %}
-<p class="alert error" role="alert" id="push-rejected"><strong>Push services are refusing notifications.</strong> On {{ push.rejected_at|local_date(principal.household.timezone)|day }} at {{ push.rejected_at|clock(principal.household.timezone) }}, Apple's, Google's, or another push service refused several of Dinnerbell's pushes as unauthorized. Check that the server's clock is right and that <code>DINNERBELL_SECRET_KEY</code> hasn't changed. Devices it keeps refusing are dropped, and their members tap <strong>Turn on notifications</strong> again.</p>
-{% endif %}
-{% if on %}
-<p class="small muted" id="push-devices">{{ push.devices }} {{ "device gets" if push.devices == 1 else "devices get" }} notifications{% if push.waiting %}, and {{ push.waiting }} {{ "push is" if push.waiting == 1 else "pushes are" }} waiting to go{% endif %}.</p>
+<p class="small muted" id="push-devices">{{ push.devices }} {{ "device gets" if push.devices == 1 else "devices get" }} notifications{% if push.waiting %}, and {{ push.waiting }} {{ "push is" if push.waiting == 1 else "pushes are" }} waiting to go{% endif %}. <a href="/app">Get the app</a></p>
 {% endif %}
 {% endblock %}

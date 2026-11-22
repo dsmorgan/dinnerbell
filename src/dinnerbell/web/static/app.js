@@ -485,4 +485,33 @@
 
   pollStarted = Date.now();
   nextRound();
+
+  // Copy (a new sign-in code, spec 6.15): a button with data-copy="id" puts that element's text
+  // on the clipboard. It stays hidden where the clipboard isn't available.
+  function showCopyButtons() {
+    if (!navigator.clipboard || !window.isSecureContext) {
+      return;
+    }
+    var buttons = document.querySelectorAll("button[data-copy]");
+    for (var i = 0; i < buttons.length; i += 1) {
+      buttons[i].hidden = false;
+    }
+  }
+  document.addEventListener("click", function (event) {
+    var button = event.target instanceof Element ? event.target.closest("button[data-copy]") : null;
+    var source = button && document.getElementById(button.getAttribute("data-copy"));
+    if (!source) {
+      return;
+    }
+    navigator.clipboard.writeText(source.textContent.trim()).then(
+      function () {
+        button.textContent = "Copied";
+      },
+      function () {
+        button.textContent = "Couldn't copy";
+      }
+    );
+  });
+  showCopyButtons();
+  document.addEventListener("htmx:afterSettle", showCopyButtons);
 })();
