@@ -45,6 +45,7 @@ from dinnerbell.domain.events import (
     Assignment,
     AssignmentRole,
     Coverage,
+    EndReason,
     Event,
     EventState,
     Proposal,
@@ -546,7 +547,21 @@ def offer_info(ctx: CallContext) -> note.OfferInfo:
 
 
 def offer_posted(ctx: CallContext) -> note.OfferPosted:
-    return note.OfferPosted(event_info(ctx), offer_info(ctx), roster(ctx), ctx.head_count)
+    """The offer's post, pushed to every active member but the offerer and those away that day
+    (FR-63), as a call's opening skips them."""
+    offerer = ctx.event.created_by
+    members = sorted(ctx.active_members, key=lambda m: m.display_name.casefold())
+    audience = tuple(ctx.person(m.id) for m in members if m.id != offerer and not m.away_on(ctx.event.day))
+    return note.OfferPosted(event_info(ctx), offer_info(ctx), roster(ctx), ctx.head_count, audience)
+
+
+def call_abandoned(ctx: CallContext, reason: EndReason, *, needs_unmet: bool = False) -> note.CallAbandoned:
+    """Everyone on their own (spec 5.4), pushed to the active members who were in or maybe,
+    maybes the deadline turned out included: those who were waiting for a vote."""
+    took_part = {r.member_id for r in ctx.responses if r.status is not Status.OUT or r.maybe_at_deadline}
+    members = sorted(ctx.active_members, key=lambda m: m.display_name.casefold())
+    audience = tuple(ctx.person(m.id) for m in members if m.id in took_part)
+    return note.CallAbandoned(event_info(ctx), reason, ctx.head_count, needs_unmet, audience)
 
 
 def offer_updated(ctx: CallContext) -> note.OfferUpdated:

@@ -230,6 +230,16 @@ class PushRepository:
         )
         return _rowcount(devices), _rowcount(pushes)
 
+    async def oldest_pending(self, household_id: int) -> datetime | None:
+        """When the household's oldest push still waiting was queued, or None if none waits."""
+        found: datetime | None = await self._session.scalar(
+            select(PushRow.created_at)
+            .where(PushRow.household_id == household_id, _pending())
+            .order_by(PushRow.created_at)
+            .limit(1)
+        )
+        return found
+
     async def counts(self, household_id: int) -> tuple[int, int]:
         """(devices, pushes waiting) for the household."""
         devices = await self._session.scalar(
@@ -244,20 +254,34 @@ class PushRepository:
 
     # The queue --------------------------------------------------------------------------------
 
-    async def due(self, limit: int, now: datetime) -> list[tuple[int, int]]:
+    async def due(self, limit: int, now: datetime, *, per_device: int) -> list[tuple[int, int]]:
         """(push ID, subscription ID) of pushes ready to send, oldest first: pending, past any
-        retry delay, and unclaimed."""
-        found = await self._session.execute(
-            select(PushRow.id, PushRow.subscription_id)
+        retry delay, and unclaimed. At most ``per_device`` of each device's oldest, so one
+        device with many waiting can't fill the pass and keep the others' out of it."""
+        ready = (
+            select(
+                PushRow.id,
+                PushRow.subscription_id,
+                func.row_number().over(partition_by=PushRow.subscription_id, order_by=PushRow.id).label("nth"),
+            )
             .where(
                 _pending(),
                 PushRow.available_at <= now,
                 PushRow.claimed_until.is_(None) | (PushRow.claimed_until <= now),
             )
-            .order_by(PushRow.id)
+            .subquery()
+        )
+        found = await self._session.execute(
+            select(ready.c.id, ready.c.subscription_id)
+            .where(ready.c.nth <= per_device)
+            .order_by(ready.c.id)
             .limit(limit)
         )
         return [(int(push_id), int(subscription_id)) for push_id, subscription_id in found]
+
+    async def exists(self, push_id: int) -> bool:
+        """Whether the push row is still there: deleting its device or the queue deletes it."""
+        return await self._session.scalar(select(PushRow.id).where(PushRow.id == push_id)) is not None
 
     async def claim(self, push_id: int, token: str, *, now: datetime, until: datetime) -> QueuedPush | None:
         """Claim a push for sending, as the outbox does: one conditional UPDATE, so only one

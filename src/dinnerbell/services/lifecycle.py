@@ -609,7 +609,7 @@ async def abandon(
     ended = replace(event, state=transition(event.state, EventState.ABANDONED), end_reason=reason)
     ended = await EventRepository(db).save(ended, now)
     ctx = await load(db, ended)
-    await publish(db, ctx, note.CallAbandoned(cc.event_info(ctx), reason, ctx.head_count, needs_unmet), now=now)
+    await publish(db, ctx, cc.call_abandoned(ctx, reason, needs_unmet=needs_unmet), now=now)
     await publish(db, ctx, cc.call_updated(ctx), *([cc.proposals_updated(ctx)] if ctx.proposals else []), now=now)
     await audit(db, event.household_id, None, "event.abandoned", _target(event), {"reason": reason.value}, now)
 

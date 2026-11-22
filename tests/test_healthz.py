@@ -11,8 +11,11 @@ from fastapi.testclient import TestClient
 
 from dinnerbell import __version__
 from dinnerbell.db.engine import create_app_engine, create_sessionmaker
+from tests.conftest import sign_in
 from tests.support.clock import FakeClock
+from tests.support.fake_oidc import FakeProvider
 from tests.support.scheduler import settle
+from tests.support.web import submit
 
 
 def wait_for_tick(client: TestClient) -> dict[str, object]:
@@ -28,6 +31,7 @@ def test_healthz_shape(client: TestClient, clock: FakeClock) -> None:
     response = client.get("/healthz")
     assert response.status_code == 200
     assert response.headers["content-type"] == "application/json"
+    # No "push" while the web app is off (test_the_push_queue_shows_while_the_web_app_is_on).
     assert set(body) == {"status", "version", "database", "scheduler", "slack", "backup", "outbox", "stuck_calls"}
     assert body["stuck_calls"] == 0
     # The documented keyword monitor: the top-level status, which the scheduler's own can't match.
@@ -159,3 +163,50 @@ def test_a_notification_waiting_over_an_hour_is_degraded(client: TestClient, clo
     state.last_tick = state.stuck_checked_at = clock.now
     body = client.get("/healthz").json()
     assert (body["status"], body["outbox"]["oldest_pending_age"]) == ("degraded", 61 * 60)
+
+
+def test_the_push_queue_shows_while_the_web_app_is_on(
+    client: TestClient, provider: FakeProvider, clock: FakeClock
+) -> None:
+    """A push waiting over an hour reports "degraded", as the outbox does: with the push
+    services unreachable, every push retries for a day and closes unsent (#332)."""
+    from sqlalchemy import text
+
+    from tests.test_push import FORM, admin_switch
+
+    sign_in(client, provider)
+    admin_switch(client, True)
+    assert submit(client, "/app/notifications", FORM).status_code == 204
+    state = client.app.state.dinnerbell.scheduler_state  # type: ignore[attr-defined]
+    body = wait_for_tick(client)
+    assert body["push"] == {"backlog": 0, "oldest_pending_age": None} and body["status"] == "ok", body
+    queue_row(client, clock.now.strftime("%Y-%m-%d %H:%M:%S"))
+    context = client.app.state.dinnerbell  # type: ignore[attr-defined]
+
+    async def insert() -> None:  # a push no drain takes yet, as one waiting to retry
+        async with context.sessionmaker() as db:
+            await db.execute(
+                text(
+                    "INSERT INTO push_queue (household_id, outbox_id, subscription_id, member_id, created_at, "
+                    "available_at, attempts) SELECT s.household_id, (SELECT max(id) FROM outbox), s.id, s.member_id, "
+                    ":t, '2099-01-01 00:00:00', 1 FROM push_subscription s"
+                ),
+                {"t": clock.now.strftime("%Y-%m-%d %H:%M:%S")},
+            )
+            await db.execute(
+                text("UPDATE outbox SET delivered_at = :t"), {"t": clock.now.strftime("%Y-%m-%d %H:%M:%S")}
+            )
+            await db.commit()
+
+    client.portal.call(insert)  # type: ignore[union-attr]
+    clock.advance(timedelta(minutes=59))
+    state.last_tick = state.stuck_checked_at = clock.now  # the scheduler is fine; only the push waits
+    body = client.get("/healthz").json()
+    assert body["push"] == {"backlog": 1, "oldest_pending_age": 59 * 60} and body["status"] == "ok", body
+    clock.advance(timedelta(minutes=2))
+    state.last_tick = state.stuck_checked_at = clock.now
+    body = client.get("/healthz").json()
+    assert (body["status"], body["push"]["oldest_pending_age"], body["outbox"]["backlog"]) == ("degraded", 61 * 60, 0)
+    admin_switch(client, False)  # deletes the queue, and the key goes with the switch
+    body = client.get("/healthz").json()
+    assert "push" not in body and body["status"] == "ok", body

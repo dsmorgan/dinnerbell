@@ -15,6 +15,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from dinnerbell.db.migrate import head_revision
 from dinnerbell.db.outbox import OutboxRepository
+from dinnerbell.db.push import PushRepository
+from dinnerbell.db.repositories import HouseholdRepository
+from dinnerbell.services.web_app import web_app_enabled
 
 if TYPE_CHECKING:
     from dinnerbell.services.stuck import StuckCall
@@ -132,6 +135,35 @@ async def outbox_oldest_age(sessionmaker: async_sessionmaker[AsyncSession], now:
         log.warning("outbox age check failed", exc_info=True)
         return None
     return None if queued is None else max(now - queued, timedelta(0))
+
+
+STALE_PUSH = STALE_OUTBOX
+"""A push waiting longer than this makes /healthz report "degraded": the push services are
+unreachable or refusing, and every push retries until it closes unsent after 24 hours."""
+
+
+@dataclass(frozen=True, slots=True)
+class PushBacklog:
+    waiting: int
+    oldest: timedelta | None
+    """How long the oldest waiting push has waited, or None if none waits."""
+
+
+async def push_backlog(sessionmaker: async_sessionmaker[AsyncSession], now: datetime) -> PushBacklog | None:
+    """The push queue's backlog while the install's household has the web app on (spec 6.15),
+    or None while it's off, before bootstrap, or if the queue is unreadable."""
+    try:
+        async with sessionmaker() as db:
+            household = await HouseholdRepository(db).first()
+            if household is None or not await web_app_enabled(db, household.id):
+                return None
+            repo = PushRepository(db)
+            _, waiting = await repo.counts(household.id)
+            queued = await repo.oldest_pending(household.id)
+    except (SQLAlchemyError, OSError):
+        log.warning("push backlog check failed", exc_info=True)
+        return None
+    return PushBacklog(waiting, None if queued is None else max(now - queued, timedelta(0)))
 
 
 async def database_reachable(sessionmaker: async_sessionmaker[AsyncSession]) -> bool:

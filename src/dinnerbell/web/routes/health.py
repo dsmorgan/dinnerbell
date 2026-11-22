@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """GET /healthz for Uptime Kuma and the container health check. No secrets, emails, or member
-data; the only counts are the outbox's, stuck calls (never which ones), and, on a labeled
-instance, dropped direct messages. A labeled instance adds its label, never a channel ID."""
+data; the only counts are the outbox's, the push queue's while the web app is on, stuck calls
+(never which ones), and, on a labeled instance, dropped direct messages. A labeled instance
+adds its label, never a channel ID."""
 
 from __future__ import annotations
 
@@ -11,7 +12,14 @@ from typing import Any
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
-from dinnerbell.services.health import STALE_OUTBOX, database_reachable, outbox_backlog, outbox_oldest_age
+from dinnerbell.services.health import (
+    STALE_OUTBOX,
+    STALE_PUSH,
+    database_reachable,
+    outbox_backlog,
+    outbox_oldest_age,
+    push_backlog,
+)
 from dinnerbell.web.auth import Context
 
 router = APIRouter()
@@ -27,15 +35,17 @@ async def healthz(context: Context) -> JSONResponse:
     container health check and Uptime Kuma both catch a dead scheduler.
 
     A notification waiting over an hour also reports "degraded": the outbox is stuck. So does a
-    stuck call (#142), one that has owed the scheduler a step for over an hour, or a check for
-    them that failed or is out of date (the call tick hung): restarting can't fix a failing
-    step, and the admin calls the call off from its page.
+    push waiting over an hour while the web app is on: the push services can't be reached or
+    refuse it. So does a stuck call (#142), one that has owed the scheduler a step for over an
+    hour, or a check for them that failed or is out of date (the call tick hung): restarting
+    can't fix a failing step, and the admin calls the call off from its page.
     Slack problems alone report "degraded" with a 200. Restarting the container can't invite
     the bot or fix a token, the outbox keeps every notification until Slack is back, and the
     web app must stay up so the admin can sign in and fix things."""
     database_ok = await database_reachable(context.sessionmaker)
     backlog = await outbox_backlog(context.sessionmaker) if database_ok else None
     oldest = await outbox_oldest_age(context.sessionmaker, context.clock()) if backlog is not None else None
+    pushes = await push_backlog(context.sessionmaker, context.clock()) if database_ok else None
     state = context.scheduler_state
     scheduler = state.scheduler_status(context.clock())
     current = state.current_stuck(context.clock())  # the latest tick's check, never a query here
@@ -48,6 +58,7 @@ async def healthz(context: Context) -> JSONResponse:
         scheduler == "ok"
         and slack in {"connected", "not_configured"}
         and (oldest or timedelta(0)) <= STALE_OUTBOX
+        and (pushes is None or (pushes.oldest or timedelta(0)) <= STALE_PUSH)
         and not state.backup_failing
         and stuck == 0
     ):
@@ -70,6 +81,9 @@ async def healthz(context: Context) -> JSONResponse:
         "backup": {"last_success": _iso(state.last_backup), "failing": state.backup_failing},
         "stuck_calls": stuck,
     }
+    if pushes is not None:  # only while the web app is on, so a Slack-only install's body is unchanged
+        age = None if pushes.oldest is None else int(pushes.oldest.total_seconds())
+        body["push"] = {"backlog": pushes.waiting, "oldest_pending_age": age}
     if context.settings.instance_label:
         body["instance"] = context.settings.instance_label
     dropped = context.slack_state.dms_dropped

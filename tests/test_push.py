@@ -7,10 +7,11 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field, replace
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 
 import httpx
 import pytest
@@ -24,15 +25,16 @@ from dinnerbell.db.push import PushRepository, rejected_burst
 from dinnerbell.db.repositories import MemberRepository, SessionRepository
 from dinnerbell.domain import notifications as note
 from dinnerbell.domain import push as rules
-from dinnerbell.domain.events import EventState
+from dinnerbell.domain.catalog import Mode
+from dinnerbell.domain.events import EndReason, EventState, Status
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import NotifyVia, Role
 from dinnerbell.domain.push import PushResponse, PushTarget
-from dinnerbell.services import auth, outbox, push, web_app
+from dinnerbell.services import auth, away, calls, offers, outbox, push, web_app
 from dinnerbell.services.database import Database, open_database
 from dinnerbell.services.errors import Forbidden, NotFound
 from tests.conftest import BASE_URL, page, sign_in
-from tests.support.calls import OPENS, House, dinner_id, furnish, make_house
+from tests.support.calls import OPENS, RESPOND_BY, House, dinner_id, furnish, make_house
 from tests.support.clock import FakeClock
 from tests.support.fake_oidc import FakeProvider
 from tests.support.pages import inline_code
@@ -309,7 +311,7 @@ async def test_only_the_kinds_that_push_queue_pushes(house: House) -> None:
         house,
         note.CallUpdated(event),
         note.PicksShuffled(event, kim, 1, 1),  # queued before shuffles pushed: no one to push to
-        note.CallAbandoned(event, note.EndReason.TOO_FEW),  # type: ignore[attr-defined]
+        note.CallAbandoned(event, EndReason.TOO_FEW),  # queued before its audience: no one to push to
         note.ResponseReminder(event, kim),
     )
     assert len(await queued(house)) == 1
@@ -366,6 +368,60 @@ async def test_a_real_call_queues_its_pushes_through_publish(house: House, clock
     await house.tick()
     await dinner_id(house)
     assert [name for name, *_ in await queued(house)] == ["Kim"]
+
+
+async def pushed(house: House, kind: str) -> list[str]:
+    """Whose devices have a push of ``kind`` queued, by name."""
+    names = {m.id: n for n, m in house.people.items()}
+    async with house.sessionmaker() as db:
+        found = await db.execute(
+            text("SELECT p.member_id FROM push_queue p JOIN outbox o ON o.id = p.outbox_id WHERE o.kind = :k"),
+            {"k": kind},
+        )
+        return sorted(names[member_id] for (member_id,) in found)
+
+
+async def test_everyone_on_their_own_pushes_to_whoever_was_in_or_maybe(house: House, clock: FakeClock) -> None:
+    """A member without Slack who answered In hears there's no vote coming (#332), and the push
+    replaces the call's "Are you in?" on the lock screen."""
+    await switch(house, True)
+    for name in ("Alex", "Sam", "Kim", "Lee"):
+        await device(house, name)
+    clock.now = OPENS
+    await house.tick()
+    event_id = await dinner_id(house)
+    async with house.sessionmaker() as db:
+        await calls.respond(db, house["Kim"], event_id, Status.IN, now=clock())
+        await calls.respond(db, house["Lee"], event_id, Status.MAYBE, now=clock())
+        await calls.respond(db, house["Sam"], event_id, Status.OUT, now=clock())
+    clock.now = RESPOND_BY  # one in: too few, and Lee's maybe turns out
+    await house.tick()
+    assert (await house.event(event_id)).state is EventState.ABANDONED
+    assert await pushed(house, "call_abandoned") == ["Kim", "Lee"]  # not Sam, who was out, or Alex, who never answered
+    sender = FakeSender()
+    await drain(house, sender)
+    sent = {json.loads(body)["notification"]["title"]: topic for _, body, _, _, topic in sender.sent}
+    assert set(sent) == {"Dinner: you're on your own"}  # the call's earlier pushes went stale unsent
+    run = (await house.event(event_id)).run
+    assert set(sent.values()) == {rules.topic(house.household.id, event_id, run)}
+
+
+async def test_an_offer_pushes_to_everyone_but_the_offerer_and_whoever_is_away(house: House, clock: FakeClock) -> None:
+    await switch(house, True)
+    for name in ("Alex", "Sam", "Kim", "Lee"):
+        await device(house, name)
+    lunch = DAY + timedelta(days=1)
+    async with house.sessionmaker() as db:
+        await away.set_my_away(db, house["Lee"], lunch, lunch, now=clock())
+    data = offers.OfferInput(Slot.LUNCH, lunch, Mode.PICKUP, time(12, 0), 3, item_id=house.items["Siam Garden"].id)
+    async with house.sessionmaker() as db:
+        posted = await offers.post_offer(db, house["Kim"], data, now=clock())
+    assert await pushed(house, "offer_posted") == ["Alex", "Sam"]
+    sender = FakeSender()
+    assert (await drain(house, sender)).sent == 2
+    shown = json.loads(sender.sent[0][1])["notification"]
+    assert (shown["title"], shown["navigate"]) == ("Lunch offer: want in?", f"{BASE_URL}/events/{posted.event_id}")
+    assert "Kim" not in shown["body"]
 
 
 async def test_turning_the_switch_off_deletes_every_device_and_push_and_leaves_slack_alone(house: House) -> None:
@@ -806,6 +862,65 @@ async def test_one_device_never_gets_two_pushes_at_once(house: House) -> None:
     assert sender.most == {kims: 1, lees: 1}
     # The first batch takes Kim's oldest and Lee's; Kim's other two go one batch each.
     assert set(sender.order[:2]) == {kims, lees} and sender.order[2:] == [kims, kims]
+
+
+async def test_one_device_with_many_due_takes_only_its_share_of_a_pass(house: House) -> None:
+    """A device with more pushes due than a pass takes waits for the next pass for the rest,
+    so a busy device behind a slow push service can't fill the pass and keep others out."""
+    await switch(house, True)
+    kims = await device(house, "Kim")
+    lees = await device(house, "Lee")
+    event = await a_call(house)
+    kim, sam = who(house, "Kim", "Sam")
+    now = house.clock()
+    many = push.PER_DEVICE + 2
+    await enqueue(house, *(note.CoordinatingGiven(event, kim, sam, now + timedelta(seconds=n)) for n in range(many)))
+    await enqueue(house, note.ResponseReminder(event, who(house, "Lee")[0]))  # queued after all of Kim's
+    sender = PerDevice()
+    first = await push.drain(house.sessionmaker, sender, house.clock, BASE_URL, limit=push.PER_DEVICE + 1)
+    assert first.sent == push.PER_DEVICE + 1 and sender.order.count(kims) == push.PER_DEVICE and lees in sender.order
+    assert (await drain(house, sender)).sent == 2  # Kim's rest, in the next pass, still oldest first
+    assert sender.order[-2:] == [kims, kims]
+
+
+@dataclass
+class DeletesTheDevice(FakeSender):
+    """Answers after the device was turned off, as when the member taps it off mid-send."""
+
+    house: House | None = None
+
+    async def send(
+        self, target: PushTarget, payload: bytes, *, ttl: int, urgency: str, topic: str | None
+    ) -> PushResponse:
+        assert self.house is not None
+        async with self.house.sessionmaker() as db:
+            await PushRepository(db).delete_subscription(target.subscription_id)
+            await db.commit()
+        return await super().send(target, payload, ttl=ttl, urgency=urgency, topic=topic)
+
+
+@pytest.mark.parametrize("status", [201, 410, 503])
+async def test_a_device_deleted_mid_send_logs_that_never_a_lost_claim(
+    house: House, status: int, caplog: pytest.LogCaptureFixture
+) -> None:
+    await one_push(house)
+    caplog.set_level(logging.INFO, logger="dinnerbell.services.push")
+    result = await drain(house, DeletesTheDevice(answers=[status], house=house))
+    assert (result.sent, result.failed, result.retrying, result.devices_deleted) == (0, 0, 0, 0)
+    assert await queued(house) == [] and await devices(house) == []
+    found = [(r.levelno, r.getMessage()) for r in caplog.records if r.name == "dinnerbell.services.push"]
+    assert (logging.INFO, "push deleted while it was out; nothing to settle") in found
+    assert all("claim ran out" not in message for _, message in found)
+
+
+async def test_a_claim_another_drainer_took_still_logs_that_it_ran_out(
+    house: House, caplog: pytest.LogCaptureFixture
+) -> None:
+    await one_push(house)
+    caplog.set_level(logging.INFO, logger="dinnerbell.services.push")
+    await drain(house, StealsTheClaim(answers=[201], house=house))
+    found = [(r.levelno, r.getMessage()) for r in caplog.records if r.name == "dinnerbell.services.push"]
+    assert (logging.WARNING, "push claim ran out before it settled") in found
 
 
 async def test_purge_only_reads_when_nothing_has_ended(house: House, monkeypatch: pytest.MonkeyPatch) -> None:
