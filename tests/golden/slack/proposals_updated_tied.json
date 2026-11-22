@@ -208,7 +208,7 @@
             "type": "plain_text"
           },
           "type": "button",
-          "value": "7:1"
+          "value": "7:1:0"
         },
         {
           "action_id": "link_event",

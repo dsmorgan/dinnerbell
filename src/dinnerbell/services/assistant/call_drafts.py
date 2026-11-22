@@ -183,6 +183,28 @@ def pick_name(ctx: CallContext, pick: Proposal) -> str:
     return FREE_TEXT_PICK
 
 
+PICK_CHANGED = "The picks changed since the draft, so nothing changed. Ask the assistant for a new draft."
+
+
+def pick_payload(pick: Proposal) -> dict[str, Any]:
+    """How a vote or decide draft names its pick: the pick's ID, and the catalog item it was, so
+    Confirm can tell the pick is still the one the card named (``check_same_pick``, #330)."""
+    return {"proposal_id": pick.id, "item_id": pick.item_id}
+
+
+def check_same_pick(ctx: CallContext, payload: Mapping[str, Any]) -> Proposal:
+    """The pick a vote or decide draft names, refused with ``PICK_CHANGED`` unless the call still
+    has it, naming the same catalog item (#330). A shuffle or a re-run replaces picks, and the
+    draft card names a place, so Confirm must never act on another one. A free-text pick, with no
+    item, may since have become an offer's item for the same place (``take_over``). A draft
+    written before ``item_id`` was in it is checked by ID alone, as it was."""
+    pick = ctx.proposal(int(payload["proposal_id"]))
+    item_id = payload.get("item_id")
+    if pick is None or (item_id is not None and pick.item_id != int(item_id)):
+        raise EventRuleViolation(PICK_CHANGED, code="stale_draft")
+    return pick
+
+
 def find_pick(ctx: CallContext, handle: int, name: str, mode: Mode | None) -> tuple[Proposal, str]:
     """The pick ``handle`` names (``look_up_call``'s ``pick``), or else the one pick with that
     name and mode, with how the draft names it: the name the member gave for a free-text pick
@@ -239,7 +261,7 @@ async def vote(
     lines = vote_lines(item, pick.mode, vote=voting, join_late=join_late, vote_counts=counts_vote(seen))
     label = f"{item} ({pick.mode.label.lower()})"
     title = f"Vote for {label}" if voting else f"Take back your vote for {label}"
-    payload = {"proposal_id": pick.id, "vote": voting, "join_late": join_late, "name": item}
+    payload = {**pick_payload(pick), "vote": voting, "join_late": join_late, "name": item}
     return DraftSpec(DraftKind.VOTE, payload, title, lines, event)
 
 
@@ -548,7 +570,7 @@ async def confirm(db: AsyncSession, actor: Member, draft: Draft, *, today: date,
         word = {Status.IN: "in for", Status.OUT: "out of", Status.MAYBE: "a maybe for"}[status]
         return ActionConfirmed(event.id, f"Confirmed. You're {word} {when}'s {slot} call.")
     if draft.kind is DraftKind.VOTE:
-        proposal_id, name = int(payload["proposal_id"]), str(payload["name"])
+        proposal_id, name = check_same_pick(await load(db, event), payload).id, str(payload["name"])
         if payload.get("vote"):
             await calls.vote(db, actor, event.id, proposal_id, join_late=bool(payload.get("join_late")), now=now)
             return ActionConfirmed(event.id, f"Confirmed. Your vote for {name} is in.")

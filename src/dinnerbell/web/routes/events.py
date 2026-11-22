@@ -565,15 +565,20 @@ async def shuffle_picks(
     db: Database,
     event_id: RowId,
     run: Run = "",
+    shuffles: Annotated[str, Form(max_length=4)] = "",
     came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
 ) -> Response:
-    """**Shuffle picks**: the coordinator or an admin, on the run the page showed."""
+    """**Shuffle picks**: the coordinator or an admin, on the run the page showed, at the shuffle
+    count it showed (``shuffles``, #330), so a second tap, or a page left open across someone
+    else's shuffle, shuffles nothing. A form without the count, from a page loaded before it was
+    in the form, isn't checked."""
     seen = parse_id(run)
-    if seen is None:
+    count = int(shuffles) if shuffles.isascii() and shuffles.isdigit() else None
+    if seen is None or (shuffles and count is None):
         return await _malformed(request, principal, context, db, event_id, came_from)
 
     async def action() -> None:
-        await coordinator.shuffle(db, principal.member, event_id, run=seen, now=context.clock())
+        await coordinator.shuffle(db, principal.member, event_id, run=seen, shuffles=count, now=context.clock())
 
     return await _run(request, principal, context, db, event_id, came_from, action)
 

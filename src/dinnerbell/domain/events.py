@@ -163,6 +163,24 @@ class WindowMoved(EventRuleViolation):
     code = "window_moved"
 
 
+SHUFFLED_SINCE = "The proposals were shuffled since you looked, so nothing changed."
+
+
+class ShuffledSince(EventRuleViolation):
+    """Shuffle was tapped on proposals drawn before a shuffle that has happened since (#330)."""
+
+    code = "shuffled_since"
+
+
+def check_expected_shuffles(event: Event, expected: int | None) -> None:
+    """``expected`` is the shuffle count the person's Shuffle button was drawn at, or None when
+    their surface doesn't say, such as a Slack message posted before the count was in the button.
+    A double tap, or the coordinator and an admin tapping together, would otherwise shuffle
+    twice, and use two of the call's shuffles for one tap."""
+    if expected is not None and expected != event.shuffles:
+        raise ShuffledSince(SHUFFLED_SINCE)
+
+
 def check_run(event: Event, run: int | None) -> None:
     """``run`` is the run of the call the person saw, or None when their surface doesn't say.
     A call-off, Close now, or restart from a page left open across a restart would otherwise

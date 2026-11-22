@@ -1198,9 +1198,9 @@ def test_0013_lets_calls_and_meals_be_breakfast_and_downgrade_refuses_while_any_
     assert cli.main(["migrate"]) == 0
     after = _snapshot(settings)
     assert _calls_before_late_join(settings) == before["rows"] and after["indexes"] == before["indexes"]
-    # 0024 rebuilds badge_award with AUTOINCREMENT, and 0034 rebuilds assistant_draft, which each
-    # add their own (empty) high-water mark.
-    marks = {"badge_award": 0, "assistant_draft": 0}
+    # 0024 rebuilds badge_award with AUTOINCREMENT, 0034 rebuilds assistant_draft, and 0045
+    # rebuilds proposal (emptied with the newest call), which each add their own high-water mark.
+    marks = {"badge_award": 0, "assistant_draft": 0, "proposal": 0}
     assert _event_foreign_keys(settings) == fks and _sequences(settings) == sequences | marks
     assert "AUTOINCREMENT" in _event_sql(settings)
     assert _slot_checks(settings) == [
@@ -3082,3 +3082,101 @@ def test_0044_adds_an_empty_local_weather_table_and_downgrade_drops_it(settings:
     assert "local_weather" not in _tables(settings)
     assert _rows_outside_m4(settings) == before
     _upgrade_to(settings, WEATHER_REVISION)
+
+
+# 0045: proposal IDs are never reused (#330) -------------------------------------------------------
+
+PROPOSAL_REVISION = "0045_proposal_autoincrement"
+MORE_PICKS = (
+    "INSERT INTO catalog_item (id, household_id, kind, name, name_key, modes, active, created_at, updated_at) "
+    "VALUES (2, 1, 'restaurant', 'Y', 'y', '[\"pickup\", \"delivery\"]', 1, :t, :t)",
+    "INSERT INTO proposal (id, household_id, event_id, item_id, free_text, mode, rank, reasons, source, "
+    "mode_chosen, created_at) VALUES (2, 1, 2, NULL, 'Soup', 'cook', 2, '[]', 'member', 0, :t), "
+    "(7, 1, 2, 2, NULL, 'delivery', 3, '[\"Nobody had it lately.\"]', 'system', 1, :t)",
+    "INSERT INTO vote (household_id, event_id, proposal_id, member_id, created_at) VALUES (1, 2, 7, 1, :t)",
+)
+
+
+def _proposal_schema(settings: Settings) -> dict[str, object]:
+    """``proposal``'s table SQL, its indexes, and every foreign key to and from it."""
+    engine = create_engine(settings.sync_database_url)
+    try:
+        with engine.connect() as c:
+            sql = c.execute(text("SELECT sql FROM sqlite_master WHERE name = 'proposal'")).scalar_one()
+            indexes = c.execute(
+                text("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'proposal' ORDER BY name")
+            ).all()
+            # A rebuild may list the keys in another order, which numbers them differently.
+            keys = {
+                t: sorted(tuple(k[2:]) for k in c.exec_driver_sql(f"PRAGMA foreign_key_list({t})").all())
+                for t in ("proposal", "vote")
+            }
+            assert c.execute(text("PRAGMA foreign_key_check")).all() == []
+    finally:
+        engine.dispose()
+    lines = (line.strip().rstrip(",") for line in sql.splitlines())
+    constraints = sorted(line for line in lines if "CONSTRAINT" in line and "PRIMARY KEY" not in line)
+    return {"sql": sql, "indexes": indexes, "keys": keys, "constraints": constraints}
+
+
+def test_0045_rebuilds_proposal_without_losing_a_row_and_never_reuses_an_id(settings: Settings) -> None:
+    """Up rebuilds ``proposal`` with AUTOINCREMENT, keeping every pick, every vote on it, its
+    indexes, constraints, and foreign keys; then deleting the newest pick doesn't free its ID, as
+    a shuffle does. Down rebuilds it without, and changes no other row."""
+    _upgrade_to(settings, WEATHER_REVISION)
+    _populate_calls(settings)
+    _execute(settings, *MORE_PICKS)
+    before, rows = _proposal_schema(settings), _rows_outside_m4(settings)
+    assert "AUTOINCREMENT" not in before["sql"]  # type: ignore[operator]
+    assert len(rows["proposal"]) == 3 and len(rows["vote"]) == 2
+
+    _upgrade_to(settings, PROPOSAL_REVISION)
+    after = _proposal_schema(settings)
+    assert "AUTOINCREMENT" in after["sql"]  # type: ignore[operator]
+    assert {k: after[k] for k in ("indexes", "keys", "constraints")} == {
+        k: before[k] for k in ("indexes", "keys", "constraints")
+    }
+    assert _rows_outside_m4(settings) == rows
+    assert _sequences(settings)["proposal"] == 7
+    _execute(
+        settings,
+        "DELETE FROM proposal WHERE id = 7",  # the vote on it goes with it, as a shuffle's would
+        "INSERT INTO proposal (household_id, event_id, item_id, mode, rank, reasons, source, created_at) "
+        "VALUES (1, 2, 2, 'pickup', 3, '[]', 'system', :t)",
+    )
+    ids = [row[0] for row in _rows_outside_m4(settings)["proposal"]]
+    assert ids == [1, 2, 8]
+    changed = _rows_outside_m4(settings)
+
+    _downgrade_to(settings, WEATHER_REVISION)
+    down = _proposal_schema(settings)
+    assert "AUTOINCREMENT" not in down["sql"]  # type: ignore[operator]
+    assert {k: down[k] for k in ("indexes", "keys", "constraints")} == {
+        k: before[k] for k in ("indexes", "keys", "constraints")
+    }
+    assert _rows_outside_m4(settings) == changed
+    assert "proposal" not in _sequences(settings)
+
+
+def test_0045_seeds_the_mark_of_an_empty_proposal_table(settings: Settings) -> None:
+    """A database with no picks yet still gets a high-water mark, at 0, so the first pick is 1."""
+    _upgrade_to(settings, PROPOSAL_REVISION)
+    assert _sequences(settings)["proposal"] == 0
+
+
+def test_0045_refuses_to_run_with_foreign_keys_on(settings: Settings) -> None:
+    """With foreign keys on, dropping the old proposal table would delete every vote, so 0045 refuses."""
+    from alembic import command
+
+    from dinnerbell.db.migrate import _alembic_config
+
+    _upgrade_to(settings, WEATHER_REVISION)
+    _populate_calls(settings)
+    engine = create_sync_engine(settings.sync_database_url)  # the app's engine: foreign keys on
+    try:
+        with pytest.raises(RuntimeError, match="foreign keys on"), engine.begin() as connection:
+            command.upgrade(_alembic_config(connection), PROPOSAL_REVISION)
+        with engine.connect() as c:
+            assert c.execute(text("SELECT count(*) FROM vote")).scalar() == 1
+    finally:
+        engine.dispose()

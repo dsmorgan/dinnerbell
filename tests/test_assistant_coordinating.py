@@ -41,7 +41,7 @@ from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Member
 from dinnerbell.logs import JsonFormatter
 from dinnerbell.services import activity, call_admin, calls, coordinator, guests, members
-from dinnerbell.services.assistant import admin, coordinating, drafts, tools
+from dinnerbell.services.assistant import admin, call_drafts, coordinating, drafts, tools
 from dinnerbell.services.assistant.call_drafts import ActionConfirmed
 from dinnerbell.services.assistant.conversation import Assistant, converse
 from dinnerbell.services.assistant.prompt import SYSTEM_PROMPT
@@ -481,6 +481,47 @@ async def test_breaking_a_tie_chooses_a_tied_pick_and_refuses_one_that_isnt(hous
     assert done == ActionConfirmed(event_id, "Confirmed. Today's dinner call is decided on Siam Garden.")
     event = await house.event(event_id)
     assert event.decided_item_id == house.items["Siam Garden"].id and event.tie_by == house["Kim"].id
+
+
+@pytest.mark.parametrize("tie", [False, True])
+async def test_a_decision_confirmed_after_a_shuffle_decides_nothing(house: House, tie: bool) -> None:
+    """Kim drafts locking a pick, or breaking a tie with it; Alex, an admin, shuffles it away;
+    Kim confirms (#330). The card named a place that isn't a pick anymore, so nothing is decided
+    and the draft stays unused."""
+    for n in range(1, 4):
+        await house.add_item(f"Place {n}", Mode.PICKUP, cuisine="Thai")
+    event_id = await voting(house)
+    ranked = sorted((await house.context(event_id)).picks, key=lambda p: p.rank)
+    first, second = ranked[0], ranked[1]
+    if tie:
+        await act(house, calls.vote, house["Alex"], event_id, first.id)
+        await act(house, calls.vote, house["Lee"], event_id, second.id)
+    name = next(n for n, item in house.items.items() if item.id == first.item_id)
+    draft = draft_id(await tool(house, "draft_decide", lock(name, tie=tie)))
+    if tie:  # the tied picks have votes, so they'd stay
+        await act(house, calls.unvote, house["Alex"], event_id, first.id)
+        await act(house, calls.unvote, house["Lee"], event_id, second.id)
+    await act(house, coordinator.shuffle, house["Alex"], event_id, run=1)
+    assert first.id not in {p.id for p in (await house.context(event_id)).picks}
+    with pytest.raises(rules.EventRuleViolation, match=re.escape(call_drafts.PICK_CHANGED)):
+        await confirm(house, "Kim", draft)
+    event = await house.event(event_id)
+    assert event.state is EventState.VOTING and event.decided_item_id is None
+    assert (await row(house, draft)).used_at is None
+
+
+async def test_a_decision_whose_pick_now_names_another_place_decides_nothing(house: House) -> None:
+    """Confirm checks the pick's place, not only its ID, as a vote's does."""
+    event_id = await voting(house)
+    draft = draft_id(await tool(house, "draft_decide", lock("Taqueria")))
+    async with house.sessionmaker() as db:
+        found = await db.get(AssistantDraftRow, draft)
+        assert found is not None
+        found.payload = dict(found.payload) | {"item_id": house.items["Siam Garden"].id}
+        await db.commit()
+    with pytest.raises(rules.EventRuleViolation, match=re.escape(call_drafts.PICK_CHANGED)):
+        await confirm(house, "Kim", draft)
+    assert (await house.event(event_id)).state is EventState.VOTING
 
 
 async def test_a_shuffle_redraws_through_the_service_and_one_made_meanwhile_is_refused(house: House) -> None:

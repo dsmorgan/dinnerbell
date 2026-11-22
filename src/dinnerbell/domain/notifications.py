@@ -342,6 +342,9 @@ class ProposalsReady(_Notification):
     queued before it existed."""
     shuffles_left: int = 0
     """Shuffles the coordinator may still use, and 0 when none would change anything (#87)."""
+    shuffles: int | None = None
+    """Shuffles used so far, which the Shuffle button carries so a second tap is refused (#330).
+    None on rows queued before it existed: their button carries no count, and isn't checked."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -359,6 +362,8 @@ class ProposalsUpdated(_Notification):
     participants: tuple[PersonInfo, ...] = ()
     """As on ``ProposalsReady``: an edit pings nobody, but it keeps the mentions in the text."""
     shuffles_left: int = 0
+    """As on ``ProposalsReady``."""
+    shuffles: int | None = None
     """As on ``ProposalsReady``."""
 
 

@@ -79,6 +79,7 @@ If the proposals don't appeal, the coordinator or an admin can tap **Shuffle pro
 - **Never replaced:** proposals a member added, proposals from an offer, and places someone suggested.
 - **The same rules hold.** The new proposals pass everything in [What can never be picked](#what-can-never-be-picked), including a late joiner's guests' needs.
 - **Places not shown yet come first.** Dinnerbell remembers every place the call has shown as a ranked proposal, and a shuffle draws from the rest first: places for this meal, then places for other meals, as the top-up does. If too few of those fit, it fills the remaining slots from places shown before, those shown longest ago first, so the places it just shuffled out come back last of all. If nothing else fits at all, the shuffle is refused and doesn't count.
+- **One tap, one shuffle.** If someone shuffled since your message or page showed the proposals, such as when you tap twice or the coordinator and an admin tap together, your shuffle is refused and doesn't count. Votes and locks on proposals a shuffle replaced say "No such proposal." instead of landing on a new one.
 - **A re-run starts afresh.** A re-run or a restart is a new run, with no places shown yet.
 
 The proposals message says who shuffled and how many were replaced, such as "Kim shuffled the proposals (2 replaced).", and the call's thread gets a short note that mentions nobody.

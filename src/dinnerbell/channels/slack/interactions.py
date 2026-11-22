@@ -1039,8 +1039,8 @@ class Interactions:
                 await coordinator.break_tie(db, member, event_id, proposal_id, now=now)
                 return None
             if action_id == ids.SHUFFLE:
-                event_id, run = ids.parse_card(value)
-                shuffled = await coordinator.shuffle(db, member, event_id, run=run, now=now)
+                event_id, run, count = ids.parse_shuffle(value)
+                shuffled = await coordinator.shuffle(db, member, event_id, run=run, shuffles=count, now=now)
                 return SHUFFLED.format(replaced=shuffled.replaced)
             if action_id == ids.ASSIGN_ROLES:
                 event_id, run = ids.parse_card(value)
