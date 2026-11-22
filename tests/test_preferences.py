@@ -244,6 +244,8 @@ def test_the_reminders_group_names_where_reminders_go(
     )
     nested = group.split('<div class="check-nested">', 1)[1]
     assert 'name="feedback_reminder"' in nested and '> Remind me "How was it?"</label>' in nested
+    assert 'aria-describedby="how-was-it-needs"' in nested
+    assert 'id="how-was-it-needs">Works while <strong>Send me reminders</strong> is on.</p>' in nested
     assert "Mute direct" not in group and "Muting direct messages" not in group and "asking how it was" not in group
     # While the web app is on, the hint names its notifications too.
     assert submit(client, "/admin/web-app", {"on": "on"}).status_code == 303
@@ -265,6 +267,9 @@ def test_the_nested_box_dims_with_css_only() -> None:
     off = ".check-group:has(> .check > input:not(:checked)) .check-nested"
     assert f"{off} {{ color: var(--muted); pointer-events: none; }}" in css
     assert f"{off} input {{ opacity: 0.7; }}" in css
+    # Its hint, which says when it applies, shows only while it can't.
+    assert ".check-group .check-nested .check-hint { display: none; }" in css
+    assert f"{off} .check-hint {{ display: block; }}" in css
 
 
 @pytest.fixture
