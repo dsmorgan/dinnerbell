@@ -1,0 +1,21 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "~Dinner call · Thursday, Oct 22~ · *Started again*",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "elements": [
+        {
+          "text": "An admin re-ran this call, so it starts over in a new call message. Answers you gave stay.",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    }
+  ],
+  "text": "Dinner call · Thursday, Oct 22: Started again"
+}

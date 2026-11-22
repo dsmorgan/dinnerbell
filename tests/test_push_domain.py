@@ -294,6 +294,10 @@ def test_the_new_direct_messages_say_what_happened_to_the_member() -> None:
     guest = note.AssignmentCancelled(EVENT, PAT, (AssignmentRole.PICKUP,), DECISION, via=KIM)
     assert push.audience(guest) == (KIM.id,) and push.message(guest, NOW).body == "Your guest is no longer picking up."
     assert "called off" in push.message(SAMPLES["started_call_cancelled"], NOW).title
+    rerun = note.AssignmentCancelled(replace(EVENT, replaced=True), KIM, (AssignmentRole.PICKUP,), DECISION, SAM)
+    assert push.audience(rerun) == (KIM.id,)  # an admin's re-run (FR-6) tells them as a call-off does
+    shown = push.message(rerun, NOW)
+    assert (shown.title, shown.body) == ("Dinner is starting over", "You're no longer picking up.")
 
 
 def test_everyone_on_their_own_says_why_and_replaces_the_calls_earlier_pushes() -> None:

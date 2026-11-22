@@ -72,6 +72,10 @@ class EventInfo:
     """The result, once a call is decided, so the call message can name it."""
     shuffle_note: str | None = None
     """The picks message's context line after the coordinator shuffled them (#87), plain words."""
+    replaced: bool = False
+    """An admin re-ran the call from voting or decided (FR-6), so this run's messages are
+    replaced by the next run's: they say so, with no buttons, and an ``AssignmentCancelled``
+    says the role is off because the call starts over."""
 
     @property
     def key(self) -> str:
@@ -501,8 +505,9 @@ class EventCancelled(_Notification):
 
 @dataclass(frozen=True, slots=True)
 class AssignmentCancelled(_Notification):
-    """A decided call was called off: one direct message to each member assigned to cook,
-    pick up, or order, so nobody shops or drives for nothing. ``roles`` are theirs."""
+    """A decided call was called off, or an admin re-ran it (``event.replaced``): one direct
+    message to each member assigned to cook, pick up, or order, so nobody shops or drives for
+    nothing. ``roles`` are theirs. ``cancelled_by`` is who called it off or re-ran it."""
 
     kind: ClassVar[str] = "assignment_cancelled"
     event: EventInfo
@@ -1105,6 +1110,8 @@ CALL_OFF_SUPERSEDES = frozenset(
 after "It's called off". The call-off closes these unsent, and the drainer checks again just
 before sending one."""
 SUPERSEDED_BY_CALL_OFF = "superseded by a call-off"
+SUPERSEDED_BY_RERUN = "superseded by a re-run"
+"""Why an admin's re-run closes the old run's direct messages in ``CALL_OFF_SUPERSEDES``."""
 
 STEP_BOUND: dict[str, frozenset[EventState]] = {
     ResponseReminder.kind: frozenset({EventState.COLLECTING}),

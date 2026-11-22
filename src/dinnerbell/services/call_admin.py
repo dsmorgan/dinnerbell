@@ -6,13 +6,17 @@ in ``services.calls``, where the coordinator can do them too. Every override is 
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dinnerbell.db.outbox import OutboxRepository
+from dinnerbell.domain import notifications as note
 from dinnerbell.domain.events import (
     ActingAs,
     Event,
+    EventState,
     Window,
     check_assign_coordinator,
     check_can_coordinate,
@@ -21,9 +25,11 @@ from dinnerbell.domain.events import (
     check_window_change,
 )
 from dinnerbell.domain.members import Member
+from dinnerbell.domain.notifications import CALL_OFF_SUPERSEDES, SUPERSEDED_BY_RERUN
 from dinnerbell.services import activity, lifecycle
-from dinnerbell.services.call_context import load, locked_event
-from dinnerbell.services.calls import set_coordinator
+from dinnerbell.services import call_context as cc
+from dinnerbell.services.call_context import CallContext, load, locked_event, publish
+from dinnerbell.services.calls import roles_called_off, set_coordinator
 from dinnerbell.services.common import audit, require_admin
 from dinnerbell.services.errors import NotFound
 from dinnerbell.services.variety import household_today
@@ -62,6 +68,11 @@ async def rerun(db: AsyncSession, actor: Member, event_id: int, *, now: datetime
     Refused for today's call once it's past the usual meal time plus two hours. Any member can
     start a called-off call again with ``calls.start_call``; re-running a voting, decided, or
     abandoned one is the admin's.
+
+    A re-run from voting or decided tells people what a call-off from there would (FR-6, FR-56):
+    the old run's call, picks, and decision messages say it was replaced, with no buttons, and
+    each active cook, pickup, and orderer but the admin gets ``AssignmentCancelled``. The old
+    run's direct messages not yet sent are closed unsent. All of it goes before the new run's post.
     """
     require_admin(actor, ADMINS_ONLY)
     async with locked_event(db, actor.household_id, event_id, now) as event:
@@ -69,10 +80,33 @@ async def rerun(db: AsyncSession, actor: Member, event_id: int, *, now: datetime
         today = household_today(ctx.household, now)
         check_rerun(event, today, now=now, too_late_after=ctx.too_late_for(today))
         await lifecycle.check_no_cooking_offer(db, event.household_id, event.slot, event.day)  # FR-5
+        if event.state in RERUN_TELLS:
+            await OutboxRepository(db).close_unsent(
+                event.household_id, event.id, CALL_OFF_SUPERSEDES, note=SUPERSEDED_BY_RERUN, now=now
+            )
+            await publish(db, ctx, *_replaced(ctx, actor), now=now)
         fresh = await lifecycle.reopen(db, ctx, today=today, now=now)
         payload = {"from": event.state.value, "run": fresh.run, "respond_by": fresh.respond_deadline.isoformat()}
         await audit(db, actor.household_id, actor, "event.rerun", _target(event), payload, now)
         activity.action(db, "rerun", fresh, actor, before=event.state)
+
+
+RERUN_TELLS = frozenset({EventState.VOTING, EventState.DECIDED})
+"""States a re-run tells people about leaving. An abandoned call's messages have nothing left to
+act on, and a called-off one's said so already."""
+
+
+def _replaced(before: CallContext, actor: Member) -> list[note.Notification]:
+    """The old run's messages as replaced (``EventInfo.replaced``), and its role holders' notes."""
+    info = replace(cc.event_info(before), replaced=True)
+    sent: list[note.Notification] = [replace(cc.call_updated(before), event=info)]
+    if before.proposals:
+        sent.append(replace(cc.proposals_updated(before), event=info))
+    decision = cc.decision_info(before)
+    if decision is not None:
+        sent.append(note.DecisionUpdated(info, decision, cc.locked_by(before)))
+    sent += roles_called_off(before, before, info, actor, None)
+    return sent
 
 
 async def assign_coordinator(
