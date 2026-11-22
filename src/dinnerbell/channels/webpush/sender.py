@@ -76,5 +76,7 @@ class WebPushSender:
 
 
 def new_client(transport: httpx.AsyncBaseTransport | None = None) -> httpx.AsyncClient:
-    """The push client: no redirects, and a 10-second timeout."""
-    return httpx.AsyncClient(transport=transport, timeout=TIMEOUT, follow_redirects=False)
+    """The push client: no redirects, and a 10-second timeout. ``trust_env=False`` ignores proxy
+    and CA bundle variables, such as ``HTTPS_PROXY`` and ``SSL_CERT_FILE``, and verifies TLS
+    against the bundled certificate authorities, as menu links and the weather do (#326)."""
+    return httpx.AsyncClient(transport=transport, timeout=TIMEOUT, follow_redirects=False, trust_env=False)

@@ -8,6 +8,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ### Security
 
+- **Pushes ignore proxy and CA bundle environment variables** (#326). The web push client read `HTTPS_PROXY`, `ALL_PROXY`, `SSL_CERT_FILE`, and `SSL_CERT_DIR` from the environment, unlike menu links and the weather. Now it goes straight to the push services and verifies them against Dinnerbell's bundled certificate authorities, so whoever can set the container's environment can't route pushes through a proxy or trust another certificate. A host that reaches the internet only through a proxy can't send pushes; see [Web push](docs/configuration.md#web-push).
 - **The image installs Debian's fixed glibc** (CVE-2026-5435 and CVE-2026-19499, both high). No `python:3.12-slim` digest has it yet, so the image installs `libc6` and `libc-bin` 2.41-12+deb13u5 from Debian until one does, beside the fixed zlib (#236). The first is in deprecated DNS printing functions and the second in `strfmon`; Dinnerbell calls neither, but every program in the image loads glibc.
 
 ### Added
