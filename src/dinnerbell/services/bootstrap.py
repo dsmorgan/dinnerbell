@@ -38,6 +38,8 @@ async def bootstrap(
             now=now,
         )
         log.info("created household", extra={"household_id": household.id})
+    else:
+        _warn_on_ignored_settings(household, household_name=household_name, timezone=timezone)
 
     if await members.by_email(household.id, admin_email) is None:
         admin = await members.add(
@@ -60,3 +62,25 @@ async def bootstrap(
 
     await db.commit()
     return household
+
+
+def _warn_on_ignored_settings(household: Household, *, household_name: str, timezone: str) -> None:
+    """The settings only seed the household row, so say when they no longer match it (issue 334).
+    The time zone is named; the household name isn't, because it identifies the household (SEC-5)."""
+    extra = {"household_id": household.id}
+    if timezone != household.timezone:
+        log.warning(
+            "DINNERBELL_TIMEZONE is %s, but the household's time zone is %s, which Dinnerbell keeps using: it "
+            "reads the setting on first start only, and the time zone can't be changed after that yet. To stop "
+            "this warning, set DINNERBELL_TIMEZONE to the household's zone; see docs/configuration.md.",
+            timezone,
+            household.timezone,
+            extra=extra,
+        )
+    if household_name != household.name:
+        log.warning(
+            "DINNERBELL_HOUSEHOLD_NAME differs from the household's name, which Dinnerbell keeps using: it reads "
+            "the setting on first start only, and the name can't be changed after that yet. To stop this warning, "
+            "set DINNERBELL_HOUSEHOLD_NAME to the name the app shows; see docs/configuration.md.",
+            extra=extra,
+        )

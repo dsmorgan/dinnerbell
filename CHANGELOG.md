@@ -22,6 +22,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ### Fixed
 
+- **A changed `DINNERBELL_TIMEZONE` or `DINNERBELL_HOUSEHOLD_NAME` logs a warning** (#334). Dinnerbell reads both on first start only, and a later change did nothing, silently. Now each start that finds a value different from the household's logs one warning per setting: the time zone's names both zones, and the household name's says only that it differs, because the name identifies the household. Neither can be changed after first start yet; to stop the warning, set the variable back to the stored value. `dinnerbell config check` still reads no database, so it doesn't compare them. `.env.example` now lists `DINNERBELL_TIMEZONE` with the required settings, as the placeholder `Region/City`, which Dinnerbell refuses, so a copied example can't put every call an hour off. Existing env files are unaffected.
 - **Tapping Dinnerbone works the same in every still pose.** A second tap within a second and a half of the first ended the heart, or his opened eye, early, when the first tap's timer ran out; each tap now restarts the reaction in full. Tapped asleep or dozing, a heart pops too, and he rolls over as the spec says: his breathing used to hide the roll, and his "z"s stayed up while his eyes were open. Checked in headless Chrome at 390 px, with a mouse and with touch, in every weather and with reduced motion (#319).
 
 ### Changed

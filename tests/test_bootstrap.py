@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import httpx
@@ -27,7 +28,7 @@ async def run(settings: Settings, clock: FakeClock, **overrides: str) -> None:
             await bootstrap(
                 db,
                 household_name=overrides.get("household_name", settings.household_name),
-                timezone=settings.timezone,
+                timezone=overrides.get("timezone", settings.timezone),
                 admin_email=overrides.get("admin_email", settings.admin_email),
                 now=clock(),
             )
@@ -76,7 +77,7 @@ async def test_new_admin_email_adds_another_admin(migrated: Settings, clock: Fak
 
 @pytest.mark.parametrize("settings_overrides", [{"household_name": "Casa Morgan"}])
 def test_household_row_is_authoritative_after_first_start(
-    client: TestClient, migrated: Settings, clock: FakeClock, tmp_path: Path
+    client: TestClient, migrated: Settings, clock: FakeClock, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Regression: name and time zone had two sources. The env values only seed the row."""
     assert "Casa Morgan" in client.get("/").text
@@ -91,3 +92,66 @@ def test_household_row_is_authoritative_after_first_start(
         assert "Ignored Name" not in signed_out.text
         assert "Casa Morgan" in restarted.get("/no-such-page").text
         assert str(app.state.jobs.zone) == "America/Chicago"
+    # The restart says each setting was ignored, and names neither household name (issue 334).
+    warnings = warnings_from(caplog)
+    assert any("DINNERBELL_TIMEZONE is UTC" in w and "America/Chicago" in w for w in warnings)
+    assert any("DINNERBELL_HOUSEHOLD_NAME differs" in w for w in warnings)
+    assert not any("Casa Morgan" in r.getMessage() or "Ignored Name" in r.getMessage() for r in caplog.records)
+
+
+def warnings_from(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == "dinnerbell.services.bootstrap" and r.levelno == logging.WARNING
+    ]
+
+
+@pytest.mark.anyio
+async def test_a_changed_time_zone_setting_warns_with_both_zones(
+    migrated: Settings, clock: FakeClock, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Issue 334: DINNERBELL_TIMEZONE is read on first start only; a later change says so."""
+    await run(migrated, clock)
+    assert warnings_from(caplog) == []
+    caplog.clear()
+    await run(migrated, clock, timezone="Europe/Berlin")
+    [warning] = warnings_from(caplog)
+    assert "DINNERBELL_TIMEZONE" in warning
+    assert "Europe/Berlin" in warning and "America/Chicago" in warning
+    assert "first start" in warning
+
+
+@pytest.mark.anyio
+async def test_a_changed_household_name_warns_without_either_name(
+    migrated: Settings, clock: FakeClock, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The name identifies the household, so the warning says only that it differs (SEC-5)."""
+    await run(migrated, clock, household_name="Place 1")
+    caplog.clear()
+    await run(migrated, clock, household_name="Place 2")
+    [warning] = warnings_from(caplog)
+    assert "DINNERBELL_HOUSEHOLD_NAME" in warning and "first start" in warning
+    assert not any("Place" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.anyio
+async def test_matching_settings_and_first_start_log_no_warning(
+    migrated: Settings, clock: FakeClock, caplog: pytest.LogCaptureFixture
+) -> None:
+    await run(migrated, clock, household_name="Place 1", timezone="Europe/Berlin")
+    await run(migrated, clock, household_name="Place 1", timezone="Europe/Berlin")
+    assert warnings_from(caplog) == []
+
+
+@pytest.mark.anyio
+async def test_both_settings_changed_warn_once_each(
+    migrated: Settings, clock: FakeClock, caplog: pytest.LogCaptureFixture
+) -> None:
+    await run(migrated, clock)
+    caplog.clear()
+    await run(migrated, clock, household_name="Place 2", timezone="UTC")
+    warnings = warnings_from(caplog)
+    assert len(warnings) == 2
+    assert sum("DINNERBELL_TIMEZONE" in w for w in warnings) == 1
+    assert sum("DINNERBELL_HOUSEHOLD_NAME" in w for w in warnings) == 1

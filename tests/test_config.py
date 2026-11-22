@@ -385,6 +385,15 @@ def test_env_example_documents_every_setting() -> None:
             assert line in text, field
 
 
+def test_env_example_time_zone_is_a_placeholder_dinnerbell_refuses(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A copied example must not seed the wrong zone silently: it's read on first start only (issue 334)."""
+    from dotenv import dotenv_values
+
+    zone = dotenv_values(Path(__file__).resolve().parents[1] / ".env.example")["DINNERBELL_TIMEZONE"]
+    assert zone
+    assert "DINNERBELL_TIMEZONE: must be an IANA time zone name" in error_for(monkeypatch, DINNERBELL_TIMEZONE=zone)
+
+
 def test_configuration_reference_documents_every_setting() -> None:
     text = (Path(__file__).resolve().parents[1] / "docs" / "configuration.md").read_text()
     missing = [field for field in Settings.model_fields if f"`DINNERBELL_{field.upper()}`" not in text]
