@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 import json
+import pathlib
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 
@@ -606,3 +607,19 @@ async def test_only_bad_keys_become_undeliverable_in_the_sender() -> None:
     with pytest.raises(push.PushTooLarge):
         await push_sender.send(push.PushTarget(5, endpoint, P256DH, AUTH), big, ttl=60, urgency="normal", topic=None)
     await client.aclose()
+
+
+async def test_the_push_client_ignores_proxy_and_ca_variables(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """#326: like menu links and the weather, pushes go straight to the push service, verified
+    against the bundled certificate authorities, whatever the environment says."""
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.invalid:3128")
+    monkeypatch.setenv("ALL_PROXY", "http://proxy.invalid:3128")
+    monkeypatch.setenv("SSL_CERT_FILE", str(tmp_path / "missing.pem"))  # would fail to load if read
+    client = sender.new_client()
+    try:
+        assert client.trust_env is False
+        assert not client._mounts  # no proxy transport for any URL
+    finally:
+        await client.aclose()
