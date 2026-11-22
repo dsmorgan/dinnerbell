@@ -438,7 +438,7 @@ def message(notification: note.Notification, now: datetime) -> PushMessage:
     elif isinstance(notification, note.StartedCallCancelled):
         title, body = f"{meal} is called off", "Someone called off the call you started. You can start it again."
     elif isinstance(notification, note.AssignmentCancelled):
-        title = f"{meal} is called off"
+        title = f"{meal} is starting over" if event.replaced else f"{meal} is called off"
         body = f"{whose(notification.via).capitalize()} no longer {_roles(notification.roles)}."
     else:  # pragma: no cover - a test builds every pushed kind
         raise ValueError(f"no push text for {notification.kind}")

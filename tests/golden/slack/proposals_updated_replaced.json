@@ -1,0 +1,21 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "~Dinner proposals · Thursday, Oct 22~ · *Started again*",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "elements": [
+        {
+          "text": "An admin re-ran this call, so it starts over in a new call message. These picks and their votes are gone.",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    }
+  ],
+  "text": "Dinner proposals · Thursday, Oct 22: Started again"
+}

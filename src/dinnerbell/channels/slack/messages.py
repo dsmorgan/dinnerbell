@@ -141,6 +141,8 @@ def _render(notification: note.Notification, ctx: RenderContext) -> Message:
     match notification:
         case note.CallOpened():
             return call_message(notification, ctx, mentions=notification.mentions)
+        case note.CallUpdated() | note.ProposalsUpdated() | note.DecisionUpdated() if notification.event.replaced:
+            return replaced_message(notification)
         case note.CallUpdated():
             return call_message(notification, ctx)
         case note.ProposalsReady() | note.ProposalsUpdated():
@@ -1532,13 +1534,26 @@ def assignment_cancelled_message(notification: note.AssignmentCancelled, ctx: Re
     reader, subject = (
         (via.name, f"Your guest {notification.member.name} is") if via else (notification.member.name, "You're")
     )
+    why = (
+        _rerun(event, notification.cancelled_by)
+        if event.replaced
+        else _called_off(event, notification.cancelled_by, notification.note)
+    )
+    reason = escape(why) if event.replaced else _reason(event, notification.cancelled_by, notification.note)
+    thanks = "Watch for the new call." if event.replaced else "Thanks for being ready to pitch in!"
     lines = [
-        f"Change of plans, {escape(reader)}. " + _reason(event, notification.cancelled_by, notification.note),
-        f"{escape(subject)} no longer {role}: ~{_item_name(proposal.item)}~. Thanks for being ready to pitch in!",
+        f"Change of plans, {escape(reader)}. {reason}",
+        f"{escape(subject)} no longer {role}: ~{_item_name(proposal.item)}~. {thanks}",
     ]
     blocks = [section(join_lines(lines)), actions(_web_button(ctx, event), block_id="more")]
-    text = f"{_called_off(event, notification.cancelled_by, notification.note)} {subject} no longer {role}."
-    return _finish(text, blocks)
+    return _finish(f"{why} {subject} no longer {role}.", blocks)
+
+
+def _rerun(event: note.EventInfo, by: note.PersonInfo | None) -> str:
+    """Plain words for an admin's re-run (FR-6), such as "Alex re-ran dinner for Friday, Oct 23,
+    so it starts over." Escape before putting it in a block."""
+    who = by.name if by is not None else "An admin"
+    return f"{who} re-ran {_what(event)} for {day_label(event.day)}, so it starts over."
 
 
 def started_call_cancelled_message(notification: note.StartedCallCancelled, ctx: RenderContext) -> Message:
@@ -1750,6 +1765,28 @@ def offer_full_message(notification: note.OfferFull, ctx: RenderContext) -> Mess
         lines.append(f"*Dietary needs:* {escape(', '.join(offer.dietary_notes))}")
     blocks = [section(join_lines(lines)), actions(_web_button(ctx, event), block_id="more")]
     return _finish(f"Your {_slot(event)} offer is full: {eating} joining you.", blocks)
+
+
+REPLACED = "Started again"
+
+
+def replaced_message(notification: note.CallUpdated | note.ProposalsUpdated | note.DecisionUpdated) -> Message:
+    """What the call, picks, and decision messages of a run an admin re-ran become (FR-6): no
+    buttons, since the new run has its own call message, and nothing in this one counts now."""
+    event = notification.event
+    match notification:
+        case note.ProposalsUpdated():
+            title, gone = _post_title(event, "proposals"), "These picks and their votes are gone"
+        case note.DecisionUpdated():
+            title = _post_title(event, "decision")
+            gone = f"The decision ({notification.decision.proposal.item.name}) and its roles are off"
+        case _:
+            title, gone = _title(event), "Answers you gave stay"
+    blocks = [
+        section(f"~{escape(title)}~ · *{REPLACED}*"),
+        context(escape(f"An admin re-ran this call, so it starts over in a new call message. {gone}.")),
+    ]
+    return _finish(f"{title}: {REPLACED}", blocks)
 
 
 DISCARDED = "Discarded (test)"

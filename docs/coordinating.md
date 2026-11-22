@@ -137,6 +137,8 @@ In **Assign roles**, you choose how to get it, who cooks or orders, and who pick
 
 **Adjust** in Slack is the coordinator's alone. An admin who taps it is told to use the web.
 
+A re-run of a voting or decided call starts it over with a new call message. The old call, picks, and decision messages say **Started again** and lose their buttons, and each person who was to cook, pick up, or order, other than you, gets a direct message (or a notification, on **Web app** or **Both**) that their role is off.
+
 When you correct who cooked, picked up, or ordered after the meal is done, Dinnerbell moves that meal's count from the old person to the new one. The new person earns any badge the count reaches, announced as usual. The old person loses each badge tier their counts reached before the correction and no longer reach, even one already announced, and even one first earned at a lower count before an admin raised it. A badge post or monthly recap still waiting to go out leaves it out; a post Slack already has stays. Correcting it back restores both. Each correction that moves a count writes an audit row, `event.contributions_recounted`, with who lost and gained the count and the badges taken back and awarded.
 
 When the household ate somewhere other than the call says, and the meal is already done, correct the place under **Change the plan** on the call's page. Choose any catalog place or type a new name, with a way the place allows, as you would before it's done.

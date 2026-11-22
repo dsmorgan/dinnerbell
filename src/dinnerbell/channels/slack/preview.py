@@ -377,6 +377,11 @@ NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
     "decision_updated": lambda: note.DecisionUpdated(DECIDED, DECISION, locked_by=ALEX),
     "decision_updated_cancelled": lambda: note.DecisionUpdated(CANCELLED, DECISION),
     "decision_updated_done": lambda: note.DecisionUpdated(event(EventState.DONE, coordinator=ALEX), DECISION),
+    "call_updated_replaced": lambda: note.CallUpdated(replace(DECIDED, replaced=True), ROSTER, (), head_count=3),
+    "proposals_updated_replaced": lambda: note.ProposalsUpdated(
+        replace(VOTING, replaced=True), PROPOSALS, 3, participants=(ALEX, SAM)
+    ),
+    "decision_updated_replaced": lambda: note.DecisionUpdated(replace(DECIDED, replaced=True), DECISION, ALEX),
     "assignment_made": lambda: note.AssignmentMade(DECIDED, 31, SAM, (AssignmentRole.COOK,), DECISION),
     "assignment_made_two_roles": lambda: note.AssignmentMade(
         DECIDED, 33, SAM, (AssignmentRole.COOK, AssignmentRole.COORDINATOR), TWO_ROLES
@@ -401,6 +406,9 @@ NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
     ),
     "assignment_cancelled": lambda: note.AssignmentCancelled(
         CANCELLED, SAM, (AssignmentRole.COOK,), DECISION, cancelled_by=ALEX, note=REASON
+    ),
+    "assignment_cancelled_rerun": lambda: note.AssignmentCancelled(
+        replace(DECIDED, replaced=True), SAM, (AssignmentRole.PICKUP,), DECISION, cancelled_by=ALEX
     ),
     "started_call_cancelled": lambda: note.StartedCallCancelled(
         replace(event(EventState.CANCELLED), day=date(2026, 10, 23)), KIM, cancelled_by=ALEX

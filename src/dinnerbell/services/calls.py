@@ -948,19 +948,38 @@ def _called_off(before: CallContext, ctx: CallContext, actor: Member, reason: st
         *([cc.proposals_updated(ctx)] if ctx.proposals else []),
         *cc.decision_updated(ctx),
     ]
-    decision = cc.decision_info(before)
-    if before.event.state is EventState.DECIDED and decision is not None:
-        order = list(AssignmentRole)
-        roles: dict[int, set[AssignmentRole]] = {}
-        for a in before.assignments:
-            assignee = ctx.members.get(a.member_id)
-            if a.role in CANCEL_ROLES and a.member_id != actor.id and assignee is not None and assignee.active:
-                roles.setdefault(a.member_id, set()).add(a.role)
-        for member_id, theirs in roles.items():
-            mine = tuple(sorted(theirs, key=order.index))
-            via = cc.answering_for(ctx, member_id)
-            sent.append(note.AssignmentCancelled(info, ctx.person(member_id), mine, decision, by, reason, via))
+    sent += roles_called_off(before, ctx, info, actor, reason)
     return sent
+
+
+def roles_called_off(
+    before: CallContext, ctx: CallContext, info: note.EventInfo, actor: Member, reason: str | None
+) -> list[note.AssignmentCancelled]:
+    """One ``AssignmentCancelled`` for each active cook, pickup, and orderer of the decided call
+    ``before``, with all their roles, about ``info``: a call-off's, or the run an admin's re-run
+    replaces (``call_admin.rerun``). Nobody is told about their own call-off or re-run."""
+    decision = cc.decision_info(before)
+    if before.event.state is not EventState.DECIDED or decision is None:
+        return []
+    order = list(AssignmentRole)
+    roles: dict[int, set[AssignmentRole]] = {}
+    for a in before.assignments:
+        assignee = ctx.members.get(a.member_id)
+        if a.role in CANCEL_ROLES and a.member_id != actor.id and assignee is not None and assignee.active:
+            roles.setdefault(a.member_id, set()).add(a.role)
+    by = ctx.person(actor.id)
+    return [
+        note.AssignmentCancelled(
+            info,
+            ctx.person(member_id),
+            tuple(sorted(theirs, key=order.index)),
+            decision,
+            by,
+            reason,
+            cc.answering_for(ctx, member_id),
+        )
+        for member_id, theirs in roles.items()
+    ]
 
 
 def _audience(ctx: CallContext) -> tuple[note.PersonInfo, ...]:

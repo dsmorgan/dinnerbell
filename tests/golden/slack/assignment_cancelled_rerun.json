@@ -1,0 +1,28 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "Change of plans, Sam. Alex re-ran dinner for Thursday, Oct 22, so it starts over.\nYou're no longer picking up: ~Sam's Tacos~. Watch for the new call.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "more",
+      "elements": [
+        {
+          "action_id": "link_event",
+          "text": {
+            "emoji": true,
+            "text": "View on web",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://dinnerbell.example.com/events/7"
+        }
+      ],
+      "type": "actions"
+    }
+  ],
+  "text": "Alex re-ran dinner for Thursday, Oct 22, so it starts over. You're no longer picking up."
+}
