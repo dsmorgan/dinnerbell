@@ -273,8 +273,10 @@ async def test_ending_the_session_ends_the_devices_notifications(house: House, c
 
 
 async def test_a_call_opening_queues_a_push_per_device_of_each_web_app_member(house: House) -> None:
-    await link(house, "Sam", "U02SAM")  # Slack, by default
+    await link(house, "Sam", "U02SAM")
     await switch(house, True)
+    async with house.sessionmaker() as db:  # Both by default: Sam chooses Slack only
+        await web_app.set_my_notify_via(db, house["Sam"], NotifyVia.SLACK, now=house.clock())
     await device(house, "Kim", 1)
     await device(house, "Kim", 2)
     await device(house, "Sam")
@@ -336,7 +338,9 @@ async def test_a_muted_member_gets_no_reminder_push_and_slack_only_members_get_n
         await db.commit()
     for name in ("Kim", "Sam", "Alex"):
         await device(house, name)
-    await link(house, "Alex", "U01ALEX")  # Slack by default now
+    await link(house, "Alex", "U01ALEX")
+    async with house.sessionmaker() as db:  # Both by default: Alex chooses Slack
+        await web_app.set_my_notify_via(db, house["Alex"], NotifyVia.SLACK, now=house.clock())
     event = await a_call(house)
     sam, kim, alex = who(house, "Sam", "Kim", "Alex")
     await enqueue(house, *(note.ResponseReminder(event, p) for p in (sam, kim, alex)))

@@ -19,7 +19,7 @@ The owner's constraints: the feature is optional and changes nothing until an ad
 
 **An Admin switch, off by default.** While it's off, the push hook never runs, the manifest, service worker, and code sign-in routes answer 404, and Slack delivery is exactly as today. Turning it off deletes every push subscription.
 
-**Each member chooses Slack, Web app, or Both.** Members who have a Slack user start on **Slack**; members without one start on **Web app**. While the switch is on, Slack direct messages skip members on **Web app**, instead of failing because they have no Slack user. Channel posts still go to the channel.
+**Each member chooses Slack, Web app, or Both.** Members who have a Slack user start on **Both**, so Slack is unchanged for them and a device they turn notifications on for gets pushes; members without one start on **Web app**. While the switch is on, Slack direct messages skip members on **Web app**, instead of failing because they have no Slack user. Channel posts still go to the channel.
 
 **Push mirrors what Slack sends the member, through its own queue.** A web-app member gets a push for a named list of the direct messages Slack would send them and of the channel posts they'd act on, such as a call opening and the decision. Edits to Slack messages don't push, and neither do badges or the recap. Wherever Dinnerbell queues a notification on that list, it also queues push rows for the web-app members it concerns. The push queue has its own drainer and retries, and it drops a push the call has moved past instead of sending it late. The Slack outbox is unchanged, so an outage of either service never delays the other. A payload names the meal and what to do, and never another member's answer.
 

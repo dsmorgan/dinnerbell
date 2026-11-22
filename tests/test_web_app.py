@@ -269,13 +269,13 @@ def test_a_member_without_slack_has_only_the_web_app(admin: TestClient, migrated
     assert member(migrated, "admin@example.com").notify_via is None  # what counts already: nothing stored
 
 
-def test_a_member_with_slack_starts_on_slack_and_chooses(admin: TestClient, migrated: Settings) -> None:
+def test_a_member_with_slack_starts_on_both_and_chooses(admin: TestClient, migrated: Settings) -> None:
     switch(admin, True)
     me = member(migrated, "admin@example.com").id
     link_slack(admin, me, "U01ADMIN")
     prefs = admin.get("/preferences").text
     assert 'action="/preferences/notify"' in card(prefs)
-    assert 'name="via" value="slack" checked' in card(prefs) and card(prefs).count(" checked") == 1
+    assert 'name="via" value="both" checked' in card(prefs) and card(prefs).count(" checked") == 1
     assert card(prefs).index('value="slack"') < card(prefs).index('value="web"') < card(prefs).index('value="both"')
     response = submit(admin, "/preferences/notify", {"via": "web"})
     assert (response.status_code, response.headers["location"]) == (303, "/preferences?notice=notify#notify-via")
@@ -303,6 +303,7 @@ def test_preferences_turns_on_this_devices_notifications(admin: TestClient, migr
     switch(admin, True)
     me = member(migrated, "admin@example.com").id
     link_slack(admin, me, "U01ADMIN")
+    assert submit(admin, "/preferences/notify", {"via": "slack"}).status_code == 303  # Both by default
     prefs = admin.get("/preferences").text
     device = card(prefs).split('id="notifications"', 1)[1]
     assert "hidden" in device.split(">", 1)[0] and "Turn on notifications" in device
@@ -338,20 +339,20 @@ def test_an_admin_sets_a_members_choice_and_it_is_audited(
     assert submit(admin, f"{base}/notify", {"via": "slack"}).status_code == 400
     link_slack(admin, sam, "U02SAM")
     theirs = admin.get(base).text
-    assert f'action="{base}/notify"' in card(theirs) and 'name="via" value="slack" checked' in card(theirs)
-    response = submit(admin, f"{base}/notify", {"via": "both"})
+    assert f'action="{base}/notify"' in card(theirs) and 'name="via" value="both" checked' in card(theirs)
+    response = submit(admin, f"{base}/notify", {"via": "slack"})
     assert (response.status_code, response.headers["location"]) == (303, f"{base}?notice=notify#notify-via")
-    assert 'name="via" value="both" checked' in card(admin.get(response.headers["location"]).text)
-    assert member(migrated, SAM[1]).notify_via == "both"
+    assert 'name="via" value="slack" checked' in card(admin.get(response.headers["location"]).text)
+    assert member(migrated, SAM[1]).notify_via == "slack"
     admin_id = member(migrated, "admin@example.com").id
     assert [(a.actor_member_id, a.target, a.payload) for a in audits(migrated, "member.notify_via_set")] == [
-        (admin_id, f"member:{sam}", {"from": "slack", "to": "both"})
+        (admin_id, f"member:{sam}", {"from": "both", "to": "slack"})
     ]
     # Sam isn't an admin: their own choice is theirs, and another member's is refused.
     sign_in_as(admin, provider, *SAM)
     assert submit(admin, f"{base}/notify", {"via": "web"}).status_code == 403
-    assert 'name="via" value="both" checked' in card(admin.get("/preferences").text)
-    assert member(migrated, SAM[1]).notify_via == "both"
+    assert 'name="via" value="slack" checked' in card(admin.get("/preferences").text)
+    assert member(migrated, SAM[1]).notify_via == "slack"
 
 
 def test_guests_get_no_choice(admin: TestClient, provider: FakeProvider, migrated: Settings) -> None:
@@ -365,11 +366,11 @@ def test_guests_get_no_choice(admin: TestClient, provider: FakeProvider, migrate
 def test_the_choice_is_hidden_again_once_it_is_off(admin: TestClient, migrated: Settings) -> None:
     switch(admin, True)
     link_slack(admin, member(migrated, "admin@example.com").id, "U01ADMIN")
-    assert submit(admin, "/preferences/notify", {"via": "both"}).status_code == 303
+    assert submit(admin, "/preferences/notify", {"via": "slack"}).status_code == 303
     switch(admin, False)
     assert 'id="notify-via"' not in admin.get("/preferences").text
     assert submit(admin, "/preferences/notify", {"via": "web"}).status_code == 404
-    assert member(migrated, "admin@example.com").notify_via == "both"  # kept for when it's on again
+    assert member(migrated, "admin@example.com").notify_via == "slack"  # kept for when it's on again
 
 
 def test_a_page_renders_without_the_app_when_the_switch_cant_be_read(
