@@ -11,7 +11,7 @@
 
 The den's weather follows the season alone. #319 makes it vary, and can show the weather outside. That's Dinnerbell's first outbound call that isn't Slack, a push service, Anthropic, or a member's menu link, and it tells a third party roughly where the household lives.
 
-The owner's constraints: an admin setting turns it on, never an environment variable or flag. Refreshes come at randomized times, at least 1 and at most 3 hours apart. Any failure falls back to seasonal weather without touching the rest of the app, and the logs say so without flooding.
+The owner's constraints: an admin setting turns it on, never an environment variable or flag. Refreshes come at random times, 1 to 3 hours apart. Any failure falls back to seasonal weather without touching the rest of the app, and the logs say so without flooding.
 
 ## Decision
 
@@ -23,11 +23,11 @@ The owner's constraints: an admin setting turns it on, never an environment vari
 
 **A switch with a field, on Admin > Web app.** The card **Dinnerbone's weather** has a checkbox, **Show local weather**, a **ZIP or postal code**, and a **Country**, US by default (as **Web app** and **Assistant** pair a checkbox with its fields). Turning it on needs a valid code, and the code stays in the field while it's off. Each change writes a `household.weather_updated` audit row with `on` and whether the place changed, never the code or place. It's on the **Web app** tab because the den exists only on the web, and on a 390 px phone Admin's five tabs already wrap onto two rows.
 
-**Privacy.** Open-Meteo sees the postal code and country on each save, the rounded coordinates on each refresh, and the server's IP address. Nothing about members leaves the house; requests carry no cookies, only Dinnerbell's fixed User-Agent. The card says this. Logs carry the code, place, or coordinates only at debug level, and audit rows never.
+**Privacy.** Open-Meteo sees the postal code and country on each save, the rounded coordinates on each refresh, and the server's IP address. Nothing about members leaves the house, and requests carry no cookies. The card says this. Logs carry the code, place, or coordinates only at debug level, and audit rows never.
 
 **Egress rules.** The two hosts are a fixed allowlist in the domain, and Dinnerbell builds every URL itself. Each request must pass `fetch_policy.parse_target` (https, port 443, no user info) and the allowlist, follows no redirects, allows 5 seconds in all, reads at most 64 KB, and accepts only `application/json`. As in the push sender, there are no retries and no proxy or CA bundle from the environment. The hosts are fixed, so it skips the menu fetcher's every-address-is-public check, which guards links a member chose.
 
-**Cached, with a randomized refresh.** A scheduler job looks every 5 minutes for households that are due. Before each request, it sets the next fetch to a random time 1 to 3 hours later, so a crash or hang can't cause an extra fetch, and requests don't line up on the clock. The last good answer is stored and shown for up to 6 hours, then the den goes seasonal. Pages read only that stored answer.
+**Cached, with a randomized refresh.** A scheduler job looks every 5 minutes for households that are due. Before each request, it sets the next fetch to a random time, 1 hour to 3 hours less one check later, so fetches come 1 to 3 hours apart, a crash can't cause an extra one, and requests don't line up on the clock. The last good answer is shown for up to 6 hours, then the den goes seasonal. Pages read only that stored answer.
 
 **Failure is quiet and contained.** A timeout, network error, bad status, redirect, oversized or non-JSON body, or an answer that makes no sense keeps the last good answer, or seasonal weather, and records when failures began. The first failure logs a warning with its reason code, later ones log at debug, and the next success logs at info. The card shows "Updated at 3:15 PM" or "Couldn't reach the weather service since Nov 22 at 1:05 PM".
 
