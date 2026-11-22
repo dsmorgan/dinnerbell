@@ -74,6 +74,36 @@
   <symbol id="acc-cereal" viewBox="0 0 64 56">
     <circle cx="60" cy="38" r="3.6" fill="none" stroke="#E8B04A" stroke-width="2.2"/>
   </symbol>
+  <!-- What he reacts to the weather with (#319), in his 64 by 56 frame. The umbrella reaches above
+       it and the fan past its right edge, so their boxes are bigger, and the den's <use> gives
+       each the same box, so they still line up with him. -->
+  <symbol id="acc-umbrella" viewBox="0 -28 64 84">
+    <path d="M41 -6 V36 Q41 40.5 37 40.5" stroke="#6B4A2E" stroke-width="1.8" fill="none" stroke-linecap="round"/>
+    <path d="M20 -4 Q41 -26 62 -4 Q58.5 -7 55 -4 Q51.5 -7.5 48 -4 Q44.5 -7.5 41 -4 Q37.5 -7.5 34 -4 Q30.5 -7.5 27 -4 Q23.5 -7 20 -4Z" fill="#3E7CC9"/>
+    <path d="M41 -4 Q41 -15 41 -19.5 M34 -4 Q35 -14 41 -19.5 M48 -4 Q47 -14 41 -19.5" stroke="#2C5C99" stroke-width=".9" fill="none"/>
+    <circle cx="41" cy="-20" r="1.4" fill="#F5C64B"/>
+  </symbol>
+  <symbol id="acc-shades" viewBox="0 0 64 56">
+    <path d="M38 23 L45 24" stroke="#2A1810" stroke-width="1.2"/>
+    <ellipse cx="49" cy="25.2" rx="4.4" ry="3.1" fill="#2A1810"/>
+    <path d="M53.3 24.8 L55.2 25.3" stroke="#2A1810" stroke-width="1.2"/>
+    <ellipse cx="56.4" cy="25.8" rx="1.6" ry="2.4" fill="#2A1810"/>
+    <path d="M46.6 24 Q48 23 49.6 23.4" stroke="#FFFFFF" stroke-width=".9" fill="none" opacity=".7"/>
+  </symbol>
+  <symbol id="acc-fan" viewBox="0 0 72 56">
+    <path d="M55 45 L56 30 Q63 29 68 34 Z" fill="#F6A8C0" stroke="#E5577A" stroke-width=".8" stroke-linejoin="round"/>
+    <path d="M55 45 L58.5 30.2 M55 45 L61.5 30.6 M55 45 L64.5 31.8" stroke="#E5577A" stroke-width=".6"/>
+    <path d="M55 45 L53.5 48" stroke="#6B4A2E" stroke-width="1.6" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="acc-snowcap" viewBox="0 0 64 56">
+    <path d="M35 13.5 Q37 6.5 44 8.5 Q50 5.5 53.5 12.5 Q46 10.8 35 13.5Z" fill="#FFFFFF" stroke="#C9D7E4" stroke-width=".7"/>
+    <circle cx="40" cy="10.2" r="1" fill="#E3EBF2"/>
+    <circle cx="48" cy="9.4" r=".9" fill="#E3EBF2"/>
+  </symbol>
+  <symbol id="acc-scarf-tail" viewBox="0 0 64 56">
+    <path d="M33 34 Q23 29.5 10 31 L11.5 35.5 Q23 33.5 33.5 38 Z" fill="#2E6B6F"/>
+    <path d="M14 31.3 L15 35.1 M17.5 31 L18.3 34.6" stroke="#F5C64B" stroke-width="1"/>
+  </symbol>
   <!-- The den: a bed of straw, his bowl out on the floor with the bell over it, and his wheel. -->
   <symbol id="nook" viewBox="0 0 30 22">
     <ellipse cx="15" cy="18" rx="15" ry="4.5" fill="#F1DFB8"/>

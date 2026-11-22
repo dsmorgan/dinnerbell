@@ -1,0 +1,4 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{#- Open-Meteo's data is CC BY 4.0 (ADR 0011): while local weather is on, the pages with the den
+    credit it. Expects den (services.fun.Den). -#}
+{% if den and den.credit %}<p class="small muted weather-credit">Weather data by <a href="https://open-meteo.com/">Open-Meteo.com</a></p>{% endif %}

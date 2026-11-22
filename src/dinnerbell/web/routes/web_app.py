@@ -19,7 +19,7 @@ from fastapi.responses import PlainTextResponse, RedirectResponse
 from starlette.responses import Response
 
 from dinnerbell.domain.push import BAD_KEYS, NOT_A_PUSH_SERVICE, InvalidSubscription
-from dinnerbell.services import push, web_app
+from dinnerbell.services import local_weather, push, web_app
 from dinnerbell.web.auth import AdminCSRFChecked, AdminPrincipal, Context, CSRFChecked, Database, MaybePrincipal
 from dinnerbell.web.render import render
 
@@ -47,6 +47,11 @@ THEME_COLOR = "#faf6f0"
 """The light page background, as base.html's ``theme-color``."""
 ICON_SIZES = (192, 512)
 NOTICES = {"on": "The web app is on.", "off": "The web app is off."}
+WEATHER_NOTICES = {
+    "weather-on": "Local weather is on. The den shows it within a few minutes.",
+    "weather-off": "Local weather is off. The den shows the season's weather.",
+    "weather-saved": "Saved.",
+}
 
 
 def _household_id(principal: MaybePrincipal) -> int | None:
@@ -155,16 +160,81 @@ async def turn_off(principal: CSRFChecked, db: Database, endpoint: Field = "") -
 # Admin > Web app ---------------------------------------------------------------------------------
 
 
+async def _admin_page(
+    request: Request,
+    principal: AdminPrincipal,
+    context: Context,
+    db: Database,
+    *,
+    notice: str = "",
+    weather_values: dict[str, str] | None = None,
+    weather_error: str | None = None,
+    status_code: int = 200,
+) -> Response:
+    household_id = principal.member.household_id
+    on = await web_app.web_app_enabled(db, household_id)
+    # Over 200 wrong sign-in codes in the last hour, from every address (spec 6.15).
+    guessing = context.wrong_codes.alarming(context.clock())
+    pushes = await push.status(db, household_id, context.clock())
+    weather = await local_weather.setting(db, household_id)
+    page = {
+        "on": on,
+        "notice": NOTICES.get(notice),
+        "wrong_codes": guessing,
+        "push": pushes,
+        "weather": weather,
+        "weather_values": weather_values
+        or {
+            "on": "on" if weather is not None and weather.on else "",
+            "postal_code": weather.postal_code if weather is not None else "",
+            "country": weather.country if weather is not None else "US",
+        },
+        "weather_notice": WEATHER_NOTICES.get(notice),
+        "weather_error": weather_error,
+        "weather_fresh": weather is not None and weather.weather(context.clock()) is not None,
+    }
+    return await render(request, "admin_web_app.html", page, status_code=status_code)
+
+
 @admin_router.get("/web-app")
 async def admin_page(
     request: Request, principal: AdminPrincipal, context: Context, db: Database, notice: str = ""
 ) -> Response:
-    on = await web_app.web_app_enabled(db, principal.member.household_id)
-    # Over 200 wrong sign-in codes in the last hour, from every address (spec 6.15).
-    guessing = context.wrong_codes.alarming(context.clock())
-    pushes = await push.status(db, principal.member.household_id, context.clock())
-    page = {"on": on, "notice": NOTICES.get(notice), "wrong_codes": guessing, "push": pushes}
-    return await render(request, "admin_web_app.html", page)
+    return await _admin_page(request, principal, context, db, notice=notice)
+
+
+@admin_router.post("/web-app/weather")
+async def save_weather(
+    request: Request,
+    principal: AdminCSRFChecked,
+    context: Context,
+    db: Database,
+    on: Annotated[str, Form(max_length=8)] = "",
+    postal_code: Annotated[str, Form(max_length=32)] = "",
+    country: Annotated[str, Form(max_length=8)] = "",
+) -> Response:
+    """**Dinnerbone's weather** (ADR 0011): the checkbox, as on the web app switch, and the
+    postal code, looked up only on a save that turns it on or moves it."""
+    turned_on = on == "on"
+    posted = {"on": "on" if turned_on else "", "postal_code": postal_code, "country": country}
+    if context.weather is None:  # pragma: no cover - the app factory always sets it
+        raise RuntimeError("no weather source")
+    try:
+        saved = await local_weather.save_setting(
+            db,
+            principal.member,
+            on=turned_on,
+            postal_code=postal_code,
+            country=country,
+            source=context.weather,
+            now=context.clock(),
+        )
+    except (local_weather.InvalidLocation, local_weather.LocationNotSaved) as exc:
+        return await _admin_page(
+            request, principal, context, db, weather_values=posted, weather_error=str(exc), status_code=400
+        )
+    notice = "weather-saved" if not saved.changed else ("weather-on" if saved.on else "weather-off")
+    return RedirectResponse(f"/admin/web-app?notice={notice}#weather", status_code=303)
 
 
 @admin_router.post("/web-app")

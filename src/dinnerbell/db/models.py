@@ -882,3 +882,36 @@ class AssistantDraftRow(Base):
     expires_at: Mapped[datetime] = mapped_column(UTCDateTime())
     used_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     confirmed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+
+class LocalWeatherRow(Base):
+    """Dinnerbone's local weather (#319, ADR 0011): Admin's setting, the place it found, and the
+    last answer from Open-Meteo. One row per household, only once an admin has saved the setting.
+
+    The admin's save writes ``enabled``, ``postal_code``, ``country``, and the place; the
+    scheduler writes the answer and the failure state, each only while the place it fetched for
+    is still the one saved. ``latitude`` and ``longitude`` are rounded to 0.1°. Turning it off
+    clears everything but the postal code and country, which stay in the form."""
+
+    __tablename__ = "local_weather"
+
+    household_id: Mapped[int] = mapped_column(ForeignKey("household.id", ondelete="CASCADE"), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    postal_code: Mapped[str] = mapped_column(String(10))
+    country: Mapped[str] = mapped_column(String(2))
+    latitude: Mapped[float | None] = mapped_column(Float)
+    longitude: Mapped[float | None] = mapped_column(Float)
+    place: Mapped[str | None] = mapped_column(String(120))
+    """The place the postal code found, such as "Elmford, Northshire", for the admin to check."""
+    code: Mapped[int | None] = mapped_column(Integer)
+    """The last answer's WMO weather code."""
+    temperature_c: Mapped[float | None] = mapped_column(Float)
+    wind_kmh: Mapped[float | None] = mapped_column(Float)
+    observed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    """When the last good answer arrived."""
+    next_fetch_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    failing_since: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    """The first failure since the last good answer, or null."""
+    failure: Mapped[str | None] = mapped_column(String(16))
+    """The latest failure's reason (``domain.weather.WeatherFailure``), or null."""
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime())

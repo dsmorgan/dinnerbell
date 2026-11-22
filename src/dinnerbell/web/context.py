@@ -15,6 +15,7 @@ from dinnerbell.config import Settings
 from dinnerbell.services.clock import Clock
 from dinnerbell.services.guests import JoinLimiter, SlackPeople
 from dinnerbell.services.health import SchedulerState, SlackState
+from dinnerbell.services.local_weather import WeatherSource
 from dinnerbell.services.sign_in_codes import WrongCodes
 from dinnerbell.web.oidc import OIDCClient
 from dinnerbell.web.signing import SignedPayload
@@ -58,6 +59,8 @@ class AppContext:
     """Wrong sign-in codes from every address (spec 6.15)."""
     vapid_public_key: str = ""
     """The web push public key, base64url, for **Turn on notifications** (spec 6.15)."""
+    weather: WeatherSource | None = None
+    """Open-Meteo, for Admin's postal code lookup (ADR 0011). None in tests that build no app."""
 
 
 def app_context(request: Request) -> AppContext:

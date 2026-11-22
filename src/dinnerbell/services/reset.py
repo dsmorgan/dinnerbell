@@ -63,6 +63,7 @@ KEEP: Final = frozenset(
         "slack_badge_file",  # the badge art uploaded to Slack: not history, and reusable (#105)
         "slack_badge_composite",  # members' badge pictures: a cache Home checks by hash (#114)
         "assistant_usage",  # the assistant's spending: clearing it would let this month pass its cap
+        "local_weather",  # Admin's local weather setting and its cached answer (ADR 0011): a setting, not history
     }
 )
 """Tables the reset leaves alone."""

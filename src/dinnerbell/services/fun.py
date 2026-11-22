@@ -6,7 +6,7 @@ here acts on ``actor`` only, except ``set_member_fun_mode``, an admin's switch f
 (#181). A person's own switch isn't audited, like the other settings people change about
 themselves on Preferences: it changes nothing anyone else sees. An admin's is.
 
-``den`` is what the den shows: the scene, the call he follows and his pose, the quiet caption for
+``den`` is what the den shows: the scene and its weather (#319), the call he follows and his pose, the quiet caption for
 that call, and on Today the newest badge the actor earned that the den hasn't flipped for. On
 Today he follows the next open call; on a call's own page (#241), that call.
 ``celebration`` is what the member who locked or marked done a call on the web gets instead of
@@ -40,6 +40,7 @@ from dinnerbell.domain.fun import (
 from dinnerbell.domain.household import Household
 from dinnerbell.domain.members import Member
 from dinnerbell.services import guests as guest_rules
+from dinnerbell.services import local_weather
 from dinnerbell.services.common import audit
 from dinnerbell.services.errors import Forbidden
 from dinnerbell.services.preferences import member_for_admin
@@ -65,6 +66,8 @@ class Den:
     caption: str | None
     """The quiet caption for that call once it's decided or done, such as "Pad thai it is!"."""
     badge: BadgeFlip | None = None
+    credit: bool = False
+    """Local weather is on (ADR 0011), so the page credits Open-Meteo."""
 
 
 async def set_my_fun_mode(db: AsyncSession, actor: Member, on: bool, *, now: datetime) -> Member:
@@ -125,10 +128,11 @@ async def den(
         invited = set(await guest_rules.invited_events(db, actor)) if actor.active else set()
         events = [e for e in events if e.id in invited]
     call = followed_call(events, now, household.timezone)
-    at = scene(now, household.timezone)
+    local, credit = await local_weather.weather_now(db, household.id, now)
+    at = scene(now, household.timezone, household_id=household.id, local=local)
     badge = await _unseen_badge(db, actor) if with_badge else None
     caption = None if call is None else await _caption(db, call)
-    return Den(at, pose(at, None if call is None else call.state), call, caption, badge)
+    return Den(at, pose(at, None if call is None else call.state), call, caption, badge, credit)
 
 
 async def _unseen_badge(db: AsyncSession, actor: Member) -> BadgeFlip | None:

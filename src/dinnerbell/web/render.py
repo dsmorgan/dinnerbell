@@ -14,6 +14,7 @@ from dinnerbell.domain.fun import Scene, scene
 from dinnerbell.domain.members import ColorMode
 from dinnerbell.services.assistant.runtime import AssistantConfig, available
 from dinnerbell.services.household import current_household
+from dinnerbell.services.local_weather import weather_now
 from dinnerbell.services.stuck import StuckCall, for_admin
 from dinnerbell.services.web_app import web_app_enabled_for
 from dinnerbell.web import filters
@@ -92,13 +93,23 @@ async def _web_app(request: Request) -> bool:
         return False
 
 
-def _fun_scene(request: Request) -> Scene | None:
-    """The time of day and season for Dinnerbone's Den (#153), or None when the viewer has fun
-    mode off or isn't signed in: then the page carries none of it and loads no fun assets."""
+async def _fun_scene(request: Request) -> Scene | None:
+    """The time of day, season, and weather for Dinnerbone's Den (#153, #319), or None when the
+    viewer has fun mode off or isn't signed in: then the page carries none of it and loads no fun
+    assets. The weather is the stored local weather, if it's on and fresh, or the seasonal
+    weather: the page never waits on the weather service (ADR 0011)."""
     principal = getattr(request.state, "principal", None)
     if principal is None or not principal.member.fun_mode:
         return None
-    return scene(app_context(request).clock(), principal.household.timezone)
+    context = app_context(request)
+    now, household = context.clock(), principal.household
+    local = None
+    try:
+        async with context.sessionmaker() as db:
+            local, _ = await weather_now(db, household.id, now)
+    except Exception:
+        log.warning("could not read local weather", exc_info=True)
+    return scene(now, household.timezone, household_id=household.id, local=local)
 
 
 def _color_mode(request: Request) -> ColorMode:
@@ -123,7 +134,7 @@ async def render(
         "instance_label": settings.instance_label,
         "test_instance": is_test_instance(settings.instance_label),  # what only test may do (#60)
         "stuck_calls": _stuck_calls(request),
-        "fun": _fun_scene(request),
+        "fun": await _fun_scene(request),
         "color_mode": _color_mode(request),
         # Admin > Assistant shows only with the operator's key (ADR 0009).
         "assistant_admin": AssistantConfig.from_settings(settings).configured,

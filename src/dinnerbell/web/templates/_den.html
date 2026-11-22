@@ -2,12 +2,14 @@
 {#- Dinnerbone's Den (#153), beside the greeting on Today and the way back to Today on a call's
     page (#241), for a viewer with fun mode on.
     Expects den (services.fun.Den). The light, weather, and piles key on <body>'s
-    data-period, data-season, and data-season-depth; what he's doing keys on data-pose. Every
-    part is drawn from den.svg, and fun.css places, shows, and hides them: no inline style.
-    Decorative, so hidden from assistive technology. -#}
+    data-period, data-season, data-season-depth, data-weather, data-feel, data-fall, data-pile,
+    and data-react (#319); what he's doing keys on data-pose. Every part is drawn from den.svg,
+    and fun.css places, shows, and hides them: no inline style. The weather's layers sit behind
+    him and take no taps. Decorative, so hidden from assistive technology. -#}
 {%- set sprite = "/static/den.svg?v=" ~ (version|urlencode) %}
 <div class="den" data-pose="{{ den.pose }}" aria-hidden="true">
   <div class="den-sky"></div>
+  <div class="den-clouds"><i></i><i></i><i></i></div>
   <div class="den-floor"></div>
   <svg class="den-nook" viewBox="0 0 30 22" focusable="false"><use href="{{ sprite }}#nook"/></svg>
   <svg class="den-bowl" viewBox="0 0 19 13" focusable="false"><use href="{{ sprite }}#bowl"/></svg>
@@ -19,8 +21,10 @@
   <div class="den-cap den-cap-wheel"></div>
   <div class="den-leaves">{% for _ in range(14) %}<i></i>{% endfor %}</div>
   <div class="den-puddle"></div>
+  <div class="den-fog"></div>
   <div class="den-ham">
-    <svg class="ham" viewBox="0 0 64 56" focusable="false">
+    <svg class="ham" viewBox="0 0 64 56" focusable="false"><g class="ham-shake">
+      <use class="acc acc-scarf-tail" href="{{ sprite }}#acc-scarf-tail"/>
       <use class="ham-foot-back" href="{{ sprite }}#ham-foot-back"/>
       <use href="{{ sprite }}#ham-body"/>
       <use class="ham-cheek" href="{{ sprite }}#ham-cheek"/>
@@ -35,8 +39,12 @@
       <use class="acc acc-hat acc-leaf" href="{{ sprite }}#acc-leaf"/>
       <use class="acc acc-nightcap" href="{{ sprite }}#acc-nightcap"/>
       <use class="acc acc-cereal" href="{{ sprite }}#acc-cereal"/>
+      <use class="acc acc-shades" href="{{ sprite }}#acc-shades"/>
+      <use class="acc acc-snowcap" href="{{ sprite }}#acc-snowcap"/>
       <use class="ham-foot-front" href="{{ sprite }}#ham-foot-front"/>
-    </svg>
+      <use class="acc acc-fan" href="{{ sprite }}#acc-fan" width="72" height="56"/>
+      <use class="acc acc-umbrella" href="{{ sprite }}#acc-umbrella" y="-28" width="64" height="84"/>
+    </g></svg>
     <span class="den-zzz"><i>z</i><i>z</i></span>
     <span class="den-heart">&#9829;</span>
   </div>

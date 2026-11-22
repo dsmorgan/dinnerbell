@@ -24,4 +24,5 @@
   {% if not fb.mine and not fb.can_give and not fb.thanks.count and not fb.thanks.notes %}<p class="small muted">Feedback is for the people who ate, for 7 days after the meal.</p>{% endif %}
 </section>
 {% endif %}
+{% include "_weather_credit.html" %}
 {% endblock %}

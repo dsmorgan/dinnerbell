@@ -31,6 +31,7 @@ from dinnerbell.db.models import (
     AssistantUsageRow,
     Base,
     InvitationRow,
+    LocalWeatherRow,
     MemberRow,
     PreferenceRow,
     PushRow,
@@ -186,6 +187,23 @@ async def lived_in(house: House) -> int:
             created_at=now,
         )
         db.add(device)
+        db.add(
+            LocalWeatherRow(
+                household_id=household_id,
+                enabled=True,
+                postal_code="12345",
+                country="US",
+                latitude=40.1,
+                longitude=-75.2,
+                place="Elmford, Northshire",
+                code=3,
+                temperature_c=12.5,
+                wind_kmh=8.0,
+                observed_at=now,
+                next_fetch_at=now,
+                updated_at=now,
+            )
+        )
         await db.flush()
         outbox_id = await db.scalar(text("SELECT min(id) FROM outbox"))
         db.add(
@@ -247,6 +265,7 @@ EXPECTED_KEEP = {
     "slack_badge_file",
     "slack_badge_composite",
     "assistant_usage",
+    "local_weather",
 }
 EXPECTED_CLEAR = {
     "event",
