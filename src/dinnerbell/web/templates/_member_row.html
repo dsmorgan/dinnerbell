@@ -1,4 +1,5 @@
 {#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{% from "_buttons.html" import key_icon %}
 <li class="member{% if not m.active %} inactive{% endif %}" id="member-{{ m.id }}">
   <div class="member-main">
     <div class="member-name">
@@ -16,18 +17,18 @@
     {% if row_error %}<p class="alert error small" role="alert">{{ row_error }}</p>{% endif %}
   </div>
   <div class="member-actions">
-    <a class="button small" href="/admin/members/{{ m.id }}">Edit</a>
-    <a class="button small" href="{{ '/preferences' if m.id == me.id else '/admin/members/%d/preferences'|format(m.id) }}">Preferences</a>
+    <a class="button small admin" href="/admin/members/{{ m.id }}">{{ key_icon() }}Edit</a>
+    <a class="button small admin" href="{{ '/preferences' if m.id == me.id else '/admin/members/%d/preferences'|format(m.id) }}">{{ key_icon() }}Preferences</a>
     {% if codes_on and m.active and not m.is_guest %}
     <form method="post" action="/admin/members/{{ m.id }}/sign-in-code" class="inline">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <button type="submit" class="button small">Sign-in code</button>
+      <button type="submit" class="button small admin">{{ key_icon() }}Sign-in code</button>
     </form>
     {% endif %}
     {% if codes_on and m.id != me.id %}
     <form method="post" action="/admin/members/{{ m.id }}/sign-out" class="inline">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <button type="submit" class="button small">Sign out everywhere</button>
+      <button type="submit" class="button small admin">{{ key_icon() }}Sign out everywhere</button>
     </form>
     {% endif %}
     {% if m.id != me.id %}
@@ -36,7 +37,7 @@
           hx-post="/admin/members/{{ m.id }}/{{ action }}" hx-target="#member-{{ m.id }}" hx-swap="outerHTML"
           {% if m.active %}hx-confirm="Deactivate {{ m.display_name }}? They'll be signed out everywhere."{% endif %}>
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <button type="submit" class="button small{% if m.active %} danger{% endif %}">{{ action|capitalize }}</button>
+      <button type="submit" class="button small {{ 'danger' if m.active else 'admin' }}">{{ key_icon() }}{{ action|capitalize }}</button>
     </form>
     {% endif %}
   </div>

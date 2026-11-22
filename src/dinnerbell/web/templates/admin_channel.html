@@ -1,4 +1,6 @@
 {#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{% from "_buttons.html" import key_icon %}
+{% set admin_page = true %}
 {% extends "base.html" %}
 {% block title %}Add from the channel{% endblock %}
 {% block content %}
@@ -20,14 +22,14 @@
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <input type="hidden" name="slack_user_id" value="{{ c.slack_user_id }}">
         <input type="hidden" name="role" value="guest">
-        <button type="submit" class="button small">Add as guest</button>
+        <button type="submit" class="button small admin">{{ key_icon() }}Add as guest</button>
       </form>
       {% if c.full_member and c.has_email %}
       <form method="post" action="/admin/channel" class="inline">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <input type="hidden" name="slack_user_id" value="{{ c.slack_user_id }}">
         <input type="hidden" name="role" value="member">
-        <button type="submit" class="button small">Add as member</button>
+        <button type="submit" class="button small admin">{{ key_icon() }}Add as member</button>
       </form>
       {% endif %}
     </div>

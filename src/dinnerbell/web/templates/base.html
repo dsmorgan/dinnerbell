@@ -84,7 +84,7 @@
     {% endif %}
   </header>
   <div id="save-error" class="alert error save-banner" role="alert" hidden></div>
-  <main class="page">
+  <main class="page{% if admin_page %} admin-page{% endif %}">
     {#- Inside the installed app, push.js shows this until the member answers the permission
         prompt on Preferences (spec 6.15). -#}
     {%- if web_app and push_key and principal and not principal.member.is_guest and principal.member.delivery.value != "slack" %}

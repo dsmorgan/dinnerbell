@@ -1,3 +1,5 @@
 {#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
-{#- A new sign-in code on a line of its own, with Copy (app.js shows it where the clipboard works). -#}
-<p class="code-row"><span id="issued-code-value" class="issued-code">{{ issued.code }}</span> <button type="button" class="button small" data-copy="issued-code-value" hidden>Copy</button></p>
+{#- A new sign-in code on a line of its own, with Copy (app.js shows it where the clipboard works).
+    On Admin > Members, Copy is an admin button like the rest of the page (#317). -#}
+{% from "_buttons.html" import key_icon %}
+<p class="code-row"><span id="issued-code-value" class="issued-code">{{ issued.code }}</span> <button type="button" class="button small{% if admin_page %} admin{% endif %}" data-copy="issued-code-value" hidden>{% if admin_page %}{{ key_icon() }}{% endif %}Copy</button></p>

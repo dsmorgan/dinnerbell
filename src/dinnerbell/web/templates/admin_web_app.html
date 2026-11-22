@@ -1,4 +1,6 @@
 {#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{% from "_buttons.html" import key_icon %}
+{% set admin_page = true %}
 {% extends "base.html" %}
 {% block title %}Web app{% endblock %}
 {% block content %}
@@ -15,7 +17,7 @@
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <label class="check"><input type="checkbox" name="on" value="on" aria-describedby="web-app-about"{% if on %} checked{% endif %}> Turn on the web app</label>
   <p class="small muted" id="web-app-about">While it's off, nothing changes for members.</p>
-  <button type="submit" class="button primary">Save</button>
+  <button type="submit" class="button admin">{{ key_icon() }}Save</button>
 </form>
 {% if on %}
 <p class="small muted" id="push-devices">{{ push.devices }} {{ "device gets" if push.devices == 1 else "devices get" }} notifications{% if push.waiting %}, and {{ push.waiting }} {{ "push is" if push.waiting == 1 else "pushes are" }} waiting to go{% endif %}. <a href="/app">Get the app</a></p>

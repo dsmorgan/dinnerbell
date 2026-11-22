@@ -1,17 +1,19 @@
 {#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{% from "_buttons.html" import key_icon %}
+{% set admin_page = true %}
 {% extends "base.html" %}
 {% block title %}Edit {{ member.display_name }}{% endblock %}
 {% block content %}
 <p><a href="/admin/members">← Members</a></p>
 <h1>{{ member.display_name }}</h1>
-{% if not member.is_guest %}<p><a class="button small" href="/admin/members/{{ member.id }}/preferences">{{ member.display_name }}'s preferences</a></p>{% endif %}
+{% if not member.is_guest %}<p><a class="button small admin" href="/admin/members/{{ member.id }}/preferences">{{ key_icon() }}{{ member.display_name }}'s preferences</a></p>{% endif %}
 {% if error %}<p class="alert error" role="alert">{{ error }}</p>{% endif %}
 <form method="post" action="/admin/members/{{ member.id }}" class="card stack">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   {% with email_locked=member.is_linked %}
     {% include "_member_fields.html" %}
   {% endwith %}
-  <button type="submit" class="button primary block">Save</button>
+  <button type="submit" class="button admin block">{{ key_icon() }}Save</button>
 </form>
 <form method="post" action="/admin/members/{{ member.id }}/slack" class="card stack" id="slack">
   <h2>Slack</h2>
@@ -30,13 +32,13 @@
     <input name="slack_user_id" maxlength="32" autocomplete="off" autocapitalize="characters" spellcheck="false"
            placeholder="U0123ABCDEF" value="{{ slack_value if slack_value is defined else (member.slack_user_id or '') }}">
   </label>
-  <button type="submit" class="button primary block">Save Slack link</button>
+  <button type="submit" class="button admin block">{{ key_icon() }}Save Slack link</button>
 </form>
 {% if member.slack_link_locked %}
 <form method="post" action="/admin/members/{{ member.id }}/slack/automatic" class="card stack">
   <p class="muted small">Let Dinnerbell link this member again when they sign in with Slack, and by email every hour.</p>
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-  <button type="submit" class="button block">Back to automatic</button>
+  <button type="submit" class="button admin block">{{ key_icon() }}Back to automatic</button>
 </form>
 {% endif %}
 {% endblock %}
