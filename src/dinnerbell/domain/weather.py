@@ -312,7 +312,8 @@ CHECK_INTERVAL = timedelta(minutes=5)
 """How often the scheduler looks for households that are due (``scheduler.runner``). A fetch
 happens at the first check at or after its time, so up to this much later."""
 DRAW_MAX = REFRESH_MAX - CHECK_INTERVAL
-"""The longest wait drawn, so the fetch, at the first check after it, is never past REFRESH_MAX."""
+"""The longest wait drawn, so the fetch, at the first check after it, comes by REFRESH_MAX while
+the checks run on schedule."""
 FRESH_FOR = timedelta(hours=6)
 """How long an answer stays good: past this, the den falls back to the seasonal weather."""
 
@@ -320,7 +321,7 @@ FRESH_FOR = timedelta(hours=6)
 def next_fetch(now: datetime, draw: float) -> datetime:
     """When to ask next, ``draw`` (from 0 to 1) of the way from ``REFRESH_MIN`` to ``DRAW_MAX``
     after ``now``, to the second, so households' requests never line up on the clock. With
-    checks every ``CHECK_INTERVAL`` from ``now``, the fetch happens 1 to 3 hours later."""
+    checks every ``CHECK_INTERVAL`` from ``now``, on schedule, the fetch happens 1 to 3 hours later."""
     if not 0.0 <= draw <= 1.0:
         raise ValueError("draw must be from 0 to 1")
     seconds = REFRESH_MIN.total_seconds() + draw * (DRAW_MAX - REFRESH_MIN).total_seconds()
