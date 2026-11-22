@@ -76,7 +76,7 @@ NOT_PUSHED_KINDS = frozenset(
 )
 """Every other kind, named so that a new kind has to be classified on purpose (a test checks)."""
 REMINDER_KINDS = frozenset({note.ResponseReminder.kind, note.FeedbackReminder.kind})
-"""Pushes that ``mute_dm_reminders`` turns off, as it does their Slack messages (FR-11, FR-48)."""
+"""Pushes that ``mute_dm_reminders`` (Send me reminders off) stops, as it does their Slack messages (FR-11, FR-48)."""
 URGENT_KINDS = frozenset({note.CallOpened.kind})
 
 

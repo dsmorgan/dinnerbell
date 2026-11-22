@@ -143,10 +143,12 @@ def test_a_lifted_part_stays_inside_its_joined_control() -> None:
 
 def test_dimmed_text_is_muted_not_faded() -> None:
     """Fading text with opacity drops muted text under 4.5:1; dimmed rows take --muted instead.
-    Opacity stays for disabled inputs, the locked badge art, hidden inputs, and animations."""
+    Opacity stays for disabled inputs, a nested box while its parent is off (#322), the locked
+    badge art, hidden inputs, and animations."""
     for selector in (".member.inactive .member-main", ".item.inactive > :not(.item-actions)", ".roster .status-out"):
         assert block(selector) == "color: var(--muted);", selector
-    allowed = {"input:disabled", ".badge-svg-locked"}
+    off = ".check-group:has(> .check > input:not(:checked)) .check-nested"
+    allowed = {"input:disabled", f"{off} input", ".badge-svg-locked"}
     faded = [
         s
         for s, body in rules(CSS)

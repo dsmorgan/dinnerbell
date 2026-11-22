@@ -469,7 +469,11 @@ def test_turn_off_pick_up_drafts_a_card_and_confirm_changes_it_on_preferences(
     on Preferences, keeping the reminder Kim set there."""
     furnish(client, provider)
     as_who(client, provider, "kim")
-    saved = submit(client, "/preferences/settings", {"can_pickup": "on", "can_order": "on", "feedback_reminder": "on"})
+    saved = submit(
+        client,
+        "/preferences/settings",
+        {"can_pickup": "on", "can_order": "on", "send_reminders": "on", "feedback_reminder": "on"},
+    )
     assert saved.status_code == 303
     assert 'name="can_pickup" checked' in page(client.get("/preferences"))
     model.script = [tool_call("draft_can_usually", {"cook": "", "pick_up": "off", "order": ""}), answer("Drafted.")]

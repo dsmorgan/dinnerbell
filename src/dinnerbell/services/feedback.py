@@ -316,7 +316,7 @@ async def item_hints(
 
 def reminders(ctx: CallContext, item_name: str) -> list[note.FeedbackReminder]:
     """One direct message to each active member who ate a done call's meal, turned the feedback
-    reminder on, and hasn't muted direct-message reminders. ``ctx`` is the call after it was marked done."""
+    reminder on, and hasn't turned off **Send me reminders**. ``ctx`` is the call after it was marked done."""
     info = cc.event_info(ctx)
     closes = closes_on(ctx.event.day)
     people = (ctx.members.get(r.member_id) for r in ctx.participants)
