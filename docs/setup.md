@@ -124,7 +124,7 @@ DINNERBELL_BIND=192.168.1.20
    | `DINNERBELL_SECRET_KEY` | The key from step 2. |
    | `DINNERBELL_ADMIN_EMAIL` | The email on your Slack account. |
    | `DINNERBELL_HOUSEHOLD_NAME` | Your household's name, such as `Home`. |
-   | `DINNERBELL_TIMEZONE` | Your time zone, such as `America/New_York`. |
+   | `DINNERBELL_TIMEZONE` | Your time zone, such as `America/Chicago`, in place of the example's `Region/City` placeholder. |
    | `DINNERBELL_OIDC_ISSUER` | `https://slack.com` |
    | `DINNERBELL_OIDC_CLIENT_ID`, `DINNERBELL_OIDC_CLIENT_SECRET` | From section 5. |
    | `DINNERBELL_SLACK_TEAM_ID`, `DINNERBELL_SLACK_CHANNEL` | From section 6. |
@@ -135,7 +135,7 @@ DINNERBELL_BIND=192.168.1.20
 
    - If `DINNERBELL_BASE_URL` differs from the address in the browser, such as a LAN IP, every form fails with "Cross-origin request refused". Dinnerbell builds the sign-in redirect from it, too.
    - Dinnerbell refuses a secret key that is shorter than 32 characters, has fewer than 8 distinct characters, or contains placeholder text such as `REPLACE-ME`. A generated key always passes.
-   - Dinnerbell reads the household name and time zone on first start only, then keeps them in its database.
+   - Dinnerbell reads the household name and time zone on first start only, then keeps them in its database. You can't change them after that yet ([#334](https://github.com/dsmorgan/dinnerbell/issues/334)): a changed value is ignored, with a warning in the log. Check the time zone before the first start, because it sets when calls go out.
    - If you change the admin email later, Dinnerbell invites the new address as another admin on its next start.
 
    Dinnerbell logs a warning for each secret in `.env`. To keep them in files instead (optional), see [Keep secrets in files](#keep-secrets-in-files).
