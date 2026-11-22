@@ -23,6 +23,10 @@ cancelled call, and that row is what keeps the scheduler from opening the day's 
 deletes it with the rest, then adds a fresh cancelled call for the same slot and day: a new ID,
 no note, and no link to who called it off. Those days stay off, and the audit row lists them.
 
+Settings are never history, so every table that holds one is ``KEEP``: the household's schedule
+and ranking, badge counts, the web app and assistant switches, members' preferences, and local
+weather. A setting added later goes in ``KEEP`` too.
+
 Nothing on a ``KEEP`` table counts history yet: no streaks or totals on members or in household
 settings. A counter added to a ``KEEP`` table later must be reset here too.
 """
