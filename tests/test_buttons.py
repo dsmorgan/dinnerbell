@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Button roles (#317, spec 11 "Buttons"): primary, secondary, danger, and admin each mean one
-thing. The admin style marks an admin's actions on pages members also see, and never shows to a
-plain member, and each card has at most one primary."""
+thing. The admin style marks an admin's actions, never shows to a plain member, and covers every
+action on the pages only admins see. Each card has at most one primary."""
 
 from __future__ import annotations
 
@@ -113,9 +113,7 @@ def assert_one_primary_per_card(html: str) -> None:
     assert not crowded, f"cards with more than one primary: {crowded}"
 
 
-OUTSIDE_CARDS: dict[tuple[str, str], str] = {
-    ("/admin/badges", "Save badge counts"): "three ladders, one card each, saved together by one Save under them",
-}
+OUTSIDE_CARDS: dict[tuple[str, str], str] = {}
 """Primaries allowed outside any card, by page and label, each with the reason."""
 
 
@@ -243,6 +241,68 @@ def test_a_plain_member_never_sees_the_admin_style(
         assert "admin-controls" not in html and not re.search(r'class="button[^"]*\badmin\b', html), path
 
 
+ADMIN_MAIN = '<main class="page admin-page">'
+
+
+def assert_admin_only(where: str, html: str) -> int:
+    """Every action on a page only admins see is admin or danger, each with the key, and none is
+    primary. Returns how many actions it checked."""
+    actions = [b for b in parse(html).buttons if "choice" not in b.classes]
+    for b in actions:
+        assert ("admin" in b.classes) != ("danger" in b.classes), f"{where}: {b.text!r} is {b.classes}"
+        assert "primary" not in b.classes, f"{where}: {b.text!r} is primary"
+    tags = re.findall(r'<(?:a|button)\b[^>]*class="button\b[^"]*"[^>]*>.*?</(?:a|button)>', html, re.S)
+    assert len(tags) == len(actions), where
+    for tag in tags:
+        assert tag.split(">", 1)[1].startswith(KEY), f"{where}: no key on {tag}"
+    return len(actions)
+
+
+@pytest.mark.parametrize("settings_overrides", [{"anthropic_api_key": "sk-ant-test-not-a-real-key"}])
+def test_the_pages_only_admins_see_use_the_admin_style(admin: TestClient, voting: int, migrated: Settings) -> None:
+    """Under Admin, cards and rows sit in the admin outline (the page's ``admin-page`` class), and
+    every action is admin or danger with the key: Save, Invite, Edit, Copy, Remove, Deactivate,
+    and the rest. An admin's view of a member's Preferences keeps its own look."""
+    add_guest(admin, "Pat")
+    sam = member(migrated, "sam@example.com").id
+    checked = 0
+    for path in (
+        "/admin/members",
+        f"/admin/members/{sam}",
+        "/admin/channel",
+        "/admin/schedule",
+        "/admin/badges",
+        "/admin/assistant",
+        "/admin/web-app",
+    ):
+        html = page(admin.get(path))
+        assert ADMIN_MAIN in html, path
+        checked += assert_admin_only(path, html)
+    assert checked >= 25
+
+    members = page(admin.get("/admin/members"))
+    for label in ("Invite", "Add guest", "Edit", "Sign-in code", "Sign out everywhere", "Remove", "Deactivate"):
+        assert re.search(r'class="button[^"]*"[^>]*>' + re.escape(KEY) + r".*?</svg>" + label + "<", members), label
+    assert re.search(r'class="button small danger"[^>]*>' + re.escape(KEY) + r".*?</svg>Remove<", members)
+
+    # A sign-in code for Sam: Copy is an admin button too.
+    issued = page(submit(admin, f"/admin/members/{sam}/sign-in-code"))
+    assert ADMIN_MAIN in issued
+    assert re.search(r'class="button small admin" data-copy="issued-code-value" hidden>' + re.escape(KEY), issued)
+    assert_admin_only("a code issued", issued)
+
+    # Deactivate swaps in Sam's row, then Reactivate: the fragment keeps the roles and keys.
+    row = htmx(admin, f"/admin/members/{sam}/deactivate", {})
+    assert row.status_code == 200 and "<html" not in row.text
+    assert assert_admin_only("Sam's row", page(row)) >= 3
+    assert re.search(r'class="button small admin">' + re.escape(KEY) + r".*?</svg>Reactivate<", page(row), re.S)
+
+    # Pages members also see keep the plain roles, apart from their Admin parts.
+    for path in (f"/admin/members/{sam}/preferences", "/preferences", "/", "/schedule"):
+        assert ADMIN_MAIN not in page(admin.get(path)), path
+    assert '<main class="page">' in page(admin.get("/preferences"))
+
+
 # One primary per card ------------------------------------------------------------------------
 
 SETTINGS_ON = {"enabled": "on", "cap_dollars": "5", "conversation_hours": "24"}
@@ -253,14 +313,11 @@ EXPECTED = {
     "I'm in (late)",
     "Start dinner again",
     "Invite",
-    "Add guest",
     "Add tag",
     "Add to catalog",
     "Log it",
     "Save needs",
     "Save away days",
-    "Save ranking",
-    "Save badge counts",
     "Send",
 }
 """Primaries the pages below must show, so the check can't pass on pages that lost them."""

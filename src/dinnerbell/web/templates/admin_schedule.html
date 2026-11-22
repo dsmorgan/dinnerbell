@@ -1,4 +1,6 @@
 {#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{% from "_buttons.html" import key_icon %}
+{% set admin_page = true %}
 {% extends "base.html" %}
 {% block title %}Ranking{% endblock %}
 {% block content %}
@@ -29,7 +31,7 @@
     </div>
     <label class="field"><span>Minutes for the coordinator to choose roles</span><input type="number" inputmode="numeric" min="1" max="120" name="roles_choice_minutes" value="{{ values['roles_choice_minutes'] }}" aria-describedby="roles-help" required></label>
     <p class="small muted" id="roles-help">When nobody has a clear claim on the winning proposal's role, because more than one person offered or nobody did, the coordinator can choose the way to get it and who does it. If they don't within this time, the first person who offered does it.</p>
-    <button type="submit" class="button primary block">Save ranking</button>
+    <button type="submit" class="button admin block">{{ key_icon() }}Save ranking</button>
   </fieldset>
 </form>
 <details class="details-form">
@@ -38,7 +40,7 @@
         hx-confirm="Reset the ranking to the defaults? This replaces the household's weights, Randomness, Feedback, proposals per call, variety window, and time to choose roles. This can't be undone.">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <p class="small muted">Every setting on this page goes back to what a new household starts with. That includes Feedback, so if it's off, ratings start moving scores. Call times, skipped days, and badge counts stay as they are.</p>
-    <button type="submit" class="button small danger">Reset ranking</button>
+    <button type="submit" class="button small danger">{{ key_icon() }}Reset ranking</button>
   </form>
 </details>
 {% endblock %}
