@@ -14,6 +14,8 @@ import httpx
 from dinnerbell.domain.weather import FORECAST_HOST, GEOCODING_HOST
 
 POSTAL_CODE = "12345"
+OTHER_POSTAL_CODE = "12346"
+"""A second code the fake knows, at the same place, for a change of code."""
 PLACE = {"name": "Elmford", "admin1": "Northshire", "latitude": 40.1234, "longitude": -75.2468, "country_code": "US"}
 """A made-up place: rounded, it's 40.1, -75.2."""
 
@@ -44,7 +46,10 @@ class FakeOpenMeteo:
         if self.respond is not None:
             return self.respond(request)
         if request.url.host == GEOCODING_HOST:
-            found = request.url.params.get("name") == POSTAL_CODE and request.url.params.get("countryCode") == "US"
+            found = (
+                request.url.params.get("name") in (POSTAL_CODE, OTHER_POSTAL_CODE)
+                and request.url.params.get("countryCode") == "US"
+            )
             return json_response({"results": [PLACE]} if found else {"generationtime_ms": 0.1})
         if request.url.host == FORECAST_HOST:
             return json_response(self.answer)

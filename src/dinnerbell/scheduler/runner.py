@@ -48,8 +48,8 @@ PUSH_DRAIN_INTERVAL = timedelta(seconds=5)
 """How often the push queue is drained (spec 6.15). Its own job, so neither queue waits on the other."""
 WEATHER_INTERVAL = CHECK_INTERVAL
 """How often the scheduler looks for local weather that's due (ADR 0011). Each household asks only
-when its own randomized wait is over; ``domain.weather.next_fetch`` leaves room for this, so a
-fetch is never more than 3 hours after the last."""
+when its own randomized wait is over; ``domain.weather.next_fetch`` leaves room for this, so on
+schedule a fetch comes at most 3 hours after the last. A late or skipped run can stretch that."""
 
 
 @dataclass(frozen=True)
@@ -222,8 +222,11 @@ async def refresh_weather(ctx: JobContext) -> None:
         return
     try:
         await local_weather.refresh(ctx.sessionmaker, ctx.weather, ctx.clock())
-    except Exception:  # pragma: no cover - refresh catches everything itself
-        log.exception("local weather refresh failed")
+    except Exception as exc:  # pragma: no cover - refresh catches everything itself
+        # The traceback only at debug: an exception's text can carry a request URL, and with it the
+        # postal code or coordinates (ADR 0011).
+        log.warning("local weather refresh failed", extra={"error": type(exc).__name__})
+        log.debug("local weather refresh failed", exc_info=True)
 
 
 async def purge_pushes(ctx: JobContext) -> None:

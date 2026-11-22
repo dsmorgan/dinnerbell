@@ -75,7 +75,7 @@ from tests.conftest import invite, page, sign_in
 from tests.support.clock import FakeClock
 from tests.support.fake_oidc import FakeProvider
 from tests.support.scheduler import settle
-from tests.support.weather import PLACE, POSTAL_CODE, FakeOpenMeteo, current, json_response
+from tests.support.weather import OTHER_POSTAL_CODE, PLACE, POSTAL_CODE, FakeOpenMeteo, current, json_response
 from tests.support.web import submit
 from tests.test_admin import sign_in_as
 from tests.test_auth_flow import member, rows
@@ -700,7 +700,7 @@ def test_the_refresh_asks_once_then_waits_one_to_three_hours(
     assert row is not None and row.next_fetch_at == clock.now + timedelta(hours=2, minutes=55)
     clock.advance(timedelta(hours=2, minutes=50))
     assert refresh(admin) == 0
-    clock.advance(WEATHER_INTERVAL)  # the next check: 3 hours after the last fetch, never later
+    clock.advance(WEATHER_INTERVAL)  # the next check, on schedule: 3 hours after the last fetch
     assert refresh(admin) == 1
 
 
@@ -712,6 +712,9 @@ def test_a_change_of_code_asks_again_at_the_next_check(admin: TestClient, open_m
     save(admin)
     assert refresh(admin) == 1
     assert len(open_meteo.forecasts()) == 2
+    save(admin, postal_code=OTHER_POSTAL_CODE)  # another code, with it on all along
+    assert refresh(admin) == 1
+    assert len(open_meteo.forecasts()) == 3
 
 
 def test_a_source_that_never_answers_cant_hold_the_job(
@@ -997,7 +1000,11 @@ def declared(selector: str, prop: str) -> list[str]:
 
 def test_only_he_takes_taps_in_the_den() -> None:
     """The den lets taps through; only Dinnerbone, once fun.js is live, takes them back."""
-    taking = [selectors for selectors, d in FUN_RULES if d.get("pointer-events") == "auto"]
+    taking = [
+        selectors
+        for selectors, d in FUN_RULES
+        if "pointer-events" in d and d["pointer-events"].replace("!important", "").strip() != "none"
+    ]
     assert taking == [[".den.den-live .den-ham"]]
     assert declared(".den", "pointer-events") == ["none"]
     for layer in (".den-wx", ".den-fog", ".den-clouds", ".edge-wx", ".den-track", ".ham .acc"):
@@ -1055,8 +1062,9 @@ def test_the_lap_runner_never_shakes_off_snow() -> None:
     """The runner is a copy of him; the shake on the den's own would leak onto it unless the
     runner's rule wins."""
     for part in (".ham-shake", ".acc-snowcap"):
-        rule = f"body[data-react] .den-runner .ham {part}"
-        assert declared(rule, "animation") == ["none"], part
+        for who in (".den-runner", ".den[data-walking]"):  # nor while he walks
+            rule = f"body[data-react] {who} .ham {part}"
+            assert declared(rule, "animation") == ["none"], rule
 
 
 def test_the_reactions_are_in_the_sprite() -> None:
