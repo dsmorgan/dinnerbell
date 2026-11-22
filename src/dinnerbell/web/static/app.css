@@ -223,8 +223,9 @@ p { margin: 0 0 0.75rem; }
 /* Buttons (#317, spec 11 "Buttons"). Each style means one thing. Primary, the accent fill, is the
    one main action of a card or form. Secondary, a tinted fill with a darker edge, is every other
    action. Danger destroys something or is hard to undo. Admin is an admin's action on a page
-   members also see, and every action on a page only admins see, with a key before its label. Toggles (.choice, In/Maybe/Out, a takeout pair)
-   are choices, not actions, and keep their own look. */
+   members also see, and every action on a page only admins see, with a key before its label.
+   Toggles (.choice, In/Maybe/Out, a takeout pair) are choices, not actions, and keep their own
+   look. */
 .button, button {
   display: inline-flex;
   align-items: center;
