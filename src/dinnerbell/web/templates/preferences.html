@@ -1,5 +1,6 @@
 {#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
 {% extends "base.html" %}
+{% from "_buttons.html" import save_button %}
 {% block title %}{% if editing %}{{ editing.display_name }}'s preferences{% else %}Preferences{% endif %}{% endblock %}
 {% macro row(target_type, target_id, name) -%}
 {% with target=target_type.value ~ ":" ~ target_id, stance=mine.stance(target_type, target_id), saved=false, rating_note=mine.rating_notes.get(target_id) if target_type == TargetType.ITEM else none %}{% include "_preference_row.html" %}{% endwith %}
@@ -37,7 +38,7 @@
   <div class="chip-picker">
     {% for tag in dietary_tags %}<label class="chip-toggle"><input type="checkbox" name="needs" value="{{ tag.id }}"{% if tag.id in me.dietary_needs %} checked{% endif %}><span>{{ tag.name }}</span></label>{% endfor %}
   </div>
-  <button type="submit" class="button">Save needs</button>
+  {{ save_button("Save needs", admin=editing) }}
 </form>
 {% endif %}
 
@@ -56,7 +57,7 @@
     <label class="check"><input type="checkbox" name="mute_dm_reminders"{% if me.mute_dm_reminders %} checked{% endif %}> Mute direct-message reminders</label>
     <label class="check"><input type="checkbox" name="feedback_reminder"{% if me.feedback_reminder %} checked{% endif %}> After each meal I eat, send me one direct message asking how it was. Muting direct messages also stops this.</label>
   </fieldset>
-  <button type="submit" class="button primary">Save</button>
+  {{ save_button("Save", admin=editing) }}
 </form>
 
 <section class="card stack" id="away" aria-labelledby="away-heading">
@@ -65,7 +66,7 @@
   {% if away %}
   <form method="post" action="{{ prefs_base }}/away/clear" class="away-status small">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <span>{{ away_line }}</span> · <button type="submit" class="button small">{{ away_end }}</button>
+    <span>{{ away_line }}</span> · {{ save_button(away_end, role="", admin=editing, extra="small") }}
   </form>
   {% endif %}
   <form method="post" action="{{ prefs_base }}/away" class="stack">
@@ -74,7 +75,7 @@
       <label class="field"><span>First day away</span><input type="date" name="first" value="{{ away.first.isoformat() if away else '' }}" required></label>
       <label class="field"><span>Last day away</span><input type="date" name="last" min="{{ today.isoformat() }}" value="{{ away.last.isoformat() if away else '' }}" required></label>
     </div>
-    <button type="submit" class="button">{{ "Change away days" if away else "Save away days" }}</button>
+    {{ save_button("Change away days" if away else "Save away days", admin=editing) }}
   </form>
 </section>
 

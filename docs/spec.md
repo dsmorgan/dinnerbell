@@ -692,6 +692,21 @@ Light or dark (FR-64, #231) is each person's `member.color_mode`: `auto`, `light
 - **Signed out.** The sign-in page, and an error page before sign-in, are always Auto. The choice belongs to the person, so it comes back when they sign in on any device.
 - **Audit.** A person's own choice isn't audited. An admin's change to a member's is, as `member.color_mode_set`, with the mode before and after.
 
+### Buttons
+
+Each button style means one thing, the same on every page (#317). Toggles aren't actions and keep their own look: the segments (levels, Slack / Web app / Both, Light or dark), In, Maybe, and Out, the role offers and other `.choice` buttons with their pressed states, such as Vote and Voted, and a takeout pick's quiet Pickup | Delivery.
+
+| Role | Class | Means | Examples |
+|---|---|---|---|
+| Primary | `button primary` | The one main action that completes a form or answers a call. At most one per card, counting each expandable section, such as **Invite a guest**, as a card of its own, and not counting toggles. | **Save**, **Invite**, **Count me in**, **Assign**, **Join late**, **Post it now** |
+| Secondary | `button` | Every other action, including one that only filters or navigates, and a row's actions in a list. | **Shuffle proposals**, **Lock this**, **Break the tie**, **Can't make it**, **Decide now**, **Get a sign-in code**, **Sign out everywhere**, a device's **Sign out** |
+| Danger | `button danger` | Destroys something or is hard to undo. | **Deactivate**, **Remove**, **Take off the call**, **Call it off**, **Delete**, **Merge**, **Link anyway**, **Discard (test)**, **Reset to defaults** |
+| Admin | `button admin` | An admin's action on a page members also see. The label starts with a key (`key_icon()` in `_buttons.html`, hidden from screen readers). | A call's **Admin** section (deadline moves, **Assign** coordinator, **Re-run**), the **Save** buttons on an admin's view of another member's Preferences, **Correct the place**, **Rename** on Tags, **Skip this call** |
+
+- **Admin pages keep the plain roles.** Under **Admin**, every action is an admin's, so the admin style would say nothing.
+- **Danger wins.** An admin-only action that destroys something, such as **Discard (test)** or **Merge**, is danger.
+- **Looks.** Primary is the accent fill. Secondary is `--text` on a tinted fill (`--button`) inside a darker edge (`--button-line`). Danger is `--danger` on `--danger-soft` inside `--danger-line`. Admin is `--admin` on `--admin-fill` inside `--admin-line`, and a call's **Admin** section sits in a box of `--admin-line`, its summary the key and "Admin" in `--admin`. Every edge has at least 3:1 contrast on `--surface` and `--bg`, and every label at least 4.5:1 on its fill, in both themes, pressed too. A pressed button darkens, or lightens in dark mode: primary by `--press-filled`, the others by `--press-tint`.
+
 ## 12. Metrics and badges
 
 ### Contributions

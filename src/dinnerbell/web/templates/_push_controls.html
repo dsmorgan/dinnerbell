@@ -1,6 +1,9 @@
 {#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
 {#- Turn on notifications for this device (spec 6.15), on Get the app and on Preferences. push.js
-    shows the part that fits this device: the buttons where it can take pushes, or why it can't. -#}
+    shows the part that fits this device: the buttons where it can take pushes, or why it can't.
+    Turn on notifications is primary, except on Preferences when the card has a Save for Slack,
+    the web app, or both: that Save is the card's primary (#317), so the include passes
+    push_primary=false. -#}
 {% if principal.member.delivery.value == "slack" %}
 <p class="small" id="push-slack">You chose Slack on <a href="/preferences#notify-via">Preferences</a>, so this device gets no notifications. Choose <strong>Web app</strong> or <strong>Both</strong> to get them here.</p>
 {% endif %}
@@ -8,7 +11,7 @@
 <p id="push-install" hidden>On an iPhone or iPad, notifications work only in Dinnerbell on your Home Screen, not in Safari or another app's browser.{% if request.url.path != "/app" %} <a href="/app">Get the app</a> shows how.{% endif %}</p>
 <p id="push-unsupported" hidden>This browser can't get notifications. On an iPhone or iPad, you need iOS 16.4 or later.</p>
 <p class="push-actions">
-  <button type="button" class="button primary" id="push-on" hidden>Turn on notifications</button>
+  <button type="button" class="button{% if push_primary|default(true) %} primary{% endif %}" id="push-on" hidden>Turn on notifications</button>
   <button type="button" class="button" id="push-off" hidden>Turn off</button>
 </p>
 <p class="small muted">Notifications go through your phone's push service, from Apple, Google, Mozilla, or Microsoft. It sees when your device gets one and how big it is, not what it says.</p>
