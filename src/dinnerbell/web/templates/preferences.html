@@ -61,7 +61,8 @@
     <label class="check"><input type="checkbox" name="send_reminders" aria-describedby="reminders-where"{% if not me.mute_dm_reminders %} checked{% endif %}> Send me reminders</label>
     <p class="small muted check-hint" id="reminders-where">{% if web_app %}Reminders come as Slack direct messages, and as notifications on <strong>Web app</strong> or <strong>Both</strong>.{% else %}Reminders come as Slack direct messages.{% endif %}</p>
     <div class="check-nested">
-      <label class="check"><input type="checkbox" name="feedback_reminder"{% if me.feedback_reminder %} checked{% endif %}> Remind me "How was it?"</label>
+      <label class="check"><input type="checkbox" name="feedback_reminder"{% if me.feedback_reminder %} checked{% endif %} aria-describedby="how-was-it-needs"> Remind me "How was it?"</label>
+      <p class="small muted check-hint" id="how-was-it-needs">Works while <strong>Send me reminders</strong> is on.</p>
     </div>
   </fieldset>
   {{ save_button("Save", admin=editing) }}
