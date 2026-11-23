@@ -264,11 +264,13 @@ button.link { border: 0; background: none; font-weight: 400; padding: 0 0.6rem; 
 .field { display: block; border: 0; padding: 0; margin-left: 0; margin-right: 0; }
 .field > span, .field > legend { display: block; font-weight: 600; margin-bottom: 0.3rem; padding: 0; }
 
+/* A field's edge is --button-line, as a button's is, so it keeps 3:1 on --surface and --bg in both
+   themes (#336, WCAG 1.4.11). --line was 1.35:1 on a card. */
 input:not([type="checkbox"]), select {
   width: 100%;
   min-height: 44px;
   padding: 0.5rem 0.75rem;
-  border: 1px solid var(--line);
+  border: 1px solid var(--button-line);
   border-radius: var(--radius-input);
   background: var(--bg);
   color: var(--text);
@@ -406,6 +408,29 @@ form.htmx-request .segment span { animation: pending-cursor 0s 150ms forwards; }
 
 /* ---- M1: navigation, catalog, preferences, history ---------------------------------------- */
 
+/* Skip to content (#336): the first stop for a keyboard, out of sight above the screen until it has
+   focus, then a secondary button at the top left, over the top bar. <main> takes the focus it
+   passes on, and needs no ring of its own. */
+.skip-link {
+  position: fixed;
+  top: 0;
+  left: var(--gutter);
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 1rem;
+  border: 1px solid var(--button-line);
+  border-radius: var(--radius-control);
+  background: var(--button);
+  color: var(--text);
+  font-weight: 600;
+  text-decoration: none;
+  transform: translateY(-120%);
+}
+.skip-link:focus { top: calc(env(safe-area-inset-top) + 8px); transform: none; }
+#content:focus { outline: none; }
+
 .visually-hidden {
   position: absolute;
   width: 1px;
@@ -484,11 +509,20 @@ form.htmx-request .segment span { animation: pending-cursor 0s 150ms forwards; }
 }
 :root:has(.instance-banner) { --banner-height: 1.75rem; }
 html { scroll-padding-top: calc(var(--topbar-height) + var(--banner-height, 0px)); }
+/* On a short screen, the top bar scrolls away with the page (#336): its three rows on a phone
+   would take more than half of a landscape screen. 30rem is 480px: shorter than any phone's
+   portrait screen, an iPhone SE's included, and taller than any phone's landscape one, up to
+   430px. An anchor then stops at the top of the screen, and the test instance's banner scrolls
+   away with the bar. */
+@media (max-height: 30rem) {
+  .topbar { position: static; }
+  html { scroll-padding-top: 0; }
+}
 
 textarea {
   width: 100%;
   padding: 0.5rem 0.75rem;
-  border: 1px solid var(--line);
+  border: 1px solid var(--button-line);
   border-radius: var(--radius-input);
   background: var(--bg);
   color: var(--text);
@@ -684,7 +718,9 @@ ins { color: var(--ok); text-decoration: none; }
 /* ---- M2: calls, proposals, decisions, schedule --------------------------------------------- */
 
 .event-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0.3rem 0.6rem; }
-.event-head h2 a { display: inline-flex; align-items: center; min-height: 44px; margin: -9px 0; color: var(--text); text-decoration: none; }
+/* A call's title is an h1 on its own page and an h2 on Today (#336), and looks the same on both. */
+.event-head .event-title { font-size: 1.15rem; line-height: inherit; margin: 0 0 0.5rem; }
+.event-head .event-title a { display: inline-flex; align-items: center; min-height: 44px; margin: -9px 0; color: var(--text); text-decoration: none; }
 .event-when { margin: 0.3rem 0 0.75rem; }
 .badge.state-collecting, .badge.state-voting { background: var(--accent-soft); border-color: transparent; color: var(--accent-soft-text); }
 .badge.state-decided, .badge.state-done { background: var(--ok-soft); border-color: transparent; color: var(--ok); }

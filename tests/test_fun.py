@@ -554,7 +554,8 @@ def test_with_fun_mode_off_a_calls_page_carries_none_of_it(client: TestClient, p
     html = client.get(f"/events/{event_id}").text
     for absent in ("data-fun", "fun.css", "fun.js", 'class="den', "den-state", "den.svg", "edge-wx", "greeting"):
         assert absent not in html, absent
-    back = r'<main class="page">\s*<p class="small"><a href="/">Today</a></p>\s*<section class="card event'
+    main = r'<main class="page" id="content" tabindex="-1">'
+    back = main + r'\s*<p class="small"><a href="/">Today</a></p>\s*<section class="card event'
     assert re.search(back, html)
     card = client.get(f"/events/{event_id}/card?from=event", headers={"HX-Request": "true"}).text
     assert "den-state" not in card

@@ -55,7 +55,10 @@
 <section class="card event state-{{ e.state.value }}" id="event-{{ e.id }}" aria-labelledby="event-{{ e.id }}-title" hx-sync="closest .event:replace"
   {%- if e.state.is_open %} data-poll="{{ base }}/card?from={{ from_page }}"{% endif %}>
   <div class="event-head">
-    <h2 id="event-{{ e.id }}-title"><a href="{{ base }}">{{ e.slot.value|capitalize }}{% if v.offer %} offer{% endif %}</a> <span class="muted small">{{ e.day|day }}</span></h2>
+    {#- On the call's own page, its title is the page's one h1 (#336); on Today, each card's is an
+        h2 under the greeting. Both look the same. -#}
+    {%- set title_tag = "h1" if from_page == "event" else "h2" %}
+    <{{ title_tag }} id="event-{{ e.id }}-title" class="event-title"><a href="{{ base }}">{{ e.slot.value|capitalize }}{% if v.offer %} offer{% endif %}</a> <span class="muted small">{{ e.day|day }}</span></{{ title_tag }}>
     <span class="badge state state-{{ e.state.value }}">{{ e.state.label }}</span>
   </div>
   {% if error %}<p class="alert error small" role="alert">{{ error }}</p>{% endif %}

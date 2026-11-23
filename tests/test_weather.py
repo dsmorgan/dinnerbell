@@ -672,7 +672,7 @@ def test_only_an_admin_with_a_csrf_token_changes_it(
 
 def test_the_card_uses_the_admin_style(admin: TestClient) -> None:
     html = admin.get("/admin/web-app").text
-    assert '<main class="page admin-page">' in html
+    assert '<main class="page admin-page" id="content" tabindex="-1">' in html
     card = weather_card(html)
     assert 'class="button admin"' in card and "primary" not in card
 

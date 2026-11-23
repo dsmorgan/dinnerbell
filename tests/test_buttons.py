@@ -242,7 +242,7 @@ def test_a_plain_member_never_sees_the_admin_style(
         assert "admin-controls" not in html and not re.search(r'class="button[^"]*\badmin\b', html), path
 
 
-ADMIN_MAIN = '<main class="page admin-page">'
+ADMIN_MAIN = '<main class="page admin-page" id="content" tabindex="-1">'
 
 
 def assert_admin_only(where: str, html: str) -> int:
@@ -337,7 +337,7 @@ def test_the_pages_only_admins_see_use_the_admin_style(admin: TestClient, voting
     # Pages members also see keep the plain roles, apart from their Admin parts.
     for path in (f"/admin/members/{sam}/preferences", "/preferences", "/", "/schedule"):
         assert ADMIN_MAIN not in page(admin.get(path)), path
-    assert '<main class="page">' in page(admin.get("/preferences"))
+    assert '<main class="page" id="content" tabindex="-1">' in page(admin.get("/preferences"))
 
 
 # One primary per card ------------------------------------------------------------------------
@@ -365,13 +365,18 @@ def made(response: httpx.Response) -> int:
     return int(response.headers["location"].rsplit("/", 1)[1])
 
 
-@pytest.mark.parametrize("settings_overrides", [{"anthropic_api_key": "sk-ant-test-not-a-real-key"}])
-def test_each_card_has_at_most_one_primary(
+ASSISTANT_ON = {"anthropic_api_key": "sk-ant-test-not-a-real-key"}
+"""Settings for walk_every_page, so the Assistant pages render."""
+
+
+def walk_every_page(
     admin: TestClient, provider: FakeProvider, voting: int, migrated: Settings
-) -> None:
+) -> list[tuple[str, str]]:
     """Every page an admin and a plain member see, with calls in each state: scheduled (Post it
     now), collecting (Save details), voting without Sam (I'm in (late)), called off (Start dinner
-    again), and an offer (Count me in), plus an HTMX answer's card."""
+    again), and an offer (Count me in), plus an HTMX answer's card and the signed-out pages. Each
+    is ``(where, html)``; ``where`` is the path, "Sam: " before a plain member's, and "signed
+    out: " before a signed-out one's. Needs ASSISTANT_ON. Leaves ``admin`` signed in as Sam."""
     submit(admin, "/catalog/tags", {"kind": "dietary", "name": "Vegetarian"})  # for Save needs
     scheduled = made(submit(admin, "/events", {"slot": "lunch", "day": "2026-10-23"}))
     collecting = made(submit(admin, "/events", {"slot": "lunch", "day": "2026-10-24", "post_now": "1"}))
@@ -384,7 +389,7 @@ def test_each_card_has_at_most_one_primary(
     assert log(admin, 1, [me, sam], day=date(2026, 10, 21)).status_code == 303
     meal = int(re.findall(r'id="meal-(\d+)"', admin.get("/history").text)[0])
 
-    seen: set[str] = set()
+    pages: list[tuple[str, str]] = []
     admin_pages = (
         "/",
         f"/events/{voting}",
@@ -407,32 +412,47 @@ def test_each_card_has_at_most_one_primary(
         f"/history/meals/{meal}",
         f"/history/meals/{meal}/feedback",
         "/schedule",
+        "/stats",
         "/assistant",
         "/app",
     )
     for path in admin_pages:
         response = admin.get(path)
         assert response.status_code == 200, path
-        # Admin > Channel lists people from Slack, as rows, not cards; without Slack it has none.
-        seen |= {b.text for b in check_page(path, response.text, min_cards=0 if path == "/admin/channel" else 1)}
+        pages.append((path, response.text))
 
     sign_in_as(admin, provider, "sam@example.com")
     member_pages = ("/", *(f"/events/{e}" for e in (voting, scheduled, collecting, called_off, offer)))
     for path in (*member_pages, "/preferences", "/history", "/catalog", "/schedule"):
         response = admin.get(path)
         assert response.status_code == 200, path
-        seen |= {b.text for b in check_page(f"Sam: {path}", response.text)}
+        pages.append((f"Sam: {path}", response.text))
     answered = htmx(admin, f"/events/{collecting}/respond", {"status": "in", "from": "today"})
     assert answered.status_code == 200 and "<html" not in answered.text
-    seen |= {b.text for b in check_page("Sam answers In", answered.text)}
+    pages.append(("Sam answers In", answered.text))
 
-    assert seen >= EXPECTED, f"primaries no page showed: {sorted(EXPECTED - seen)}"
     # Signed out: the sign-in page and, with the web app on, code sign-in.
     out = TestClient(admin.app, base_url=str(admin.base_url), headers={"Origin": str(admin.base_url).rstrip("/")})
     for path in ("/", "/auth/code"):
         response = out.get(path)
         assert response.status_code == 200, path
-        assert check_page(f"signed out: {path}", response.text), path  # each has its one primary
+        pages.append((f"signed out: {path}", response.text))
+    return pages
+
+
+@pytest.mark.parametrize("settings_overrides", [ASSISTANT_ON])
+def test_each_card_has_at_most_one_primary(
+    admin: TestClient, provider: FakeProvider, voting: int, migrated: Settings
+) -> None:
+    """Every page walk_every_page visits."""
+    seen: set[str] = set()
+    for where, html in walk_every_page(admin, provider, voting, migrated):
+        # Admin > Channel lists people from Slack, as rows, not cards; without Slack it has none.
+        primaries = check_page(where, html, min_cards=0 if where == "/admin/channel" else 1)
+        if where.startswith("signed out: "):
+            assert primaries, where  # each has its one primary
+        seen |= {b.text for b in primaries}
+    assert seen >= EXPECTED, f"primaries no page showed: {sorted(EXPECTED - seen)}"
 
 
 @pytest.mark.parametrize("settings_overrides", [{"slack_team_id": TEAM, "oidc_issuer": SLACK_ISSUER}])

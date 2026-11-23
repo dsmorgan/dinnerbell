@@ -49,6 +49,9 @@
   {%- endif %}
 </head>
 <body{% if csrf_token %} hx-headers='{{ {"X-CSRF-Token": csrf_token}|tojson }}'{% endif %}{% if fun %} data-fun="on" data-period="{{ fun.period }}" data-season="{{ fun.season }}" data-season-depth="{{ fun.depth }}" {% with s = fun %}{% include "_weather_attrs.html" %}{% endwith %}{% endif %}>
+  {#- The first stop for a keyboard: past the top bar to the page (#336). app.css hides it until
+      it has focus. <main> takes focus, so the next Tab starts inside it. #}
+  <a class="skip-link" href="#content">Skip to content</a>
   <header class="topbar">{% if instance_label %}
     <div class="instance-banner" role="note">{{ instance_label }} instance</div>{% endif %}
     <a class="brand" href="/">
@@ -84,7 +87,7 @@
     {% endif %}
   </header>
   <div id="save-error" class="alert error save-banner" role="alert" hidden></div>
-  <main class="page{% if admin_page %} admin-page{% endif %}">
+  <main class="page{% if admin_page %} admin-page{% endif %}" id="content" tabindex="-1">
     {#- Inside the installed app, push.js shows this until the member answers the permission
         prompt on Preferences (spec 6.15). -#}
     {%- if web_app and push_key and principal and not principal.member.is_guest and principal.member.delivery.value != "slack" %}

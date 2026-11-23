@@ -668,6 +668,15 @@ Mobile-first server-rendered pages with HTMX for in-place updates. No JavaScript
 
 The web app has no page for the household's time zone or backups. The time zone comes from `DINNERBELL_TIMEZONE` on first start ([configuration](configuration.md)); the last backup's time is in `/healthz` (section 13.9).
 
+### Page structure
+
+Every page drawn from the base layout has the same frame (#336).
+
+- **Headings.** Every page has exactly one `<h1>`. On a call's own page (`/events/{id}`), it's the card's title, such as "Dinner Thu Oct 22", which is an `<h2>` on Today under the greeting; it looks the same on both, and a card swapped in on the call's page (`from=event`) keeps the `<h1>`. `tests/test_page_structure.py` checks every page an admin, a member, a guest, or someone signed out sees.
+- **Skip to content.** The first thing a keyboard reaches is **Skip to content**, out of sight until it has focus, then a secondary button at the top left. It goes to `<main id="content" tabindex="-1">`, so the next Tab starts inside the page, past the top bar's links.
+- **Field edges.** Inputs, menus, and text boxes have the secondary button's edge (`--button-line`): at least 3:1 on `--surface` and `--bg`, in both themes (WCAG 1.4.11). Toggles that aren't on, such as Maybe and Out, the role offers, tag chips, and preference levels, keep the lighter `--line`: their labels say what they are, and the chosen one is the accent fill.
+- **The top bar.** The top bar stays at the top of the screen as the page scrolls, and a page that scrolls to an anchor stops below it. On a screen under 30rem (480 px) tall, such as a phone held sideways, it scrolls away with the page instead, and an anchor stops at the top of the screen. Every phone held upright is taller than that, so it keeps the bar.
+
 ### Fun mode
 
 Fun mode (FR-62, #153) is **Dinnerbone's Den**: Dinnerbone, the hamster in the logo, lives in a small den beside the greeting on Today, and at the top of a call's own page, and follows the call. It's on by default. Members turn it off on Preferences, and guests on their dietary-needs page.
