@@ -2,7 +2,9 @@
 
 Dinnerbell answers three questions for your household at the same time each day: who's eating, what are we eating, and who's cooking, picking up, or ordering it.
 
-It asks in Slack, ranks meals that fit everyone eating, assigns the work, and celebrates who did it with badges. It runs as one container on your own hardware, with a mobile-friendly web app for the catalog, preferences, history, and stats.
+It asks in Slack, ranks meals that fit everyone eating, assigns the work, and celebrates who did it with badges. It runs as one container on your own hardware, with a mobile-friendly web site for the catalog, preferences, history, and stats.
+
+An admin can also turn on the web app: members install Dinnerbell on their phone, answer calls there, and get push notifications. A member who doesn't use Slack signs in with a code an admin gives them.
 
 You need a host that runs containers, a Slack workspace, and an HTTPS hostname your phones can reach.
 
@@ -14,7 +16,7 @@ Dinnerbell asks early, so dinner is settled before anyone is hungry. With the de
 
 ```mermaid
 flowchart TB
-    ask["🔔 3:00 PM<br/>Who's eating tonight?"]
+    ask["🔔 3:00 PM<br/>Who's eating tonight?<br/>in Slack and the app"]
     answer["🙋 Everyone answers<br/>Alex: in, can pick up<br/>Sam and Kim: in<br/>Jo: out"]
     suggest["🍽️ 4:30 PM<br/>Three ideas that suit<br/>the three eating:<br/>tacos, pho, or pizza"]
     vote["🗳️ Everyone votes<br/>Tacos win"]
@@ -42,8 +44,8 @@ flowchart TB
     style row2 fill:none,stroke:none
 ```
 
-1. **Dinnerbell asks.** At 3:00 PM, it posts in your family's Slack channel: who's eating tonight?
-2. **Everyone answers.** Tap **In**, **Maybe**, or **Out**, and say whether you can cook, pick up, or order. Dinnerbell reminds anyone who forgets. Going away? Tap **Away until…**, and calls until you're back answer you Out.
+1. **Dinnerbell asks.** At 3:00 PM, it posts in your family's Slack channel, and pushes to phones with the web app: who's eating tonight?
+2. **Everyone answers,** in Slack or the app. Tap **In**, **Maybe**, or **Out**, and say whether you can cook, pick up, or order. Dinnerbell reminds anyone who forgets. Going away? Tap **Away until…**, and calls until you're back answer you Out.
 3. **Dinnerbell suggests three meals** from your family's list. It skips anything someone eating can't or won't eat, favors what people like, and mixes things up from day to day.
 4. **Everyone votes, and dinner is set.** Dinnerbell posts the plan and messages whoever is cooking, picking up, or ordering.
 5. **After dinner,** someone taps **Mark done**, or Dinnerbell does it two hours later. Rate the meal if you like, and new badges are announced.
@@ -60,10 +62,11 @@ For the household, these guides explain the rest: [coordinating a meal](docs/coo
 flowchart LR
     subgraph phones["Household phones"]
         slackapp["Slack app"]
-        browser["Browser"]
+        browser["Browser, or the<br/>installed web app"]
     end
 
     slack["Slack"]
+    push["Push services<br/>Apple, Google,<br/>Mozilla, Microsoft"]
     proxy["Reverse proxy or tunnel<br/>TLS on your hostname"]
 
     subgraph host["Your container host"]
@@ -76,6 +79,8 @@ flowchart LR
     browser -->|"HTTPS"| proxy
     browser -.->|"Sign in with Slack"| slack
     proxy --> app
+    app -.->|"Web push, while<br/>the web app is on"| push
+    push -.-> browser
     app --> db
 
     classDef device fill:#FFF3E0,stroke:#C27A34,color:#2A1810
@@ -85,6 +90,7 @@ flowchart LR
     classDef dbc fill:#FBE8CC,stroke:#2E6B6F,color:#2A1810
     class slackapp,browser device
     class slack slackc
+    class push proxyc
     class proxy proxyc
     class app appc
     class db dbc
@@ -92,22 +98,22 @@ flowchart LR
     style host fill:#EAF3F3,stroke:#2E6B6F,color:#2A1810
 ```
 
-Dinnerbell opens the connection to Slack, so Slack never needs to reach your host. The only inbound traffic is HTTPS from phones, through your proxy or tunnel, including the return from Sign in with Slack.
+Dinnerbell opens every outside connection: to Slack, to the push services while the web app is on, and, when you turn them on, to Open-Meteo for local weather and to Anthropic for the assistant. The only inbound traffic is HTTPS from phones, through your proxy or tunnel, including the return from Sign in with Slack.
 
 ## What you need
 
 | Piece | Why | Alternatives |
 |---|---|---|
 | A Linux host that runs containers, always on | Runs one container and its data volume | podman with podman-compose 1.0.6 or later, or Docker with the compose plugin |
-| A Slack workspace where you can create apps | Calls, buttons, reminders, and sign-in happen in Slack | A new workspace for the household; the free plan is enough |
-| An HTTPS hostname that phones can reach | The web app, and the Sign in with Slack redirect, which must land on HTTPS | Any reverse proxy or tunnel with TLS: Pangolin, Cloudflare Tunnel, Tailscale Funnel, or Caddy or Traefik on a public IP |
-| Household members in Slack | Each adult answers calls in Slack and signs in to the web app with Slack | Another OpenID Connect provider, such as Google, for sign-in; Slack still carries the calls |
+| A Slack workspace where you can create apps | Dinnerbell posts calls in a Slack channel, and signs people in with Slack | A new workspace for the household; the free plan is enough |
+| An HTTPS hostname that phones can reach | The web site and web app, and the Sign in with Slack redirect, which must land on HTTPS | Any reverse proxy or tunnel with TLS: Pangolin, Cloudflare Tunnel, Tailscale Funnel, or Caddy or Traefik on a public IP |
+| A way for each adult to answer | Members answer calls and get reminders | Slack, or the [web app](docs/members.md#the-web-app) with push notifications, signing in with a code instead of Slack; Google or another OpenID Connect provider can replace Sign in with Slack |
 
 You don't need a calendar or an email server. The [assistant](docs/configuration.md#the-assistant) is optional and needs an Anthropic API key. One install serves one household of a handful of adults. Dinnerbell backs up its database every night inside its data volume; you copy the backups off the host.
 
 ## Run it
 
-Each release is a prebuilt, attested image on GitHub Container Registry. Start with the [quick install](docs/install.md), or follow the [setup guide](docs/setup.md) to install from a git clone, with every step in detail, plus upgrades and backups. Every setting is in the [configuration reference](docs/configuration.md), and changes are in [CHANGELOG.md](CHANGELOG.md).
+Each release is a prebuilt, attested image on GitHub Container Registry. Start with the [quick install](docs/install.md), or the [setup guide](docs/setup.md) to install from a git clone. Then see [Back up and upgrade](docs/backup-and-upgrade.md), the [configuration reference](docs/configuration.md), and [CHANGELOG.md](CHANGELOG.md).
 
 <img src="src/dinnerbell/web/static/logo-test-mark.svg" width="24" height="24" alt="" align="absmiddle"> A [test instance](docs/test-instance.md) shows Dinnerbot, a half-built blueprint of Dinnerbone the hamster, so you can tell it from production at a glance.
 

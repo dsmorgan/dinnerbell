@@ -1,6 +1,6 @@
 # Members and guests
 
-Admins manage the household on **Admin** > **Members**. This page covers guests, joining from the channel, editing a member's preferences, the [web app](#the-web-app), [Dinnerbone's weather](#dinnerbones-weather), and the [Assistant page](#the-assistant-page). To link members' Slack accounts, see [Link everyone's Slack account](setup.md#link-everyones-slack-account).
+Admins manage the household on **Admin** > **Members**. This page covers guests, joining from the channel, [linking Slack accounts](#link-slack-accounts), editing a member's preferences, the [web app](#the-web-app), [adding a member without Slack](#add-a-member-without-slack), [Dinnerbone's weather](#dinnerbones-weather), and the [Assistant page](#the-assistant-page).
 
 ## Guests
 
@@ -9,6 +9,16 @@ A guest eats with the household when a member invites them to a call. Guests ans
 ## Join from the channel
 
 **Join from the channel** is on by default. Anyone in the channel who isn't in Dinnerbell can join as a guest, from **Join Dinnerbell** in Slack or by signing in on the web. Dinnerbell first checks with Slack that they're a real person in your workspace and in the channel, so bots, deactivated accounts, and people from other organizations can't join. Each admin gets a direct message for each join, with **Make member** and **Remove**. Joined guests appear in every member's **Invite a guest** list.
+
+## Link Slack accounts
+
+Dinnerbell needs each member's Slack account to mention them, message them, and accept their button taps. **Admin** > **Members** shows who is linked. Dinnerbell links a member in any of these ways:
+
+- When they sign in with Slack.
+- At start and every hour, for active members whose Dinnerbell email matches their Slack email. This links only full members of your workspace, never guests or people from other organizations.
+- By hand: on **Admin** > **Members**, select **Edit**, and enter their Slack member ID. In Slack, open their profile, select the three dots, then **Copy member ID**.
+
+A link you set or clear by hand stays as you left it. To hand a member back to automatic linking, select **Back to automatic** on their edit page.
 
 ## A member's preferences
 
@@ -54,6 +64,18 @@ While it's on:
 - Members can [sign in with a code](#sign-in-with-a-code), and see and sign out their [devices](#devices).
 
 A member on **Web app** who hasn't turned notifications on anywhere gets no direct messages at all, as a member without Slack gets none today; Dinnerbell logs a warning for each one it skips for a member who isn't linked to Slack. Turning the switch off keeps each member's choice for when it's on again. It also keeps every session and sign-in code, but the code pages, **Devices**, and **Sign-in code** on **Admin** > **Members** disappear until it's on again. **Sign out everywhere** stays. It deletes every device's notifications: each member turns them on again.
+
+### Add a member without Slack
+
+A member doesn't need Slack while the web app is on. They answer calls in the app and get push notifications.
+
+1. On **Admin** > **Web app**, turn on the web app, if it's off.
+2. On **Admin** > **Members**, add the member with any email address they use. Nothing is sent to it.
+3. Select **Sign-in code** on their row, and give them the code in person or by text. It works once, for 15 minutes.
+4. On their phone, they open your Dinnerbell address, select **Get the app**, follow its steps, and [sign in with the code](#sign-in-with-a-code) in the installed app.
+5. They [turn on notifications](#turn-notifications-on-or-off).
+
+Their **Notifications** choice is **Web app**. If they join Slack later with the same email, signing in with Slack links them.
 
 ### Sign in with a code
 

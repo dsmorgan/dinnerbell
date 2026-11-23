@@ -1,6 +1,6 @@
 # Install Dinnerbell
 
-This guide installs Dinnerbell from a release bundle, without cloning the repository. The [setup guide](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md) explains each step in detail, with backups, upgrades, and troubleshooting.
+This guide installs Dinnerbell from a release bundle, without cloning the repository. The [setup guide](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md) explains each step in detail.
 
 You need:
 
@@ -58,7 +58,7 @@ You need:
 ## Upgrade
 
 1. Read the **Upgrade notes** of every release between yours and the new one. They say when `.env` needs a new setting.
-2. [Back up now](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#back-up-now).
+2. [Back up now](https://github.com/dsmorgan/dinnerbell/blob/main/docs/backup-and-upgrade.md#back-up-now).
 3. In the directory that holds `dinnerbell`, download and check the new bundle as in steps 1 and 2, then extract it over the old one. That replaces the bundle's files, including `compose.yaml`, which names the new image, and leaves `.env`, `.env.test`, `secrets/`, `secrets-test/`, and `compose.override.yaml` alone. Keep your own changes in `compose.override.yaml`, never in the bundle's files.
 4. Pull the new image and recreate the service. If you pinned a digest in `compose.override.yaml`, update or remove the pin first, or you keep the old image.
 
@@ -68,19 +68,12 @@ You need:
 
    With Docker: `cd dinnerbell && docker compose pull && docker compose down && docker compose up -d`
 
-   With secrets in files, name the compose files in each command, and add `-f compose.override.yaml` after them if you have one; see [Run compose with secret files](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#run-compose-with-secret-files).
-
-   ```sh
-   cd dinnerbell
-   podman-compose -f compose.yaml -f compose.secrets.yaml pull
-   podman-compose -f compose.yaml -f compose.secrets.yaml down
-   podman-compose -f compose.yaml -f compose.secrets.yaml up -d
-   ```
-
-   With Docker, use `docker compose` in place of `podman-compose`.
+   With secrets in files, add `-f compose.yaml -f compose.secrets.yaml` to each command, as [Run compose with secret files](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#run-compose-with-secret-files) shows.
 
 ## Options
 
+- **Web app:** to let members install Dinnerbell on their phone, get push notifications, or sign in without Slack, turn on **Admin** > **Web app**. See [The web app](https://github.com/dsmorgan/dinnerbell/blob/main/docs/members.md#the-web-app).
+- **Backups:** Dinnerbell backs up its database every night inside its data volume. Copy the backups off the host, as [Back up and upgrade](https://github.com/dsmorgan/dinnerbell/blob/main/docs/backup-and-upgrade.md#copy-backups-off-the-host) shows.
 - **Other settings:** see the [configuration reference](https://github.com/dsmorgan/dinnerbell/blob/main/docs/configuration.md).
 - **Secrets in files:** to keep the secrets out of `.env`, see [Keep secrets in files](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#keep-secrets-in-files). After that, every compose command needs `-f compose.yaml -f compose.secrets.yaml`, including the upgrade commands.
 - **Start at boot:** with podman, Dinnerbell stays down after a reboot until you start it. The bundle's `deploy/dinnerbell.service` starts it at boot; rootful Docker needs nothing. See [Start at boot](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#start-at-boot).

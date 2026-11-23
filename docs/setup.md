@@ -1,20 +1,20 @@
 # Set up Dinnerbell
 
-This guide installs Dinnerbell from a git clone: you create a Slack app, run the container behind HTTPS, and sign your household in. To install from a release bundle without git, follow [install.md](install.md) instead. Once Dinnerbell works, harden it with [hardening.md](hardening.md).
+This guide installs Dinnerbell from a git clone: you create a Slack app, run the container behind HTTPS, and sign your household in. To install from a release bundle without git, follow [install.md](install.md) instead. Afterward, see [Back up and upgrade](backup-and-upgrade.md) and [hardening.md](hardening.md).
 
-The commands use podman. With Docker, replace `podman-compose` with `docker compose` and `podman` with `docker`. If you keep secrets in files, add the compose files to every `podman-compose` command, as [Run compose with secret files](#run-compose-with-secret-files) shows. The [configuration reference](configuration.md) lists every setting.
+The commands use podman. With Docker, replace `podman-compose` with `docker compose` and `podman` with `docker`. The [configuration reference](configuration.md) lists every setting.
 
 <a id="status"></a>
 
 ## Prerequisites
 
-- A Linux host with podman and podman-compose 1.0.6 or later, or Docker with the compose plugin. The host pulls the image from `ghcr.io`. These docs are tested with podman-compose 1.0.6 (Ubuntu 24.04's), 1.1.0, 1.5.0, and 1.6.0, and Docker Compose 2.40.
-- A public HTTPS hostname that a reverse proxy forwards to the host's port 8013. The reference setup uses Pangolin.
+- A Linux host with podman and podman-compose 1.0.6 or later, or Docker with the compose plugin. The host pulls the image from `ghcr.io`.
+- A public HTTPS hostname that a reverse proxy or tunnel, such as Pangolin, forwards to the host's port 8013.
 - A Slack account. Its email address becomes the admin email.
 
 ## 0. Clone the repository
 
-The clone holds `compose.yaml`, the Slack app manifests, and the example catalog; you build nothing. Clone it, then check out the newest release:
+The clone holds `compose.yaml`, the Slack app manifests, and the example catalog; you build nothing. Clone it, and check out the newest release:
 
 ```sh
 git clone https://github.com/dsmorgan/dinnerbell.git
@@ -22,441 +22,157 @@ cd dinnerbell
 git checkout "$(git tag --list 'v*' --sort=-version:refname | head -n 1)"
 ```
 
-Git reports a detached HEAD. That's expected: `compose.yaml` at a release tag names that release's image, so production follows release tags, never `main`.
+Git reports a detached HEAD. That's expected: `compose.yaml` at a release tag names that release's image.
 
-Keep the directory name `dinnerbell`, and run every command in this guide as the same user, with or without `sudo`. Compose names the data volume after the directory (`dinnerbell_dinnerbell-data`), and rootless podman keeps each user's volumes apart. Another directory name or another user, including root, gets a new, empty database. [hardening.md](hardening.md) recommends a dedicated user.
+Keep the directory name `dinnerbell`, and run every command in this guide as the same user. Compose names the data volume after the directory, and rootless podman keeps each user's volumes apart, so another directory name or another user, including root, gets a new, empty database.
 
 ## 1. Create the Slack workspace and channel
 
-1. At [slack.com/get-started](https://slack.com/get-started), create a workspace for your household. The free plan is enough: its 90-day history and 10-app limits don't matter, because Dinnerbell keeps its own records and is the only app.
-2. Create a public channel named `#dinnerbell-channel`, or any name that isn't the bot's, so that `#dinnerbell` and `@Dinnerbell` don't look alike in Slack. A private channel works too, but then the app also needs the `groups:read` bot scope, which you add in Slack's manifest editor, to check that the bot is in the channel and to read who's in it.
+1. At [slack.com/get-started](https://slack.com/get-started), create a workspace for your household. The free plan is enough.
+2. Create a public channel named `#dinnerbell-channel`, or any name that isn't the bot's, so that `#dinnerbell` and `@Dinnerbell` don't look alike. A private channel also needs the `groups:read` bot scope, which you add in the manifest.
 
 ## 2. Create the Slack app
 
-Don't edit files in your clone, including the manifest. Local edits block `git checkout` when you upgrade. You set your hostname in Slack instead.
-
-1. Copy the contents of `deploy/slack-app-manifest.yaml`.
+1. Copy the contents of `deploy/slack-app-manifest.yaml`. Don't edit it in your clone: local edits block `git checkout` when you upgrade.
 2. At [api.slack.com/apps](https://api.slack.com/apps), select **Create New App** > **From a manifest**, and select your household workspace.
 3. Paste the manifest as YAML.
 4. In `redirect_urls`, replace `dinnerbell.example.com` with your hostname. Keep the path `/auth/callback`.
 5. Select **Next**, then **Create**.
 6. Optional: under **Basic Information** > **Display Information**, upload `deploy/slack-app-icon-1024.png` as the app icon.
 
-If you plan to turn on the optional assistant, paste `deploy/slack-app-manifest.assistant.yaml` instead. You can also switch later, as [Talk to it in Slack](configuration.md#talk-to-it-in-slack) describes.
-
-To keep a copy of the manifest with your hostname, write it to a file ending in `.local.yaml`, which git ignores:
-
-```sh
-sed 's#dinnerbell.example.com#dinnerbell.your-domain.example#' \
-  deploy/slack-app-manifest.yaml > deploy/slack-app-manifest.local.yaml
-```
-
-If your hostname changes, edit the redirect URL under **OAuth & Permissions**.
+If you plan to turn on the optional assistant, paste `deploy/slack-app-manifest.assistant.yaml` instead, or switch later as [Talk to it in Slack](configuration.md#talk-to-it-in-slack) describes.
 
 ## 3. Create the app-level token
 
-The app connects out to Slack over Socket Mode, so Slack never calls your host. The manifest turns Socket Mode on; you create its token.
+The app connects out to Slack over Socket Mode, so Slack never calls your host.
 
 1. Under **Basic Information** > **App-Level Tokens**, select **Generate Token and Scopes**.
 2. Name the token `dinnerbell`, add the `connections:write` scope, and select **Generate**.
-3. Copy the token, which starts with `xapp-`. This is `DINNERBELL_SLACK_APP_TOKEN`.
+3. Copy the token, which starts with `xapp-`.
 
 ## 4. Install the app and copy the bot token
 
 1. Under **Install App**, select **Install to Workspace**, then **Allow**.
-2. Copy the **Bot User OAuth Token**, which starts with `xoxb-`. This is `DINNERBELL_SLACK_BOT_TOKEN`.
+2. Copy the **Bot User OAuth Token**, which starts with `xoxb-`.
 
 ## 5. Copy the sign-in credentials
 
-Under **Basic Information** > **App Credentials**, copy these values:
-
-- **Client ID**: `DINNERBELL_OIDC_CLIENT_ID`.
-- **Client Secret**: `DINNERBELL_OIDC_CLIENT_SECRET`.
+Under **Basic Information** > **App Credentials**, copy the **Client ID** and **Client Secret**.
 
 ## 6. Find the team ID and channel ID
 
-1. Open your workspace in a browser. The address looks like `https://app.slack.com/client/T0123ABCDEF/...`.
-2. Copy the part that starts with `T`. This is `DINNERBELL_SLACK_TEAM_ID`. Slack sign-in requires it: Dinnerbell refuses sign-ins from any other workspace, so nobody outside yours can claim an invitation with a matching email.
-3. In `#dinnerbell-channel`, select the channel name, and copy the channel ID at the bottom of the **About** tab. It starts with `C`. This is `DINNERBELL_SLACK_CHANNEL`. You can also copy it from the browser's address bar.
+1. Open your workspace in a browser. The address looks like `https://app.slack.com/client/T0123ABCDEF/...`. Copy the part that starts with `T`: the team ID. Dinnerbell refuses Slack sign-ins from any other workspace.
+2. In `#dinnerbell-channel`, select the channel name, and copy the channel ID at the bottom of the **About** tab. It starts with `C`.
 
 ## 7. Invite the bot to the channel
 
-The bot posts only in channels it belongs to. In `#dinnerbell-channel`, send `/invite @Dinnerbell`, and select **Add to Channel** if Slack asks.
-
-If you start Dinnerbell before you invite the bot, `/healthz` reports Slack as `error` until you do. Dinnerbell checks again every minute, so you don't need to restart it.
+In `#dinnerbell-channel`, send `/invite @Dinnerbell`, and select **Add to Channel** if Slack asks. The bot posts only in channels it belongs to.
 
 ## 8. Expose Dinnerbell through your reverse proxy
 
-Point your hostname at the host's port 8013, with the proxy's own sign-in turned off. Dinnerbell signs people in itself: a second login in front of it breaks the redirect back from Slack and makes every device sign in twice. With Pangolin:
+Point your hostname at the host's port 8013, with the proxy's own sign-in turned off. Dinnerbell signs people in itself: a second login in front of it breaks the redirect back from Slack. With Pangolin:
 
 1. Create a public HTTP resource for your hostname, with the target on the Dinnerbell host, port 8013.
 2. In the resource's authentication settings, turn off **Use Platform SSO**, which is on by default.
 3. Leave password, PIN, email OTP, and header auth off.
 
-Pangolin still provides TLS and connection-level protections. `/healthz` is public, and shows only coarse status and the running version.
-
-`compose.yaml` publishes port 8013 on `DINNERBELL_BIND`, which defaults to `127.0.0.1`. That works only when Newt runs on the same host and outside a container network. Otherwise, set it in `.env` to the host's address on the interface Newt reaches, such as its LAN address. Avoid `0.0.0.0` unless a firewall limits who can reach the port.
-
-```sh
-DINNERBELL_BIND=192.168.1.20
-```
+`compose.yaml` publishes port 8013 on `DINNERBELL_BIND`, which defaults to `127.0.0.1`. If the proxy runs on another host or in a container network, set `DINNERBELL_BIND` in `.env` to the host's address on the interface the proxy reaches, such as `192.168.1.20`. Avoid `0.0.0.0` unless a firewall limits who can reach the port.
 
 ## 9. Run Dinnerbell
 
-1. Create `.env` from the example, readable only by you, because it holds secrets.
+1. Write `.env` with `dinnerbell init`. It asks for your hostname, admin email, time zone, household name, and the Slack values from sections 3 to 6, and hides secrets as you type. It generates the secret key, writes `.env` with mode 600, and checks it.
 
    ```sh
-   cp .env.example .env
-   chmod 600 .env
+   VERSION="$(git describe --tags --exact-match | sed 's/^v//')"
+   podman run --rm -it --userns keep-id --user "$(id -u):$(id -g)" -v "$PWD:/out:z" \
+     "ghcr.io/dsmorgan/dinnerbell:$VERSION" init --output /out/.env
    ```
 
-2. Generate a secret key, or use `openssl rand -base64 48`.
+   With Docker, leave out `--userns keep-id`. To write `.env` by hand instead, copy `.env.example`, which explains each setting.
 
-   ```sh
-   python3 -c "import secrets; print(secrets.token_urlsafe(48))"
-   ```
+   Check these before you start:
 
-3. In `.env`, set these values:
+   - The hostname must be the one people type. If the browser's address differs, such as a LAN IP, every form fails with "Cross-origin request refused".
+   - Dinnerbell reads the household name and time zone on first start only, and ignores later changes, with a warning in the log ([#334](https://github.com/dsmorgan/dinnerbell/issues/334)). The time zone sets when calls go out.
 
-   | Setting | Value |
-   |---|---|
-   | `DINNERBELL_BASE_URL` | The URL people type, such as `https://dinnerbell.example.com`: the same host and port, with `https://` and no path. |
-   | `DINNERBELL_SECRET_KEY` | The key from step 2. |
-   | `DINNERBELL_ADMIN_EMAIL` | The email on your Slack account. |
-   | `DINNERBELL_HOUSEHOLD_NAME` | Your household's name, such as `Home`. |
-   | `DINNERBELL_TIMEZONE` | Your time zone, such as `America/Chicago`, in place of the example's `Region/City` placeholder. |
-   | `DINNERBELL_OIDC_ISSUER` | `https://slack.com` |
-   | `DINNERBELL_OIDC_CLIENT_ID`, `DINNERBELL_OIDC_CLIENT_SECRET` | From section 5. |
-   | `DINNERBELL_SLACK_TEAM_ID`, `DINNERBELL_SLACK_CHANNEL` | From section 6. |
-   | `DINNERBELL_SLACK_BOT_TOKEN` | From section 4. |
-   | `DINNERBELL_SLACK_APP_TOKEN` | From section 3. |
+   Dinnerbell logs a warning for each secret in `.env`. To keep them in files instead, see [Keep secrets in files](#keep-secrets-in-files).
 
-   Before you start Dinnerbell, check these rules:
-
-   - If `DINNERBELL_BASE_URL` differs from the address in the browser, such as a LAN IP, every form fails with "Cross-origin request refused". Dinnerbell builds the sign-in redirect from it, too.
-   - Dinnerbell refuses a secret key that is shorter than 32 characters, has fewer than 8 distinct characters, or contains placeholder text such as `REPLACE-ME`. A generated key always passes.
-   - Dinnerbell reads the household name and time zone on first start only, then keeps them in its database. You can't change them after that yet ([#334](https://github.com/dsmorgan/dinnerbell/issues/334)): a changed value is ignored, with a warning in the log. Check the time zone before the first start, because it sets when calls go out.
-   - If you change the admin email later, Dinnerbell invites the new address as another admin on its next start.
-
-   Dinnerbell logs a warning for each secret in `.env`. To keep them in files instead (optional), see [Keep secrets in files](#keep-secrets-in-files).
-
-4. Pull the image that `compose.yaml` names. To check where it came from, see [Verify an image](#verify-an-image).
+2. Pull the image that `compose.yaml` names, and start the service.
 
    ```sh
    podman-compose pull
-   ```
-
-5. Start the service.
-
-   ```sh
    podman-compose up -d
    ```
 
-   With rootless podman, Dinnerbell stays down after a reboot until you start it again. To start it at boot, see [Start at boot](#start-at-boot) (optional).
+   With rootless podman, Dinnerbell stays down after a reboot until you start it again; see [Start at boot](#start-at-boot).
 
-6. Check that Slack is connected. Within a few seconds of the start, the response includes `"status":"ok"` and `"slack":"connected"`.
+3. Check that Slack is connected. Within a few seconds, the response includes `"status":"ok"` and `"slack":"connected"`. If you started before inviting the bot, Slack shows `error` until you do; Dinnerbell checks again every minute.
 
    ```sh
    curl -s https://dinnerbell.example.com/healthz
    ```
 
-   If it doesn't, see [troubleshooting.md](troubleshooting.md#check-healthz), or read the log with `podman-compose logs dinnerbell | grep -i slack`.
+   If it doesn't connect, see [troubleshooting.md](troubleshooting.md#check-healthz).
 
 ## 10. Sign in as the admin
 
 1. Open your URL, select **Sign in with Slack**, and approve the request.
-2. Open **Admin**, which opens on its **Members** tab.
-3. Add each household member by the email address you'll invite to Slack. Sign-in is invite-only, and the email must match the one on their Slack account.
+2. Open **Admin** > **Members**.
+3. Add each household member by email. Sign-in is invite-only. For a member who uses Slack, the email must match their Slack account's.
 
 ## 11. Onboard family members
 
-Invite each person to the Slack workspace (**Invite people** in Slack) with the email you added on **Admin** > **Members**. Then forward them this message:
+For each member who uses Slack, invite them to the workspace (**Invite people** in Slack) with the email you added. Then forward them this message:
 
 > **Set up Dinnerbell on your phone**
 >
-> 1. Install Slack from the App Store.
-> 2. When Slack asks to send notifications, tap **Allow**.
-> 3. Open the invitation email from Slack and accept the invite to our workspace.
-> 4. In Slack, open the `#dinnerbell-channel` channel.
-> 5. Tap the channel name, then tap **Notifications**.
-> 6. Choose **All new messages**.
-> 7. Optional: open `https://dinnerbell.example.com` in Safari, tap Share, then tap **Add to Home Screen**. This lets you open Dinnerbell like an app.
-> 8. Open Dinnerbell and tap **Sign in with Slack**.
-> 9. Slack asks you to sign in again in Safari. Enter your email, type the code Slack emails you, then tap **Allow**.
-> 10. If the Home Screen icon asks you to sign in, sign in once more.
+> 1. Install Slack, and allow its notifications.
+> 2. Accept the invitation Slack emailed you.
+> 3. In Slack, open `#dinnerbell-channel`, tap the channel name, tap **Notifications**, and choose **All new messages**.
+> 4. Open `https://dinnerbell.example.com` in your browser and tap **Sign in with Slack**. Slack asks you to sign in again: enter your email, type the code Slack emails you, and tap **Allow**.
 
-### Link everyone's Slack account
+Dinnerbell links each member's Slack account when they sign in, or by matching email; [members.md](members.md#link-slack-accounts) has the details.
 
-Dinnerbell needs each member's Slack account to mention them, message them, and accept their button taps. **Admin** > **Members** shows who is linked. Dinnerbell links a member in any of these ways:
+For a member who doesn't use Slack, or to let members install Dinnerbell on their phone with push notifications, turn on **Admin** > **Web app**. [Add a member without Slack](members.md#add-a-member-without-slack) shows the steps.
 
-- When they sign in to the web app with Slack.
-- At start and every hour, by email, for active members whose Dinnerbell email matches their Slack email. This links only full members of your workspace, never guests or people from other organizations.
-- By hand: on **Admin** > **Members**, select **Edit**, and enter their Slack member ID. In Slack, open their profile, select the three dots, then **Copy member ID**.
-
-A link you set or clear by hand stays as you left it. To hand a member back to automatic linking, select **Back to automatic** on their edit page.
-
-### Guests and joining from the channel
-
-**Join from the channel** is on by default: anyone in the channel can join as a guest, and you get a direct message for each join. To add only the people you choose, turn it off on **Admin** > **Members**. [members.md](members.md) explains guests, joining, and linking a guest to a member.
+**Join from the channel** is on by default: anyone in the channel can join as a guest, and you get a direct message for each join. To add only the people you choose, turn it off on **Admin** > **Members**. See [members.md](members.md).
 
 ## 12. Load the catalog
 
-The catalog is your list of restaurants and home meals. [catalog-format.md](catalog-format.md) describes the file, and [seed/catalog.schema.json](../seed/catalog.schema.json) is its JSON Schema.
+The catalog is your list of restaurants and home meals. [catalog-format.md](catalog-format.md) describes the file, [seed/example.yaml](../seed/example.yaml) is an example, and [seed/catalog.schema.json](../seed/catalog.schema.json) is its JSON Schema.
 
-The fastest way to write your first catalog is with an AI assistant. Give it the schema, [seed/example.yaml](../seed/example.yaml) as a model, and a source:
+To write your first catalog quickly, give an AI assistant the schema, the example, and a source, such as delivery receipts in your email or a list of places you write yourself, and ask for a file that validates against the schema. Whatever you give the assistant goes to its provider.
 
-- **Your email:** an assistant connected to your mailbox, such as Claude with Gmail, can find delivery-app and restaurant receipts and list where you order from and whether you pick up or get delivery.
-- **Local files:** an agent such as Claude Code can read exported order history or notes on your machine.
-- **A list you write:** one place or home meal per line, with whatever you know about it.
-
-Ask for a catalog file that validates against the schema. It doesn't need to be perfect: the import preview catches errors, and you can edit items afterward. Whatever you give the assistant goes to its provider.
-
-To load it:
-
-1. Add everyone on **Admin** > **Members** first (section 10). The import matches `cooks` emails only to members already added, and skips the rest. Members don't need to have signed in.
+1. Add everyone on **Admin** > **Members** first. The import matches `cooks` emails only to members already added.
 2. On the **Catalog** page, select **Import a catalog file**, paste or upload the file, and select **Preview**. Check the preview, then select **Apply**.
-
-Once Dinnerbell's own [assistant](configuration.md#the-assistant) is on, members can also ask it to draft items from a restaurant's menu link.
 
 To import a file on first start instead, see [Load a catalog on first start](configuration.md#load-a-catalog-on-first-start).
 
 ## Going live
 
-While you try Dinnerbell out, it records test calls, votes, meals, and feedback. Before the household relies on it, run `dinnerbell reset-history` once, on production, so History and stats start clean.
+While you try Dinnerbell out, it records test calls, votes, meals, and feedback. Before the household relies on it, run `dinnerbell reset-history` once, on production, so History and stats start clean. It deletes calls and everything in them, the meal log, feedback, contributions and badges, assistant conversations and drafts, and the Slack notification queue. It keeps the catalog, members, Slack links, preferences, sign-ins, the audit log, and every setting.
 
-The reset deletes every call and everything in it (answers, suggestions, proposals and the places they showed, votes, decisions, assignments, and guest invitations), the meal log, feedback on meals, contributions and the badges earned from them, assistant conversations and drafts, and the Slack notification queue, sent and unsent. It keeps the catalog, members and roles, Slack links, preferences and vetoes, sign-ins, the assistant's monthly spending, the audit log, and every setting: the schedule, ranking, badge counts, the web app and assistant switches, and Dinnerbone's weather.
-
-1. Call off every open call: on its card or in Slack, select **Call it off**. The reset refuses while a call is scheduled, taking answers, voting, or decided. Calling off a call someone else scheduled for a later day sends them a direct message, so tell them first.
-2. [Back up now](#back-up-now), and copy the backup off the host.
+1. Call off every open call: on its card or in Slack, select **Call it off**. The reset refuses while any call is scheduled or still going. Calling off someone else's call for a later day sends them a direct message, so tell them first.
+2. [Back up now](backup-and-upgrade.md#back-up-now), and copy the backup off the host.
 3. Run the reset in the running container.
 
    ```sh
    podman-compose exec dinnerbell dinnerbell reset-history
    ```
 
-   Before it changes anything, the command prints the database path, the household name, and how many rows it deletes and keeps in each table. Check these lines:
+   The command prints the database path, the household name, and what it deletes and keeps in each table. Check that **Notifications not yet sent** is 0; if you just called off a call, type anything but `reset`, wait a minute, and run it again. If it says the scheduler posts today's call again, run the reset after today's answer deadline.
 
-   - **Notifications not yet sent** should be 0. If you just called off a call, type anything but `reset`, wait a minute, and run the command again.
-   - **Days off kept** lists today's and later days whose call was skipped or called off. They stay off. To have a call on one after all, start it from App Home, Today, or `/dinnerbell call`.
-   - If it says the scheduler posts today's call again, today's call has finished but its answers are still open. To avoid a second call, run the reset after the answer deadline.
+   Then type `reset`, or without a terminal, run it again with `--yes`. The command backs up the database to `/data/backups/pre-reset-VERSION-TIME.db` first.
 
-   Then type `reset`. Without a terminal, run the command again with `--yes`. The command first backs up the database to `/data/backups/pre-reset-VERSION-TIME.db`, which nightly pruning never deletes, then deletes the history in one transaction, and writes a `history.reset` audit row.
+4. Check that History and Stats are empty, and that the catalog, Members, Preferences, and Schedule are unchanged.
 
-4. Check that History and Stats are empty, Today and App Home show no old calls, the catalog, Members, Preferences, and Schedule are unchanged, and the **Kept** counts the command printed match its preview's **Keeps** counts.
-
-Old messages stay in Slack, and their buttons reply "No such call." Call IDs are never reused. The next scheduled call posts as usual.
-
-To undo the reset, follow [Roll back](#roll-back) with the `pre-reset-*.db` file, skipping step 2. Anything recorded after the reset is lost.
-
-## Back up
-
-Every night at 03:30 household time, Dinnerbell backs up its database to `/data/backups/`, and also at start if the newest backup is more than a day old. On the night the clocks go forward past 03:30, it backs up once, an hour later by the clock. A host that sleeps through 03:30 backs up when it wakes. It checks each copy with SQLite's `quick_check` and retries once. If both tries fail, it logs `database backup failed its check`, and `/healthz` reports `"backup": {"failing": true}` and `degraded` until a backup succeeds. It also deletes any unfinished `pre-*.partial` file after an hour.
-
-Besides the nightly `dinnerbell-YYYY-MM-DD.db` copies, Dinnerbell takes a one-off copy before anything hard to undo. Each is named for what it came before, with the UTC time:
-
-- `pre-upgrade-VERSION-TIME.db`: [`dinnerbell backup`](#back-up-now), which you run before an upgrade.
-- `pre-migrate-FROM-TO-TIME.db`, such as `pre-migrate-0040-to-0045-20261122T013000.123456Z.db`: `serve` or `migrate`, when the database needs migrating. See [Upgrade](#upgrade).
-- `pre-reset-VERSION-TIME.db`: `reset-history`. See [Going live](#going-live).
-
-### What pruning keeps
-
-After each nightly backup, Dinnerbell deletes the copies it no longer needs. It keeps:
-
-- The 14 newest nightly copies, and the newest nightly copy from each of the last 8 weeks.
-- The five newest `pre-migrate-*` copies. A migration that fails restarts the container, and each start takes another copy, so these would otherwise fill the disk.
-
-Pruning never deletes `pre-upgrade-*` or `pre-reset-*` copies, or any file it didn't name, so delete old ones yourself. To keep a `pre-migrate-*` copy for good, copy it off the host, or rename it without the time, such as `pre-migrate-0040-to-0045-before-the-move.db`.
-
-### What a backup holds
-
-<a id="what-the-audit-log-and-backups-hold"></a>Each copy holds the whole database as it was then, so keep every copy as private as the database. That includes:
-
-- The audit log, which holds member emails and Slack user IDs. Audit rows stay for good, except `auth.sign_in_refused` rows, which hold a non-member's email: an hourly job deletes them after 30 days, and Dinnerbell writes at most one per person and reason per hour.
-- Assistant conversations and drafts.
-- Devices that get notifications, and the members' preferences, vetoes, and dietary needs.
-
-Retention settings, such as the assistant's **Conversation hours**, draft expiry, and the 30 days for refused sign-ins, delete rows from the live database only. A copy keeps what it held until pruning deletes the copy: two weeks for most nightly copies, about two months for weekly ones, until five newer copies replace it for a `pre-migrate-*` copy, and until you delete it for a `pre-upgrade-*` or `pre-reset-*` copy. Copies you made off the host stay until you delete them.
-
-### What else to back up
-
-The database copies aren't enough to run Dinnerbell on another host. Also back up these files from your clone or bundle directory:
-
-- `.env`, the settings.
-- `secrets/`, if you [keep secrets in files](#keep-secrets-in-files).
-- `compose.override.yaml`, if you have one.
-
-`DINNERBELL_SECRET_KEY`, in `.env` or `secrets/`, matters most. Dinnerbell derives the web push key and the sign-in code key from it, so losing it ends every device's notifications and every unused sign-in code. Store these files apart from the database copies, such as in a password manager, so that one lost or stolen copy never holds both the household's data and the keys to its Slack app and sign-ins. Copy them again whenever you change them.
-
-### Copy backups off the host
-
-The backups share a volume with the database, so copy them off the host with your own backup routine. Copy `/data/backups/` only, never the live `dinnerbell.db` or its WAL file.
-
-1. Find the volume's path. Production's volume is `dinnerbell_dinnerbell-data`, and the test instance's is `dinnerbell-test_dinnerbell-data`; `podman volume ls` lists them.
-
-   ```sh
-   podman volume inspect dinnerbell_dinnerbell-data --format '{{.Mountpoint}}'
-   ```
-
-2. Point your backup routine at the `backups` directory in that path.
-
-Only UID 10001 in the container can read the files. Under rootful podman or Docker, run your backup routine as root. Under rootless podman, copy them out through the user namespace. Running it again refreshes the copy.
-
-```sh
-mkdir -p ~/dinnerbell-backups
-podman unshare cp -a "$(podman volume inspect dinnerbell_dinnerbell-data --format '{{.Mountpoint}}')/backups/." ~/dinnerbell-backups/
-podman unshare chown -R 0:0 ~/dinnerbell-backups
-```
-
-### Back up now
-
-Before an upgrade, or any change you might want to undo, take a fresh backup in the running container:
-
-```sh
-podman-compose exec dinnerbell dinnerbell backup
-```
-
-The command copies the database to `/data/backups/pre-upgrade-VERSION-TIME.db`, with the running version and the UTC time, checks the copy with `quick_check`, flushes it to disk, and prints its name, such as `Backed up the database to /data/backups/pre-upgrade-0.16.0-20261112T013000Z.db`. It never migrates or changes the database. If the copy fails its check, the command deletes it, says why, and exits with status 1. Write the name down: [Roll back](#roll-back) needs it. Nightly pruning never deletes these files, so delete old ones yourself. Copy the backup off the host.
-
-### Restore on a new host
-
-To move Dinnerbell to a new host, or rebuild it after losing one, restore a database copy and the files from [What else to back up](#what-else-to-back-up). Anything recorded after the copy is lost.
-
-1. Stop Dinnerbell on the old host if it still runs. Two instances on one Slack app both answer.
-2. On the new host, follow [Prerequisites](#prerequisites) and [Clone the repository](#0-clone-the-repository), or extract the release bundle as in the [quick install](install.md). Keep the directory name `dinnerbell`, because compose names the data volume after it. Check out the release that wrote the copy, replacing `vX.Y.Z`: the version in a `pre-upgrade-*` or `pre-reset-*` name, the release before the upgrade for a `pre-migrate-*` copy, or the release the old host ran for a nightly copy.
-
-   ```sh
-   git checkout vX.Y.Z
-   ```
-
-3. Put `.env`, `secrets/`, and `compose.override.yaml` back in the clone. Give `.env` and the files in `secrets/` mode 600, as [Keep secrets in files](#keep-secrets-in-files) does.
-4. Pull the image, and create the data volume without starting Dinnerbell. The one-off container runs `true`, so the volume gets the image's owner and permissions and nothing else.
-
-   ```sh
-   podman-compose pull
-   podman-compose run --rm --entrypoint true dinnerbell
-   ```
-
-5. Copy the database copy into the volume as `dinnerbell.db`, owned by UID 10001, replacing the file name. Under rootful podman or Docker, run the same `cp` and `chown` as root, without `podman unshare`.
-
-   ```sh
-   data="$(podman volume inspect dinnerbell_dinnerbell-data --format '{{.Mountpoint}}')"
-   podman unshare sh -c 'umask 077 && cp "$1" "$2/dinnerbell.db" && chown 10001:10001 "$2/dinnerbell.db"' \
-     sh ~/dinnerbell-backups/pre-upgrade-X.Y.Z-YYYYMMDDTHHMMSSZ.db "$data"
-   ```
-
-6. Start the service, as in [Run Dinnerbell](#9-run-dinnerbell), with the compose files you used on the old host.
-7. Point your reverse proxy at the new host, as in [Expose Dinnerbell through your reverse proxy](#8-expose-dinnerbell-through-your-reverse-proxy).
-8. Check that the footer shows the release you checked out, that `/healthz` returns 200 with `"slack":"connected"`, and that History shows the calls you expect.
-
-If you restored a `.env` without the old secret key, every member taps **Turn on notifications** again on each device, and unused sign-in codes stop working. To move to a newer release too, restore first, then [upgrade](#upgrade).
-
-## Upgrade
-
-Production runs a release tag, never `latest` or `main`, and your clone stays checked out at that release so that `compose.yaml` matches the image. Releases are listed in [CHANGELOG.md](../CHANGELOG.md). If you run a test instance, follow [Promote a release](test-instance.md#promote-a-release) instead, which rehearses on a copy of your data first.
-
-If you keep secrets in files, add `-f compose.yaml -f compose.secrets.yaml` to each `podman-compose` command below, and `-f compose.override.yaml` last if you have one, as [Run compose with secret files](#run-compose-with-secret-files) shows. Without them, Dinnerbell starts without its secrets and restarts in a loop.
-
-1. Read the **Upgrade notes** of every release between yours and the new one.
-2. [Back up now](#back-up-now). Note the file name, and copy the backup off the host.
-3. Check out the new release, replacing `vX.Y.Z`.
-
-   ```sh
-   git fetch --tags
-   git checkout vX.Y.Z
-   ```
-
-4. Pull the image, and [verify it](#verify-an-image). If you pinned a digest in `compose.override.yaml`, update or remove the pin first, or the upgrade keeps the old image.
-
-   ```sh
-   podman-compose pull
-   ```
-
-5. Recreate the service. `down` keeps the data volume; never add `-v`, which deletes it.
-
-   ```sh
-   podman-compose down && podman-compose up -d
-   ```
-
-   With secrets in files (add `-f compose.override.yaml` last if you have one):
-
-   ```sh
-   podman-compose -f compose.yaml -f compose.secrets.yaml down
-   podman-compose -f compose.yaml -f compose.secrets.yaml up -d
-   ```
-
-6. Check that the page footer shows the new version, and that `/healthz` returns 200 with `"slack":"connected"`.
-
-Migrations run on start and only move forward: an older version refuses to open the upgraded database. To go back, see [Roll back](#roll-back).
-
-Before it migrates, Dinnerbell backs up the database to `/data/backups/pre-migrate-FROM-TO-TIME.db`, checked like the nightly copies, and logs `database backed up before migrating` with the file name. A new, empty database gets no backup. If the backup fails, Dinnerbell logs `Can't back up the database before migrating it`, changes nothing, and exits, and the container restarts until you fix the cause, such as a full disk. Each start takes another copy, and pruning keeps the five newest. This backup doesn't replace step 2: it stays on the host, and a release without a migration takes none.
-
-If the upgrade notes say the Slack manifest changed, paste the new manifest under **App Manifest** in the app settings, set your hostname in it again, then select **Install App** > **Reinstall to Workspace** and approve. The bot token stays the same. Until you reinstall, Dinnerbell keeps working and shows text where a feature needs a new scope, and a removed scope stays granted.
-
-## Roll back
-
-To roll back, run the previous release on the backup you took before the upgrade. Anything recorded since that backup is lost, so roll back soon after a bad upgrade. If you keep secrets in files, [add the compose files](#run-compose-with-secret-files) to each `podman-compose` command.
-
-1. Stop the service.
-
-   ```sh
-   podman-compose down
-   ```
-
-2. Check out the release you ran before, replacing `vX.Y.Z`.
-
-   ```sh
-   git checkout vX.Y.Z
-   ```
-
-3. List the backups, and find the one you took before the upgrade: the `pre-upgrade-*` file from [Back up now](#back-up-now), or the `pre-migrate-*` file the upgrade took if it migrated. A `pre-migrate-*` file is newer, so it loses less.
-
-   ```sh
-   podman-compose run --rm --entrypoint ls dinnerbell -l /data/backups
-   ```
-
-4. Replace the database with it, using its file name. The command assumes the default `DINNERBELL_DATABASE_URL`. It deletes the `-wal` and `-shm` files, which SQLite would otherwise apply to the restored file.
-
-   ```sh
-   podman-compose run --rm --entrypoint sh dinnerbell -c 'umask 077 && rm -f /data/dinnerbell.db-wal /data/dinnerbell.db-shm && cp /data/backups/pre-upgrade-X.Y.Z-YYYYMMDDTHHMMSSZ.db /data/dinnerbell.db'
-   ```
-
-5. Pull the previous image and start the service.
-
-   ```sh
-   podman-compose pull
-   podman-compose up -d
-   ```
-
-   With secrets in files (add `-f compose.override.yaml` last if you have one):
-
-   ```sh
-   podman-compose -f compose.yaml -f compose.secrets.yaml pull
-   podman-compose -f compose.yaml -f compose.secrets.yaml up -d
-   ```
-
-6. Check that the footer shows the previous version.
-
-When a fixed release ships, [upgrade](#upgrade) to it as usual.
-
-## Verify an image
-
-Every release image carries build provenance and SBOM attestations. To check that this repository's `ci.yml` built an image from its release tag, verify the digest your host pulled, on any machine with the [GitHub CLI](https://cli.github.com/). Replace `X.Y.Z` and the digest:
-
-```sh
-podman image inspect ghcr.io/dsmorgan/dinnerbell:X.Y.Z --format '{{.RepoDigests}}'
-gh attestation verify oci://ghcr.io/dsmorgan/dinnerbell@sha256:... \
-  --repo dsmorgan/dinnerbell \
-  --signer-workflow dsmorgan/dinnerbell/.github/workflows/ci.yml \
-  --source-ref refs/tags/vX.Y.Z
-```
-
-The release notes on GitHub list each release's digest; compare it with yours. A release tag is never re-pushed, but to run exactly what you verified, pin `image:` to `ghcr.io/dsmorgan/dinnerbell@sha256:...` in a `compose.override.yaml` (with secrets in files, [name it with `-f`](#run-compose-with-secret-files)). Don't use `podman auto-update` or Watchtower: they follow moving tags.
+Old messages stay in Slack, and their buttons reply "No such call." Days you skipped stay skipped. The next scheduled call posts as usual. To undo the reset, [roll back](backup-and-upgrade.md#roll-back) to the `pre-reset-*.db` file, skipping step 2.
 
 ## Optional setup
 
 ### Keep secrets in files
 
-By default, the four secrets (`DINNERBELL_SECRET_KEY`, `DINNERBELL_OIDC_CLIENT_SECRET`, `DINNERBELL_SLACK_BOT_TOKEN`, and `DINNERBELL_SLACK_APP_TOKEN`) are lines in `.env`, and Dinnerbell logs a warning for each. podman-compose passes every `.env` line to podman as `-e NAME=value`, so while podman creates the container, any local user can see the values in `ps`, and `podman-compose --dry-run` and `--verbose` print them. If other people can log in to the host, keep the secrets in files. Compose then mounts each file read-only at `/run/secrets/<name>`. The assistant's Anthropic API key works the same way, with one more step: see [The assistant](configuration.md#the-assistant).
+By default, the four secrets (`DINNERBELL_SECRET_KEY`, `DINNERBELL_OIDC_CLIENT_SECRET`, `DINNERBELL_SLACK_BOT_TOKEN`, and `DINNERBELL_SLACK_APP_TOKEN`) are lines in `.env`. podman-compose passes them to podman as `-e NAME=value`, where any local user can see them in `ps` while podman creates the container. If other people can log in to the host, keep the secrets in files, which compose mounts read-only at `/run/secrets/<name>`. The assistant's Anthropic API key works the same way, with one more step: see [The assistant](configuration.md#the-assistant).
 
 1. From the clone's directory, write the four files from `.env`. Each file is owner-only and holds the bare value with no trailing newline, and no value lands on a command line.
 
@@ -601,6 +317,18 @@ See [troubleshooting.md](troubleshooting.md) for common problems and their fixes
 
 These sections moved to their own pages:
 
+- <a id="link-everyones-slack-account"></a>[Link everyone's Slack account](members.md#link-slack-accounts)
+- <a id="guests-and-joining-from-the-channel"></a>[Guests and joining from the channel](members.md#join-from-the-channel)
+- <a id="back-up"></a>[Back up](backup-and-upgrade.md#back-up)
+- <a id="what-pruning-keeps"></a>[What pruning keeps](backup-and-upgrade.md#what-pruning-keeps)
+- <a id="what-a-backup-holds"></a><a id="what-the-audit-log-and-backups-hold"></a>[What a backup holds](backup-and-upgrade.md#what-a-backup-holds)
+- <a id="what-else-to-back-up"></a>[What else to back up](backup-and-upgrade.md#what-else-to-back-up)
+- <a id="copy-backups-off-the-host"></a>[Copy backups off the host](backup-and-upgrade.md#copy-backups-off-the-host)
+- <a id="back-up-now"></a>[Back up now](backup-and-upgrade.md#back-up-now)
+- <a id="restore-on-a-new-host"></a>[Restore on a new host](backup-and-upgrade.md#restore-on-a-new-host)
+- <a id="upgrade"></a>[Upgrade](backup-and-upgrade.md#upgrade)
+- <a id="roll-back"></a>[Roll back](backup-and-upgrade.md#roll-back)
+- <a id="verify-an-image"></a>[Verify an image](backup-and-upgrade.md#verify-an-image)
 - <a id="test-instance"></a>[Test instance](test-instance.md)
 - <a id="one-clone-two-instances"></a>[One clone, two instances](test-instance.md#one-clone-two-instances)
 - <a id="create-the-test-channel-and-slack-app"></a>[Create the test channel and Slack app](test-instance.md#create-the-test-channel-and-slack-app)
