@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from apscheduler.events import EVENT_SCHEDULER_SHUTDOWN
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
@@ -248,8 +249,17 @@ async def stop_scheduler(
 
     The wait matters: a job still holding a database connection when the engine is disposed
     leaves aiosqlite's worker thread to outlive the event loop (see ``_tracked``).
+
+    ``AsyncIOScheduler.shutdown`` only queues the shutdown on the loop. A wakeup queued before it,
+    such as the 5-second drains' timer firing, still starts the jobs that are due, so this reads
+    the running set only after the shutdown event (#338). Removing the jobs first keeps a wakeup
+    queued after the shutdown, which APScheduler doesn't guard against, from starting any.
     """
+    stopped = asyncio.Event()
+    scheduler.add_listener(lambda _event: stopped.set(), EVENT_SCHEDULER_SHUTDOWN)
+    scheduler.remove_all_jobs()
     scheduler.shutdown(wait=False)
+    await stopped.wait()
     if ctx.running:
         _, unfinished = await asyncio.wait(set(ctx.running), timeout=grace)
         for task in unfinished:

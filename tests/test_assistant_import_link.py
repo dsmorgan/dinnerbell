@@ -35,7 +35,7 @@ from tests.conftest import BASE_URL, invite, page, sign_in
 from tests.support.clock import FakeClock
 from tests.support.fake_oidc import FakeProvider
 from tests.support.links import MENU_LINK, link_draft
-from tests.support.web import submit
+from tests.support.web import submit, tampered
 from tests.test_admin import sign_in_as
 from tests.test_auth_flow import rows
 
@@ -176,8 +176,8 @@ def test_a_tampered_expired_or_unconfirmed_link_gets_404(
     signer = _draft_link_signer(migrated, clock)
     another = signer.dumps({"draft": str(drafted.draft_id + 1), "member": str(drafted.member_id)})
     for bad in (
-        f"{body}.{mac[:-2]}xx",  # a forged signature
-        f"{body[:-2]}xx.{mac}",  # a changed body
+        f"{body}.{tampered(mac)}",  # a forged signature
+        f"{tampered(body)}.{mac}",  # a changed body
         "",
         "x" * 2000,
         signer.dumps({"draft": "none", "member": str(drafted.member_id)}),

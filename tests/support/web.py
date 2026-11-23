@@ -41,3 +41,11 @@ def add_item(
 
 def htmx(client: TestClient, path: str, data: dict[str, Any]) -> httpx.Response:
     return client.post(path, data=data, headers={"HX-Request": "true", "X-CSRF-Token": csrf_from(client)})
+
+
+def tampered(value: str) -> str:
+    """``value`` with its first character changed, as a forger would change a signed value or its
+    MAC. It always differs from ``value`` (#338). Overwriting the end with fixed characters, such
+    as ``AA``, sometimes left a value unchanged, and a base64 string's last character can carry
+    padding bits that some decoders ignore."""
+    return ("B" if value[0] == "A" else "A") + value[1:]

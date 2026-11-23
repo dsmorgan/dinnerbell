@@ -15,6 +15,7 @@ from dinnerbell.web.clientip import resolve_client_ip
 from dinnerbell.web.ratelimit import SlidingWindowLimiter
 from dinnerbell.web.signing import SignedPayload, csrf_token, derive_key, tokens_match
 from tests.support.clock import FakeClock
+from tests.support.web import tampered
 
 PROXIES = (ipaddress.ip_network("10.0.0.0/8"), ipaddress.ip_network("fd00::/8"))
 
@@ -163,6 +164,21 @@ class TestSigning:
         body = base64.urlsafe_b64encode(b'{"iat": "x", "data": 1}').rstrip(b"=").decode()
         mac = base64.urlsafe_b64encode(hmac.new(b"k" * 32, body.encode(), hashlib.sha256).digest()).rstrip(b"=")
         assert SignedPayload(b"k" * 32, timedelta(minutes=10), FakeClock()).loads(f"{body}.{mac.decode()}") is None
+
+    @pytest.mark.parametrize("value", ["AAAA", "BAAA", "xyAA", "A", "B"])
+    def test_tampering_always_changes_the_value(self, value: str) -> None:
+        changed = tampered(value)
+        assert changed != value and len(changed) == len(value) and changed[1:] == value[1:]
+
+    def test_a_tampered_mac_is_refused_even_when_it_ends_in_aa(self) -> None:
+        """Regression (#338): the tamper overwrote a MAC's last two characters with ``AA``, which
+        changed nothing for the one MAC in 1,024 that already ended that way."""
+        signer = SignedPayload(b"k" * 32, timedelta(minutes=10), FakeClock())
+        value = next(v for n in range(100_000) if (v := signer.dumps({"state": str(n)})).endswith("AA"))
+        body, mac = value.split(".")
+        assert signer.loads(value) is not None
+        assert signer.loads(f"{body}.{tampered(mac)}") is None
+        assert signer.loads(f"{tampered(body)}.{mac}") is None
 
     def test_csrf_tokens(self) -> None:
         token = csrf_token(b"k" * 32, "session-hash")
