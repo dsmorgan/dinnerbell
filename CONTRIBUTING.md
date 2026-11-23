@@ -193,7 +193,7 @@ Every workflow pins its actions by commit SHA and grants each job only the token
 
 A pull request runs the workflows from its own branch, so a PR can change what its checks do. Outside contributors' runs wait for your approval: read any diff under `.github/` before you approve a run or merge.
 
-GitHub disables a public repository's scheduled workflows after 60 days without activity, which stops the nightly scan without a failed run. `scripts/verify-github-settings.sh` reads the repository's settings, disabled workflows included, and exits non-zero if any differs from what the lockdown expects. To turn a workflow back on, run `gh workflow enable scan-release.yml`, or select **Enable workflow** on its page in the **Actions** tab.
+GitHub disables a public repository's scheduled workflows after 60 days without activity, which stops the nightly scan without a failed run. `scripts/verify-github-settings.sh` reads the repository's settings, disabled workflows included, and exits non-zero if any differs from what the repository's settings should be. To turn a workflow back on, run `gh workflow enable scan-release.yml`, or select **Enable workflow** on its page in the **Actions** tab.
 
 ## Report a security problem
 
