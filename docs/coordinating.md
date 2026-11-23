@@ -14,7 +14,7 @@ When nobody coordinates, tap **I'll coordinate** while answers are open or durin
 | The call message | While voting |
 | The call's page on the web | While answers are open, and while voting |
 
-**Coordinating puts you in.** If you said Out or Maybe, or hadn't answered, coordinating changes your answer to In. The same applies when someone hands it to you or an admin assigns it to you, and you get a message if that changes your answer. During the vote, you [join late](spec.md#63-proposals-ranking-and-voting): any guests or eat window on an earlier answer are cleared, and, unlike other late joiners, your vote counts. After the decision, only someone who's already in can take over, and a late joiner the coordinator switched off can't.
+**Coordinating puts you in.** If you said Out or Maybe, or hadn't answered, coordinating changes your answer to In. The same applies when someone hands it to you or an admin assigns it to you, and you get a message if that changes your answer. During the vote, you [join late](spec.md#63-proposals-ranking-and-voting): any guests or eat window on an earlier answer are cleared, and, unlike other late joiners, your vote counts. After the decision, only someone who's already in can take over. A late joiner the coordinator switched off can't take it on.
 
 ### If nobody claims it
 
@@ -42,7 +42,7 @@ Whoever started an ad-hoc call can also call it off, until it's decided.
 
 Answers also close on their own once every member has answered:
 
-- When two or more are in, and someone can cook, pick up, or order, answers close after 10 minutes with no changed answer. Maybes are out from then on.
+- When two or more are in, and someone can cook, pick up, or order, answers close after 10 minutes with no changed answer. Maybes are out from then on, and if one joins late, their vote counts.
 - When everyone is out, the call ends at once.
 - When one person is in and everyone else is out, they get 10 minutes to add a guest. Otherwise the call ends.
 - With fewer than two in, a maybe keeps answers open until the deadline.
@@ -86,7 +86,7 @@ Before the meal time, whoever you assign is told, and so is whoever loses the ro
 
 ### When you end up eating somewhere else
 
-Change the place to record where you're really eating: any place in the catalog, or a new name, even one nobody offered or someone vetoed. Pick a way the place allows; a new name needs one, because **Cook** makes it a home meal and **Pickup** or **Delivery** a restaurant. People keep their roles if the new way still has them. A role nobody has yet goes to the first person who offered, or to nobody, for you to assign. Once the meal is marked done, only an admin can correct the place, on the web.
+Change the place to record where you're really eating: any place in the catalog, or a new name, even one nobody offered or someone vetoed. Pick a way the place allows; a new name needs one, because **Cook** makes it a home meal and **Pickup** or **Delivery** a restaurant. People keep their roles if the new way still has them. A role nobody has yet goes to the first person who offered, or to nobody, for you to assign. Before the meal time, each person who's in gets one message about the new place, saying if they lost or gained a role. Once the meal is marked done, only an admin can correct the place, on the web.
 
 ### Takeout: who orders and who picks up
 
@@ -115,7 +115,7 @@ In **Assign roles**, you choose how to get it and who does each role. You have 1
 | Skip a day's call | Web | Before it goes out, today or up to 7 days ahead |
 | Close a window early, lock, break a tie, shuffle, switch late joiners, move the decision time, or choose pickup or delivery | Slack and web | Whenever the coordinator could, alongside them |
 | Call off the call | Slack and web | Until it's done, including before it posts |
-| Change the meal time, the place, how you get it, or who does each role | Web; in Slack, **Assign roles** while a role waits for a choice | Once decided (the place until it's done) |
+| Change the meal time, the place, how you get it, or who does each role | Web; in Slack, how you get it and who does it, with **Assign roles** while a role waits for a choice | Once decided (the place until it's done) |
 | Mark the meal done | Slack and web | Once decided, even before the meal time |
 | Correct who did what, or the place, after the meal is done | Web | Any time after |
 
