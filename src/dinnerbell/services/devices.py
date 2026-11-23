@@ -5,9 +5,11 @@ signing a member out of every device.
 A page names a session by its ``public_id``, never the token's hash. Each session's label
 comes from its browser when it signed in (``domain.sessions.device_label``).
 
-Like the rest of the web app, this exists only while Admin's **Web app** switch is on, so an
-install that never turns it on looks exactly as it did. Signing out a device of your own isn't
-audited, as **Sign out** isn't; an admin signing a member out everywhere is (SEC-9).
+A member's own devices exist only while Admin's **Web app** switch is on, like the rest of the
+web app. An admin signing a member out everywhere works either way: sessions last 90 days with
+or without the web app, so ending a lost laptop's is a security control, not a web app feature
+(ADR 0010, amended 2026-11-22). Signing out a device of your own isn't audited, as **Sign out**
+isn't; an admin signing a member out everywhere is (SEC-9).
 """
 
 from __future__ import annotations
@@ -79,9 +81,8 @@ async def sign_out_device(db: AsyncSession, actor: Member, public_id: str, curre
 async def sign_out_everywhere(db: AsyncSession, actor: Member, member_id: int, *, now: datetime) -> Member:
     """An admin signs a member out of every device, and deletes their unused sign-in code, in
     one transaction. Audited as ``member.signed_out_everywhere`` with how many sessions ended
-    and codes went."""
+    and codes went. Works whether or not the web app is on."""
     require_admin(actor, ADMINS_ONLY)
-    await require_web_app(db, actor.household_id)
     member = await MemberRepository(db).get(actor.household_id, member_id)
     if member is None:
         raise NotFound("No such member.")

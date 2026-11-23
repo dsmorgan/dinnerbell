@@ -106,7 +106,7 @@ async def _members_page(
         "slack_connected": context.slack_people is not None,
         "dietary_tags": await guest_service.dietary_tags(db, principal.member),
         "linkable": await guest_service.unlinked_members(db, principal.member),
-        # Sign-in codes and signing out devices, only while the web app is on (spec 6.15).
+        # Sign-in codes, only while the web app is on; Sign out everywhere shows either way (spec 6.15).
         "codes_on": await web_app.web_app_enabled(db, principal.member.household_id),
     }
     return await render(request, "admin_members.html", page | extra, status_code=status_code)

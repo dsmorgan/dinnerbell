@@ -25,7 +25,7 @@
       <button type="submit" class="button small admin">{{ key_icon() }}Sign-in code</button>
     </form>
     {% endif %}
-    {% if codes_on and m.id != me.id %}
+    {% if m.id != me.id %}
     <form method="post" action="/admin/members/{{ m.id }}/sign-out" class="inline">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <button type="submit" class="button small admin">{{ key_icon() }}Sign out everywhere</button>
