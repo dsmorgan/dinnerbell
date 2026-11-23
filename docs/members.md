@@ -81,12 +81,12 @@ Their **Notifications** choice is **Web app**. If they join Slack later with the
 
 ### Sign in with a code
 
-The app on your Home Screen keeps its own sign-in, apart from the browser's, so inside the app, **Sign in with a code** is the first button on the sign-in page. A member without a Slack account signs in only this way.
+The app on your Home Screen keeps its own sign-in, apart from the browser's, and a Slack sign-in started there can finish in the browser instead. So inside the app, **Sign in with a code** is the first button on the sign-in page. A member without a Slack account signs in only this way.
 
 First, get a code:
 
 - **If you're signed in somewhere else**, such as with Slack on a laptop: open **Preferences**, and under **Devices**, select **Get a sign-in code**.
-- **If you aren't**, ask an admin to select **Sign-in code** on your row on **Admin** > **Members**.
+- **If you aren't**, ask an admin. On **Admin** > **Members**, they select **Sign-in code** on your row, then give you the code in person or by text.
 
 A code is 10 characters, such as `K7M2Q-9XRTD`. It works once, for 15 minutes, and shows only once, on the page that made it. A new code replaces any code you haven't used. Guests and deactivated members can't get one.
 
@@ -120,7 +120,7 @@ Changing `DINNERBELL_SECRET_KEY` ends every unused code. If more than 200 wrong 
 
 ### Turn notifications on or off
 
-A member on **Web app** or **Both** gets a push on each device where they turned notifications on. Pushes cover each direct message Slack would send them, such as a reminder or "You're cooking"; a call opening, voting opening, a shuffle (unless you shuffled), the decision, a call off, and a call that ends with everyone on their own (if you were in or maybe); and an offer posted for a meal, unless you made it or are away that day. The monthly recap, badges, and schedule changes don't push. Turning off **Send me reminders** on **Preferences** stops reminder pushes too. A tap opens the call's page, or the offer's. Guests don't get pushes.
+If you're on **Web app** or **Both**, you get a push on each device where you turned notifications on. Pushes cover each direct message Slack would send you, such as a reminder or "You're cooking"; a call opening, voting opening, a shuffle (unless you shuffled), the decision, a call off, and a call that ends with everyone on their own (if you were in or maybe); and an offer posted for a meal, unless you made it or are away that day. The monthly recap, badges, and schedule changes don't push. Turning off **Send me reminders** on **Preferences** stops reminder pushes too. A tap opens the call's page, or the offer's. Guests don't get pushes.
 
 On an iPhone or iPad (iOS 16.4 or later), notifications work only in the app on the Home Screen, not in Safari:
 
