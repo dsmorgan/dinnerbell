@@ -6,6 +6,8 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-11-23
+
 ### Security
 
 - **An admin can sign a member out of every device with the web app off** (#335, [ADR 0010](docs/adr/0010-optional-web-app.md) as amended). A sign-in lasts 90 days after its last use on every install, so before, with the web app off, a lost or stolen signed-in laptop could be cut off only by deactivating the member. Now **Sign out everywhere** shows on each other member's row on **Admin** > **Members** whatever the switch says, and ends every session the member has. It's audited as `member.signed_out_everywhere`, as before. Sign-in codes, **Devices**, and signing out one device still need the switch. See [Sign out a lost device](docs/members.md#sign-out-a-lost-device).
@@ -53,7 +55,10 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 - **Migration 0044** adds the `local_weather` table, empty, for **Dinnerbone's weather** (#319). Every household keeps the season's weather until an admin turns local weather on. A downgrade to 0043 drops the table; an admin saves the setting again after the next upgrade.
 - **Outbound HTTPS for local weather.** Only if you turn on **Dinnerbone's weather**, the host needs outbound HTTPS (port 443) to `geocoding-api.open-meteo.com` and `api.open-meteo.com`. See [Local weather](docs/configuration.md#local-weather). Open-Meteo's free API is for non-commercial use.
 - **Migration 0045** rebuilds the `proposal` table with AUTOINCREMENT, keeping every pick, vote, index, and foreign key, so a pick's ID is never given to another (#330). `dinnerbell migrate` and `serve` run it with foreign keys off, as they run every migration; it refuses to run with them on, which would delete every vote. A pick deleted before the upgrade whose ID is above the largest one left can have its ID given out once more, so a Slack message posted before the upgrade can still act on a new pick once. A downgrade to 0044 rebuilds it without AUTOINCREMENT.
-- **Test instance:** nothing to do. To move test's Anthropic key out of `.env.test`, see "Secrets in files for test" in [docs/test-instance.md](docs/test-instance.md#secrets-in-files-for-test).
+- **This upgrade backs itself up.** When `serve` finds the database at 0040, it first writes a checked copy, `pre-migrate-0040-to-0045-<time>.db`, to `/data/backups`, and stops without migrating if it can't, so leave room for one more copy of the database. To roll back, run 0.18.1 on that copy. From this release on, `dinnerbell backup` takes a copy on demand, and `serve` keeps the five newest `pre-migrate-*` copies; `pre-upgrade-*` and `pre-reset-*` copies stay until you delete them. See [Back up](docs/setup.md#back-up).
+- **A time zone or household name that differs from the stored one now logs a warning at every start** (#334). Both settings are read on first start only. If you see `DINNERBELL_TIMEZONE is ...` or `DINNERBELL_HOUSEHOLD_NAME differs` in the log, set the value in `.env` to the stored one. `.env.example` now has a `Region/City` placeholder that `config check` refuses, which only matters for a new install.
+- **HSTS comes from your reverse proxy.** Dinnerbell doesn't send `Strict-Transport-Security`; check that your proxy does. See [Send HSTS from your reverse proxy](docs/hardening.md#send-hsts-from-your-reverse-proxy).
+- **Test instance:** after a copy of production's data, test logs the household name warning at each start until `.env.test` names production's household; it's harmless. Otherwise nothing to do. To move test's Anthropic key out of `.env.test`, see "Secrets in files for test" in [docs/test-instance.md](docs/test-instance.md#secrets-in-files-for-test).
 
 ## [0.18.1] - 2026-11-21
 
@@ -794,7 +799,8 @@ The source-built version, never published as an image. It covers milestones M0 t
 - **M1:** the catalog with file import, preferences and vetoes, meal history, and the members admin page.
 - **M2:** dinner calls in Slack: the scheduled call, reminders, ranked proposals and votes, the decision, assignments, the abandon path, admin overrides, App Home, and `/dinnerbell call`.
 
-[Unreleased]: https://github.com/dsmorgan/dinnerbell/compare/v0.18.1...HEAD
+[Unreleased]: https://github.com/dsmorgan/dinnerbell/compare/v0.19.0...HEAD
+[0.19.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.19.0
 [0.18.1]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.18.1
 [0.18.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.18.0
 [0.17.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.17.0
