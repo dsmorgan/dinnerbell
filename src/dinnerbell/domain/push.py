@@ -358,9 +358,15 @@ def _day(day: date, zone: ZoneInfo, now: datetime) -> str:
 
 
 def message(notification: note.Notification, now: datetime) -> PushMessage:
-    """What a push of ``notification`` says: the meal, the time, and what to do, and never
-    another member's answer or anything a member wrote. A tap opens the call's page. Every kind
-    in ``PUSHED_KINDS`` has its own words; any other raises ValueError."""
+    """What a push of ``notification`` says: the meal, the time, and what to do. A tap opens the
+    call's page. Every kind in ``PUSHED_KINDS`` has its own words; any other raises ValueError.
+
+    Most of the text is fixed, but a push can carry two things people typed: a catalog item's
+    name (a decision, an offer, an assignment, a change of place, a feedback reminder), which a
+    member may have entered as a free-text pick or an offer, and, in the admin's guest-join
+    notice, the guest's name, which starts as their Slack display name. A push never carries
+    anyone's answer, note, suggestion, or vote, a call-off reason, feedback, dietary needs, or
+    the name of a member."""
     if isinstance(notification, note.GuestJoined):
         return PushMessage(
             "A guest joined", f"{notification.guest.name} joined. Keep or remove them.", "/admin/members"

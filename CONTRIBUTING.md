@@ -62,6 +62,29 @@ To debug a single test with `breakpoint()` or `--pdb`, run it without workers: `
 
 [CLAUDE.md](CLAUDE.md) lists the project conventions: layers and import rules, license headers, and the migration workflow. They apply to people and agents alike.
 
+## What 1.0 promises
+
+**This takes effect at 1.0.** Until then, a minor release can change anything here, and its **Upgrade notes** say what to do.
+
+From 1.0, minor and patch releases keep these working as they are; only a major release can break them:
+
+- **Settings:** the `DINNERBELL_*` settings in [docs/configuration.md](docs/configuration.md), with their names, meanings, and defaults. A new setting is optional, and its default keeps the old behavior.
+- **Compose files and the install bundle:** `compose.yaml`, `compose.build.yaml`, `compose.secrets.yaml`, and the bundle in [docs/install.md](docs/install.md), with the service name, data volume, port, and secret file names.
+- **The catalog file format** in [docs/catalog-format.md](docs/catalog-format.md): a file that imports today still imports.
+- **The documented `/healthz` keys** in [Check /healthz](docs/troubleshooting.md#check-healthz), with their names and meanings.
+- **The Slack app manifests** in `deploy/`: a Slack app set up from one keeps working.
+
+A minor release after 1.0 can, with **Upgrade notes** that say what to do:
+
+- Add migrations, which run on their own at startup after a checked backup.
+- Add optional settings, `/healthz` keys, and catalog fields.
+- Add Slack scopes or events, only for a new feature you can leave off.
+- Change what members see: pages, Slack messages, ranking, and badges.
+
+Log lines, the database schema, and the Python modules aren't promised; they can change in any release.
+
+You can upgrade to a newer release from any release since 0.2.0. The 1.0 review migrated every release up to the newest and back down. To go back after an upgrade, restore the backup taken before it ([Upgrade](docs/setup.md#upgrade)).
+
 ## Release
 
 Releases follow [Semantic Versioning](https://semver.org/), and [CHANGELOG.md](CHANGELOG.md) lists every change. A merge to `main` publishes the `main` and short-SHA image tags. Only a plain `vX.Y.Z` tag publishes a release, as `X.Y.Z`, `X.Y`, and `latest`; there are no pre-release tags. Cut a patch release when the nightly image scan fails, and at least monthly otherwise.
