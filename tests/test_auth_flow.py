@@ -19,6 +19,7 @@ from dinnerbell.services.auth import hash_token
 from tests.conftest import csrf_from, invite, page, sign_in, start_login
 from tests.support.clock import FakeClock
 from tests.support.fake_oidc import DROP, REDIRECT_URI, FakeProvider
+from tests.support.web import tampered
 
 SESSION_COOKIE = "__Host-dinnerbell_session"
 LOGIN_COOKIE = "__Host-dinnerbell_login"
@@ -245,7 +246,7 @@ def test_tampered_login_cookie_is_refused(client: TestClient, provider: FakeProv
     code = provider.authorize(params)
     value = client.cookies[LOGIN_COOKIE]
     body, mac = value.split(".")
-    client.cookies.set(LOGIN_COOKIE, f"{body}.{mac[:-2]}AA", domain="dinnerbell.test")
+    client.cookies.set(LOGIN_COOKIE, f"{body}.{tampered(mac)}", domain="dinnerbell.test")
     response = client.get("/auth/callback", params={"code": code, "state": params["state"]})
     assert response.status_code == 400
 

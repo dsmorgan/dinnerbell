@@ -249,6 +249,62 @@ async def test_a_job_failing_during_shutdown_is_logged(
     assert "scheduled job failed during shutdown" in caplog.text
 
 
+async def _scheduler_with_a_due_drain(job_context: runner.JobContext, outcome: list[str]) -> Any:
+    """A running scheduler with a drain just made due, which queues a wakeup on the loop, just as
+    the 5-second drains' timer does when it fires."""
+    import asyncio
+
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from sqlalchemy import text
+
+    async def drain(ctx: runner.JobContext) -> None:
+        outcome.append("started")
+        async with ctx.sessionmaker() as db:
+            await db.execute(text("SELECT 1"))
+            await asyncio.sleep(0.05)
+        outcome.append("finished")
+
+    scheduler = AsyncIOScheduler()
+    scheduler.start()
+    await asyncio.sleep(0)  # let the start's own wakeup run, with nothing to do
+    scheduler.add_job(runner._tracked(drain), args=[job_context], id="drain", next_run_time=datetime.now(UTC))
+    return scheduler
+
+
+@pytest.mark.anyio
+async def test_stop_waits_for_a_job_the_scheduler_started_just_before(job_context: runner.JobContext) -> None:
+    """Regression (#338): ``AsyncIOScheduler.shutdown`` only queues the shutdown on the loop. A job
+    submitted just before ``stop_scheduler`` but not yet started ran after it had found nothing
+    running and returned; the shutdown then cancelled the job's wrapper (logged as "raised an
+    exception") and the engine closed under the job. A drain left that way kept its aiosqlite
+    connection open past the test, which failed as leaking one."""
+    import asyncio
+
+    outcome: list[str] = []
+    scheduler = await _scheduler_with_a_due_drain(job_context, outcome)
+    await asyncio.sleep(0)  # the wakeup runs and submits the drain, whose task hasn't started
+    assert outcome == [] and job_context.running == set()
+    await runner.stop_scheduler(scheduler, job_context, grace=5)
+    assert not scheduler.running
+    assert outcome == ["started", "finished"]
+    assert job_context.running == set()
+
+
+@pytest.mark.anyio
+async def test_stop_starts_nothing_from_a_wakeup_still_queued(job_context: runner.JobContext) -> None:
+    """Regression (#338): with the wakeup still queued, ``stop_scheduler`` returned with the
+    scheduler running, and the wakeup then started the due drain against a closing engine."""
+    import asyncio
+
+    outcome: list[str] = []
+    scheduler = await _scheduler_with_a_due_drain(job_context, outcome)
+    await runner.stop_scheduler(scheduler, job_context, grace=5)
+    assert not scheduler.running
+    await asyncio.sleep(0)  # anything still queued on the loop runs
+    assert outcome == []
+    assert job_context.running == set()
+
+
 def test_stale_partial_backups_are_removed(migrated: Settings) -> None:
     migrated.backup_dir.mkdir(parents=True)
     stale = migrated.backup_dir / "dinnerbell-2026-10-01.partial"

@@ -118,6 +118,7 @@ def _no_leaked_scheduler_or_connection(monkeypatch: pytest.MonkeyPatch) -> Itera
     deadline = time.monotonic() + 2  # a connection stopping on its own takes a moment
     while (threads := _connection_threads()) and time.monotonic() < deadline:
         time.sleep(0.01)
+    _REPORTED_THREADS.update(t.ident for t in threads)
     leaks += [
         f"an aiosqlite connection still open ({t.name}); await Database.close() or engine.dispose() "
         "on the loop that opened it"
@@ -127,8 +128,18 @@ def _no_leaked_scheduler_or_connection(monkeypatch: pytest.MonkeyPatch) -> Itera
         pytest.fail("this test leaked:\n  " + "\n  ".join(leaks), pytrace=False)
 
 
+_REPORTED_THREADS: set[int | None] = set()
+"""Connection threads a test already failed for. A leaked connection's thread can live on: under
+``filterwarnings = error``, the ResourceWarning in aiosqlite's ``Connection.__del__`` raises
+before it stops the thread. Without this, every later test in the worker would fail for it too."""
+
+
 def _connection_threads() -> list[threading.Thread]:
-    return [t for t in threading.enumerate() if t.is_alive() and "_connection_worker_thread" in t.name]
+    return [
+        t
+        for t in threading.enumerate()
+        if t.is_alive() and "_connection_worker_thread" in t.name and t.ident not in _REPORTED_THREADS
+    ]
 
 
 @pytest.fixture(autouse=True)
