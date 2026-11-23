@@ -6,9 +6,9 @@ Keep the install in a directory named `dinnerbell`, and run every command as the
 
 ## Switch between a clone and the bundle
 
-A git clone and the [release bundle](install.md) run the same release the same way. If the clone runs `main` or an image you built, first [upgrade](setup.md#upgrade) it to a release at least as new, because an older image refuses a database that a newer one migrated.
+A git clone and the [release bundle](install.md) run the same release the same way. If the clone runs `main` or an image you built, first [upgrade](backup-and-upgrade.md#upgrade) it to a release at least as new, because an older image refuses a database that a newer one migrated.
 
-1. [Back up now](setup.md#back-up-now).
+1. [Back up now](backup-and-upgrade.md#back-up-now).
 2. In the old install, stop production and, if it runs, the test instance.
 
    ```sh

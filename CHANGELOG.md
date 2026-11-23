@@ -2,18 +2,19 @@
 
 Dinnerbell follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/). Before version 1.0, a minor release can change configuration or behavior; its **Upgrade notes** say what to do. [What 1.0 promises](CONTRIBUTING.md#what-10-promises) lists what stays stable from 1.0 on.
 
-Every release lists **Upgrade notes**. Read them before you upgrade, and always back up first (see "Upgrade" in [docs/setup.md](docs/setup.md)).
+Every release lists **Upgrade notes**. Read them before you upgrade, and always back up first (see "Upgrade" in [docs/backup-and-upgrade.md](docs/backup-and-upgrade.md)).
 
 ## [Unreleased]
 
 ### Fixed
 
 - **Date and time fields fit their card on an iPhone** (#352). iOS Safari draws a date or time field as a menu button, at least as wide as the longest value it can show, so where two share a row, such as **First day away** and **Last day away** on **Preferences** > **Away**, or **Call time** and **Usual meal time** on **Schedule**, the second ran past the card's right edge. Now every date and time field fits its column and looks like the other fields, its value at the left instead of centered.
-- **The setup guide's example backup name** (#352). [Back up](docs/setup.md#back-up) gave `pre-migrate-0040-to-0044-…`; 0.19.0's backup is `pre-migrate-0040-to-0045-…`.
+- **The setup guide's example backup name** (#352). [Back up](docs/backup-and-upgrade.md#back-up) gave `pre-migrate-0040-to-0044-…`; 0.19.0's backup is `pre-migrate-0040-to-0045-…`.
 
 ### Changed
 
 - **Shorter text on Preferences, Schedule, and Admin** (#352). **Preferences** > **How it works** says in one line what your ratings do to your scores, the Schedule page's introduction is half as long, and **Skip a day** is shorter. On **Admin**, the hints for **Randomness**, **Feedback**, and the minutes to choose roles on **Ranking** are a third to a half as long, as are **Dinnerbone's weather** on **Web app** and the **Assistant** tab's introduction and hints. The Assistant tab now sums up what Dinnerbell sends Anthropic; [What Dinnerbell sends Anthropic](docs/configuration.md#what-dinnerbell-sends-anthropic) keeps the full list.
+- **The README and setup docs cover the web app, and the setup guide is shorter** (#354). The README says members can answer in the installed web app with push notifications, or sign in with a code instead of Slack, and its diagram shows the push services. The setup guide writes `.env` with `dinnerbell init`, as the quick install does, and is about half as long: backups, upgrades, rollbacks, restoring on a new host, and verifying an image moved to [Back up and upgrade](docs/backup-and-upgrade.md), and linking Slack accounts moved to [members.md](docs/members.md#link-slack-accounts). [Add a member without Slack](docs/members.md#add-a-member-without-slack) gives the steps. Old links to the moved sections still land on a pointer.
 
 ## [0.19.0] - 2026-11-23
 

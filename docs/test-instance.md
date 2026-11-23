@@ -193,13 +193,13 @@ Use this checklist for every release: it runs the exact release on a fresh copy 
    git checkout vX.Y.Z
    ```
 
-3. Pull the release and [verify its digest](setup.md#verify-an-image). Don't go on if verification fails.
+3. Pull the release and [verify its digest](backup-and-upgrade.md#verify-an-image). Don't go on if verification fails.
 
    ```sh
    DINNERBELL_TAG=X.Y.Z deploy/dinnerbell-test pull
    ```
 
-4. In production, [back up now](setup.md#back-up-now). Note the file name, and copy the backup off the host.
+4. In production, [back up now](backup-and-upgrade.md#back-up-now). Note the file name, and copy the backup off the host.
 5. Follow steps 1 to 4 of [Copy production data into test](#copy-production-data-into-test) with that backup.
 6. Scrub the copy and start test on the release, so the scrub migrates the copy exactly as production's upgrade will.
 
@@ -210,7 +210,7 @@ Use this checklist for every release: it runs the exact release on a fresh copy 
 
 7. Check that the page shows the TEST banner and `X.Y.Z` in the footer, and that `/healthz` reports `"status":"ok"`.
 8. Rehearse a call: run `/dinnerbell-test call`, answer, vote, and let it reach a decision. Check that nobody outside the test channel was notified.
-9. Optional: if production recorded something new during the rehearsal, such as a call or a meal, [back up now](setup.md#back-up-now) again, and use that backup if you roll back.
+9. Optional: if production recorded something new during the rehearsal, such as a call or a meal, [back up now](backup-and-upgrade.md#back-up-now) again, and use that backup if you roll back.
 10. Upgrade production. Check that the digest it pulls equals the one you verified, or pin it in a `compose.override.yaml`.
 
     ```sh
@@ -223,7 +223,7 @@ Use this checklist for every release: it runs the exact release on a fresh copy 
 11. Check production's footer and `/healthz`.
 12. Stop test: `deploy/dinnerbell-test down`.
 
-If the rehearsal fails, stop test, and check out (or extract) the release production runs; production hasn't changed. If production misbehaves after step 10, [roll back](setup.md#roll-back) with the newest `pre-upgrade-*` or `pre-migrate-*` backup. If the host reboots during the rehearsal with `dinnerbell-test.service` enabled, test restarts on its default tag, so start again from step 5.
+If the rehearsal fails, stop test, and check out (or extract) the release production runs; production hasn't changed. If production misbehaves after step 10, [roll back](backup-and-upgrade.md#roll-back) with the newest `pre-upgrade-*` or `pre-migrate-*` backup. If the host reboots during the rehearsal with `dinnerbell-test.service` enabled, test restarts on its default tag, so start again from step 5.
 
 ## Troubleshoot the test instance
 
