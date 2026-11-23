@@ -163,7 +163,7 @@ Dinnerbell allows 20 requests a minute to the sign-in pages under `/auth/` from 
 
 Dinnerbell takes a client's address from the connection, or from `X-Forwarded-For` when the connection comes from an address in `DINNERBELL_TRUSTED_PROXIES`. Behind a reverse proxy, every connection comes from the proxy, so without that setting all clients share one count, and one client that hits `/auth/` over and over makes everyone wait up to a minute.
 
-Under rootless podman, leave `DINNERBELL_TRUSTED_PROXIES` empty: every connection to a published port comes from the container network's gateway, such as `10.89.0.1`, so trusting it would let any device that reaches the port choose its own count. The exception is a proxy in a container on Dinnerbell's network that connects to Dinnerbell directly, whose address you can trust if you keep it fixed.
+Under rootless podman, leave `DINNERBELL_TRUSTED_PROXIES` empty: every connection to a published port comes from the container network's gateway, such as `10.89.0.1`, so trusting it would let any device that reaches the port directly choose its own count. The exception is a proxy in a container on Dinnerbell's network that connects to Dinnerbell directly, whose address you can trust if you keep it fixed, or update the setting when it changes.
 
 To see what Dinnerbell sees, set `DINNERBELL_LOG_LEVEL=DEBUG` and sign in: each request logs `peer_ip`, the connection's address, and `client_ip`, the address the rate limit counts. Trust the proxy only when nothing but the proxy connects from its `peer_ip`.
 
