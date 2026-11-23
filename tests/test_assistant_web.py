@@ -62,8 +62,8 @@ class TestAdminAssistant:
         assert (
             "acting only as the member asking, never with admin rights. It changes nothing until they confirm. "
             "Anthropic gets the conversation, what the assistant looks up, and active members' names, never "
-            "emails or Slack IDs. A member's own preferences, ratings, and dietary needs go only when they ask "
-            "in private."
+            "emails or Slack IDs. A member's own preferences, ratings, and dietary needs, which can reveal "
+            "health or religion, go only when they ask in private."
         ) in shown
 
     @pytest.mark.parametrize(
