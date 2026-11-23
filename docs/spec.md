@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft v0.2 |
-| Date | 2026-10-21 |
+| Date | 2026-11-22 |
 | Owner | David Morgan |
 | Scope | Version 1 (single household) with a roadmap for later phases |
 
@@ -44,16 +44,14 @@ Dinnerbell moves the question to a scheduled time, collects participation and co
 - Multiple households in one deployment. The data model carries a household ID so this is a migration later, not a rewrite.
 - A native iOS app or chat platforms other than Slack. The channel layer is an adapter, so Discord can follow. The optional web app with push notifications is FR-53.
 
-### Success criteria
+### What success looks like
 
-Measure these 30 days after the household starts using Dinnerbell for dinner.
+These are goals, not measurements: Dinnerbell doesn't track them, and nothing reports on them. A month after the household starts using Dinnerbell for dinner, it hopes to see:
 
-| Metric | Target |
-|---|---|
-| Dinners decided through Dinnerbell before the decision deadline | At least 80% of days with two or more participants |
-| Roles (cook, pickup, order, coordinate) filled by someone other than the admin | At least 40% of decided dinners |
-| Same cuisine chosen twice within 7 days | Only when the household votes for it over a higher-ranked alternative |
-| Members who respond to the call on a typical day | At least 3 of 4 |
+- Most dinners with two or more people eating decided through Dinnerbell before the decision deadline.
+- Someone other than the admin cooking, picking up, ordering, or coordinating a good share of decided dinners.
+- The same cuisine twice within 7 days only when the household votes for it over a higher-ranked pick.
+- Most members answering the call on a typical day.
 
 ## 3. People and roles
 
@@ -258,7 +256,7 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 
 | ID | Requirement |
 |---|---|
-| FR-33 | Notifications are produced by the domain layer as typed events and delivered by a channel adapter. Version 1 ships the Slack adapter. |
+| FR-33 | Notifications are produced by the domain layer as typed events and delivered by a channel adapter. Version 1 ships the Slack adapter. While the optional web app is on (FR-53), the kinds 6.15 names also go to a push queue beside the outbox, and its drainer delivers them as web pushes. |
 | FR-34 | The notification matrix in section 9 defines what is sent, to whom, and where. Every notification is queued in the outbox with an idempotency key, so a transition that is retried queues it once. A clean restart doesn't send it twice. A crash during delivery can: the row is redelivered after its 5-minute lease, so delivery is at least once. A channel outage never uses up a row's attempts: the row keeps retrying for 24 hours after it was queued, then fails with a logged reason instead of being sent late. |
 
 ### 6.9 Web app
@@ -266,7 +264,7 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 | ID | Requirement |
 |---|---|
 | FR-35 | The web app is mobile-first and works in Safari on iOS with no installation. |
-| FR-36 | Pages: Today, Catalog, Preferences, History, Stats and badges, Admin. See section 11. |
+| FR-36 | Pages: Today, Catalog, Preferences, History, Stats and badges, Schedule, and Admin, plus Assistant while the assistant is on (6.14) and Get the app while the web app is on (6.15). Each call and offer has its own page. See section 11. |
 | FR-37 | Every Slack message about an event links to that event's page. |
 | FR-62 | **Fun mode** (#153). Each member and guest has a fun mode setting, default on, that they change: members on Preferences, guests on their dietary-needs page. An admin can also change a member's on Admin > Members (#181). On, the web app shows Dinnerbone's Den (section 11, "Fun mode"). Off, no page carries any of it or loads its files. It never makes a sound. |
 | FR-64 | **Light, dark, or auto** (#231). Each member and guest chooses how the web pages look: **Auto**, the default, follows the device's light or dark setting, and **Light** or **Dark** holds on every device they sign in on. They change it beside fun mode: members on Preferences, guests on their dietary-needs page. An admin can also change a member's on Admin > Members (#181). Signed-out pages always follow the device (section 11, "Light or dark"). |
@@ -298,16 +296,18 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 | FR-43 | The admin edits the variety window, ranking weights, ranking randomness (the temperature in section 7), **Feedback** (how far each rating pulls a score, FR-55), and badge thresholds (three ladders) in the web app. The ranking settings and the badge thresholds each have **Reset to defaults** (for the ranking, #177), which asks first, says what it replaces, and shows a notice once it's done (#226). The time zone is set once, by `DINNERBELL_TIMEZONE` on first start. |
 | FR-44 | Any active member can edit the standing schedule for a slot, on the web app's Schedule page: call enabled, call time, window lengths, reminder lead time, usual meal time, and default fulfillment modes (everything in FR-1). Times are wall-clock times in the household's time zone. Windows run 5 to 360 minutes, the reminder comes before responses close, the call's windows end by midnight, and, while the slot is on, voting closes before the usual meal time; a slot can always be turned off. Each change is written to the audit log with who changed what, old and new, and announced in the channel with the member's name, what changed, and the first day it applies. A save that changes nothing posts nothing, and a save over someone else's newer change is refused. A change applies from the next call: a call that's open, or already scheduled for a later day, keeps the times it was created with, and so does a day an admin skipped. A call started again, by a re-run or after a call-off, gets fresh windows from the current schedule. When today's call hasn't been created yet, today follows the new schedule if its call can still open today; if it can't, but the old schedule would still have opened one, today's call is scheduled at the old time, and the announcement says so. Turning a slot off applies today. `/dinnerbell schedule` shows each slot's schedule and links to the page; editing stays on the web. Ranking weights, randomness, and Feedback, the proposal count, the variety window, and skipping a day stay admin-only (FR-43, FR-6). |
 
-### 6.13 Later phases
+### 6.13 Optional features and later phases
 
-| ID | Requirement | Phase |
+FR-51, FR-53, and FR-55 are built; the rest are later work (section 14).
+
+| ID | Requirement | Status |
 |---|---|---|
-| FR-50 | Each member may paste a Google Calendar secret iCal URL. The app polls it read-only and shows "busy at usual dinner time" as a hint on the call roster. Never writes to any calendar. | Calendar |
-| FR-51 | **Optional assistant** ([ADR 0009](adr/0009-optional-assistant.md)). A member can ask the assistant in natural language: "something we haven't had in a month that works for everyone in," or "tacos at 7, I'll cook." The assistant acts as the member through the same domain API, never with admin rights, never bypasses filters, and changes nothing until the member confirms. The first build drafts proposals, offers, and catalog items. See [6.14](#614-assistant). | Assistant |
-| FR-52 | A Discord adapter implements the channel interface. | Channels |
-| FR-53 | **Optional web app** ([ADR 0010](adr/0010-optional-web-app.md), [6.15](#615-web-app-and-push)). Off by default. With the admin's switch on, a member installs Dinnerbell on their phone's Home Screen, signs in with a one-time code, and gets push notifications for what Slack would send them. Each member picks Slack, the web app, or both. | Channels |
-| FR-54 | Multiple households per deployment. | Multi-tenant |
-| FR-55 | **Feedback informs ranking** ([ADR 0008](adr/0008-feedback-informed-ranking.md)). *Your score:* each member's ratings of an item, in meal-date order, move an adjustment toward the rating's score (−2 to +2): three-quarters of the way for "Hated it" and "Didn't like it", halfway otherwise. It halves every 90 days from the meal's date, and only ratings set or changed after the member last set a stance on the item on Preferences count (`stance_edit`, kept even for a neutral stance, against `feedback.rating_saved_at`, which re-saving the same rating doesn't move). Their score for the item is their stated score plus the adjustment, within −2 to +2, used wherever ranking used the stated score, only while they're eating; logged meals count, and vetoes never change. The admin's **Feedback** setting, 0 (off), 1, or 2, limits how far each rating pulls: the rating's score is held within ±Feedback before the step, so 0 turns ratings off; new households start at 2, and households from before revision 0021 at 0. Preferences shows the member, and an admin who opens their preferences (#181), "From your ratings: about +1" or "With your ratings: about +0.5", to half a point, unless Feedback is 0. *The hint:* each rating weighs 0.5^(days since the meal / 90); with P, N, and F the weights of positive, negative, and "It was fine" ratings, a verdict needs two people whose own ratings weigh at least 0.5 each and P + N + F ≥ 1.5, then reads **Mixed reviews** if P ≥ 0.5 and N ≥ 0.5, else **Not well liked** if N ≥ a quarter of the total, else **Well liked** if P ≥ half. The most important issue checked in the last 90 days (wrong order, late, cold, other) adds "a recent wrong order", "recently late", "recently cold", or "a recent problem", or stands alone capitalized. The hint shows at any Feedback setting, on the catalog and as the first reason on a drawn pick, and never names anyone. | M7 |
+| FR-50 | Each member may paste a Google Calendar secret iCal URL. The app polls it read-only and shows "busy at usual dinner time" as a hint on the call roster. Never writes to any calendar. | Later: M5, after 1.0 |
+| FR-51 | **Optional assistant** ([ADR 0009](adr/0009-optional-assistant.md)). A member can ask the assistant in natural language: "something we haven't had in a month that works for everyone in," or "tacos at 7, I'll cook." The assistant acts as the member through the same domain API, never with admin rights, never bypasses filters, and changes nothing until the member confirms. The first build drafts proposals, offers, and catalog items. See [6.14](#614-assistant). | Built: M6 |
+| FR-52 | A Discord adapter implements the channel interface. | Backlog |
+| FR-53 | **Optional web app** ([ADR 0010](adr/0010-optional-web-app.md), [6.15](#615-web-app-and-push)). Off by default. With the admin's switch on, a member installs Dinnerbell on their phone's Home Screen, signs in with a one-time code, and gets push notifications for what Slack would send them. Each member picks Slack, the web app, or both. | Built: M8 |
+| FR-54 | Multiple households per deployment. | Backlog |
+| FR-55 | **Feedback informs ranking** ([ADR 0008](adr/0008-feedback-informed-ranking.md)). *Your score:* each member's ratings of an item, in meal-date order, move an adjustment toward the rating's score (−2 to +2): three-quarters of the way for "Hated it" and "Didn't like it", halfway otherwise. It halves every 90 days from the meal's date, and only ratings set or changed after the member last set a stance on the item on Preferences count (`stance_edit`, kept even for a neutral stance, against `feedback.rating_saved_at`, which re-saving the same rating doesn't move). Their score for the item is their stated score plus the adjustment, within −2 to +2, used wherever ranking used the stated score, only while they're eating; logged meals count, and vetoes never change. The admin's **Feedback** setting, 0 (off), 1, or 2, limits how far each rating pulls: the rating's score is held within ±Feedback before the step, so 0 turns ratings off; new households start at 2, and households from before revision 0021 at 0. Preferences shows the member, and an admin who opens their preferences (#181), "From your ratings: about +1" or "With your ratings: about +0.5", to half a point, unless Feedback is 0. *The hint:* each rating weighs 0.5^(days since the meal / 90); with P, N, and F the weights of positive, negative, and "It was fine" ratings, a verdict needs two people whose own ratings weigh at least 0.5 each and P + N + F ≥ 1.5, then reads **Mixed reviews** if P ≥ 0.5 and N ≥ 0.5, else **Not well liked** if N ≥ a quarter of the total, else **Well liked** if P ≥ half. The most important issue checked in the last 90 days (wrong order, late, cold, other) adds "a recent wrong order", "recently late", "recently cold", or "a recent problem", or stands alone capitalized. The hint shows at any Feedback setting, on the catalog and as the first reason on a drawn pick, and never names anyone. | Built: M7 |
 
 ### 6.14 Assistant
 
@@ -596,6 +596,7 @@ Catch-up stops where it would be too late to matter. An undecided call (schedule
 | Monthly recap | Everyone | Channel post |
 | Call called off | Everyone who was in or maybe, and the coordinator | Channel post, threaded. None for a call that was never posted |
 | Called off after the decision | Each member assigned to cook, pick up, or order | Direct message |
+| Re-run from voting or decided | Each active member who was to cook, pick up, or order, except the admin who re-ran it | Direct message (FR-6). The old run's call, picks, and decision messages say the call started again |
 | Unposted call called off by someone else | The member who started it | Direct message |
 | Schedule changed | Everyone | Channel post naming who changed it, what changed, and the first day it applies (FR-44). No mentions |
 | Feedback reminder | Participants who turned the reminder on and haven't turned off **Send me reminders** | Direct message, once per meal |
@@ -657,11 +658,13 @@ Mobile-first server-rendered pages with HTMX for in-place updates. No JavaScript
 |---|---|
 | Today | For a guest, only the calls they're invited to, with In, Out, and the roles, and a page for their dietary needs, fun mode, and light or dark (FR-64). For members: open events with roster, which lists each guest once, marked "Guest invited by Sam", with what you may do for them on their row (#238), proposals, votes, and the same actions Slack offers, including **Call it off** and **Close now** for whoever FR-56 allows. A called-off call shows who called it off and why, and **Start {slot} again**. **Coming up** lists calls scheduled for later, when each posts, and **Post it now**. Start a call, now or for a later day, optionally posting it now, or post an offer. With fun mode on, Dinnerbone's Den sits beside the greeting (FR-62, "Fun mode" below), and at the top of each call's own page, beside **Today**. |
 | Catalog | Search and filter items by tag, kind, mode, 20 matches a page; the page links keep the search. Add and edit items. See last eaten and each item's household hint, such as "Well liked" (FR-55). Tag management: any member adds tags; the admin renames and merges them. Import a catalog file with a preview (FR-26). |
-| Preferences | Tags and items with veto and −2 to +2 controls, and beside an item, what the member's own ratings make their score (FR-55). Capability flags (**Cook**, **Pick up**, **Order**), which start a call's offers on when the member answers In (FR-8). **Send me reminders**, with **Remind me "How was it?"** (the feedback reminder, FR-48) nested under it and dimmed while reminders are off. **Away**: the first and last day away, with the status line and **I'm back** or **Clear** (FR-63). Fun mode on or off (FR-62). Light, dark, or auto (FR-64). Calendar URL (later phase). |
+| Preferences | Tags and items with veto and −2 to +2 controls, and beside an item, what the member's own ratings make their score (FR-55). Capability flags (**Cook**, **Pick up**, **Order**), which start a call's offers on when the member answers In (FR-8). **Send me reminders**, with **Remind me "How was it?"** (the feedback reminder, FR-48) nested under it and dimmed while reminders are off. **Away**: the first and last day away, with the status line and **I'm back** or **Clear** (FR-63). Fun mode on or off (FR-62). Light, dark, or auto (FR-64). While the web app is on (6.15): **Notifications**, with **Slack**, **Web app**, or **Both** and **Turn on notifications** for this device, and, on the member's own page, **Devices**, which lists each signed-in device with **Sign out** and gets a sign-in code. |
 | History | Meals by week, newest first, 20 meals a page. Cuisines in the current variety window. Give or edit feedback on recent meals. |
 | Stats | Two tabs for members: **Yours**, with contribution counts and badges with progress to the next tier, and **Household**, with household totals and newest badges. Guests see only their own pitching-in badges, with Quarterback only if they earned it before guests stopped coordinating (#227). |
 | Schedule | Each slot's standing schedule, which any member can change (FR-44). Admins also skip a day's call here (FR-6), with the same audit row. |
-| Admin | Named **Admin** in the navigation, for admins only, with three tabs. **Members**: members and invitations, each member's preferences (the member's Preferences page, with a banner that says whose it is, #181), Slack mapping, guests (add, edit, link Slack, link to a member, promote, remove), **Join from the channel**, and **Add people from the channel**. **Ranking**: ranking weights, randomness, and Feedback (FR-55), proposals per call, the variety window, and minutes to choose roles. **Badges**: badge thresholds. Stuck calls show as a banner on every tab. |
+| Assistant | While the assistant is on: a conversation with it, with its drafts and **Confirm** (6.14). |
+| Get the app | While the web app is on: the Add to Home Screen steps and **Turn on notifications** (6.15). |
+| Admin | Named **Admin** in the navigation, for admins only, with four tabs, and a fifth, **Assistant**, when `DINNERBELL_ANTHROPIC_API_KEY` is set. **Members**: members and invitations, each member's preferences (the member's Preferences page, with a banner that says whose it is, #181), Slack mapping, a sign-in code and **Sign out everywhere** for each member (6.15), guests (add, edit, link Slack, link to a member, promote, remove), **Join from the channel**, and **Add people from the channel**. **Ranking**: ranking weights, randomness, and Feedback (FR-55), proposals per call, the variety window, and minutes to choose roles. **Badges**: badge thresholds. **Web app**: the web app's switch, how many devices get notifications, and its warnings (6.15), and **Dinnerbone's weather** ([ADR 0011](adr/0011-local-weather.md)). **Assistant**: the assistant's switch, **Monthly cap**, **Conversation hours**, and this month's usage (6.14). Stuck calls show as a banner on every tab. |
 
 The web app has no page for the household's time zone or backups. The time zone comes from `DINNERBELL_TIMEZONE` on first start ([configuration](configuration.md)); the last backup's time is in `/healthz` (section 13.9).
 
@@ -782,25 +785,25 @@ Rules: every slot's events count alike, so a breakfast cooked counts toward Chef
 
 ```
                  ┌──────────────┐  Socket Mode (outbound WebSocket)
-   Slack ◄──────►│ Slack adapter│◄────────────┐
-                 └──────┬───────┘             │
-                        │ channel interface   │
-                 ┌──────▼───────┐      ┌──────┴──────┐
- Pangolin ─────► │  Web (FastAPI│      │  Scheduler  │
- HTTPS           │  + HTMX)     │      │ (APScheduler│
-                 └──────┬───────┘      └──────┬──────┘
-                        │   domain services   │
-                 ┌──────▼─────────────────────▼──────┐
-                 │  Domain: events, ranking, badges, │
-                 │  catalog, preferences, outbox     │
-                 └──────────────┬────────────────────┘
+   Slack ◄──────►│ Slack adapter│◄──────────────┐
+                 └──────┬───────┘               │ outbox drainer
+                        │ channel interface     │
+                 ┌──────▼───────┐       ┌───────┴────────┐  push drainer   ┌───────────────┐
+ Pangolin ─────► │ Web (FastAPI │       │    Scheduler   ├────────────────►│ Push services │
+ HTTPS           │ + HTMX)      │       │  (APScheduler) ├──────┐          └───────────────┘
+                 └──────┬───────┘       └───────┬────────┘      │ weather job  ┌────────────┐
+                        │ domain services       │               └─────────────►│ Open-Meteo │
+                 ┌──────▼───────────────────────▼─────┐                        └────────────┘
+                 │ Domain: events, ranking, badges,   │
+                 │ catalog, preferences, outbox, push │
+                 └──────────────┬─────────────────────┘
                                 │ SQLAlchemy
                          ┌──────▼──────┐
                          │   SQLite    │  /data/dinnerbell.db
                          └─────────────┘
 ```
 
-One container, one Python process, one asyncio event loop running the web server, the scheduler, the Slack Socket Mode client, and the outbox drainer. SQLite in WAL mode handles the household's write volume with room to spare. If the process ever needs to split, the outbox table is the seam.
+One container, one Python process, one asyncio event loop running the web server, the Slack Socket Mode client, and the scheduler, whose jobs include the outbox drainer, the push drainer, and the weather job. The push drainer sends only while the web app is on (6.15), and the weather job asks Open-Meteo only while an admin has local weather on ([ADR 0011](adr/0011-local-weather.md)). The assistant, when it's configured, calls Anthropic from the web and Slack (6.14). SQLite in WAL mode handles the household's write volume with room to spare. If the process ever needs to split, the outbox table is the seam.
 
 ### 13.2 Layers
 
@@ -811,7 +814,7 @@ One container, one Python process, one asyncio event loop running the web server
 | `db` | SQLAlchemy models, Alembic migrations, repositories. | domain |
 | `channels` | `Channel` protocol plus `channels/slack`. Renders notification events to Slack blocks, maps interactions back to service calls. | services |
 | `web` | FastAPI routes, Jinja templates, HTMX fragments, auth. | services |
-| `scheduler` | Cron-style jobs: open calls, close windows, mark done, monthly recap, calendar poll, backups. | services |
+| `scheduler` | Cron-style and interval jobs: the heartbeat; the call tick, which opens calls, closes windows, marks events done, and posts the monthly recap; the outbox drainer; the push drainer and the push purge; the session purge; the conversation purge; the weather refresh; and the nightly backup. | services |
 
 The rule that keeps this maintainable: `domain` imports nothing from the other layers, and only `services` writes to the database.
 
@@ -934,7 +937,6 @@ Household-level settings that change over time (slot schedule, weights, threshol
 
 - `/healthz` returns the version (with the build stamp on `main` builds), database reachability, scheduler last tick, Slack socket connection state, outbox backlog, last backup time, and the number of stuck calls: open calls whose next scheduler step has been due for more than an hour (#142). While the web app is on, it also reports the push queue's backlog and its oldest push's age (6.15). Uptime Kuma polls it.
 - Structured JSON logs to stdout with request ID, member ID, and event ID fields.
-- Optional `/metrics` in Prometheus format behind an admin-only flag.
 
 ### 13.10 Testing
 
@@ -946,7 +948,7 @@ Household-level settings that change over time (slot schedule, weights, threshol
 | Web | Routes, auth flow, CSRF, authorization | httpx `TestClient`; a fake OIDC provider fixture |
 | End to end | Scheduler drives a full call through decision with a fake clock | pytest with frozen time |
 
-CI on every pull request: `ruff` (lint and format), `mypy --strict` on `domain` and `services`, pytest with coverage, `pip-audit`, and a container build. Coverage threshold starts at 85% for `domain`.
+CI on every pull request: `ruff` (lint and format), `mypy` in strict mode on the whole package, pytest in eight parallel shards with branch coverage merged across them and a 90% floor for the package, `pip-audit`, a container build with an image scan, a check of the compose files and the install bundle, and the DCO sign-off check.
 
 ### 13.11 Repository layout
 
@@ -987,10 +989,11 @@ dinnerbell/
 | M4 Contributions and badges | Contribution counting, badges, channel announcements, Stats page, monthly recap | First badges awarded |
 | M7 Feedback-informed ranking | ADR 0008 and its implementation (FR-55). Existing households start with **Feedback** at 0, and the admin sets it to 2 when ready to let ratings move scores. | Proposals reflect "Hated it" and "Loved it" with reasons that say so |
 | M6 Assistant | Optional assistant (ADR 0009): conversations on the web, in DMs, and in channel threads; drafted proposals and offers through the domain API; catalog drafts from a description or menu link, through the import preview | "Find us something new" in a channel thread during voting yields a draft whose **Confirm** adds a filtered proposal, and a menu link opens an import preview |
+| M8 Web app | Optional web app (ADR 0010, FR-53, 6.15): the admin's switch, each member's choice of Slack, the web app, or both, the installable app, sign-in with a code, Devices, and web push | A member without Slack adds Dinnerbell to an iPhone's Home Screen, signs in with a code, and gets the dinner call as a push |
 | M5 Calendar hints | Secret iCal URL polling, busy hints on the roster | Hints show for members who opted in |
 | Backlog | Discord adapter, multi-household, recipes | |
 
-The table is in build order. M0 through M2 are the minimum for the household to switch over, and M3 and M4 followed within weeks. M7 is the last milestone before 1.0, which ships once daily changes settle down. M6 and then M5 come after 1.0. Each milestone is a set of pull requests with review before merge.
+The table is in build order. M0 through M2 were the minimum for the household to switch over, and M3 and M4 followed within weeks. M7 shipped in 0.11.0, M6 in 0.16.0, and M8 in the first release after 0.18.1. 1.0 follows the fixes from the 1.0 review (#320) and ships once daily changes settle down; [What 1.0 promises](../CONTRIBUTING.md#what-10-promises) says what it keeps stable. M5 comes after 1.0. Each milestone is a set of pull requests with review before merge.
 
 ## 15. Open questions
 

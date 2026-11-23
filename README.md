@@ -6,6 +6,8 @@ It asks in Slack, ranks meals that fit everyone eating, assigns the work, and ce
 
 You need a host that runs containers, a Slack workspace, and an HTTPS hostname your phones can reach.
 
+**Status:** before 1.0, so a minor release can still change settings or behavior; its **Upgrade notes** in the [changelog](CHANGELOG.md) say what to do. [What 1.0 promises](CONTRIBUTING.md#what-10-promises) lists what stays stable from 1.0.
+
 ## How a dinner works
 
 Dinnerbell asks early, so dinner is settled before anyone is hungry. With the default schedule, it asks at 3:00 PM for a 6:30 PM dinner. Here's a takeout night for a family of four.
