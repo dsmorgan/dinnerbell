@@ -27,14 +27,14 @@
   <h2 id="weather-heading">Dinnerbone's weather</h2>
   {% if weather_notice %}<p class="alert ok" role="status">{{ weather_notice }}</p>{% endif %}
   {% if weather_error %}<p class="alert error" role="alert" id="weather-error">{{ weather_error }}</p>{% endif %}
-  <p class="small muted">In fun mode, the den on Today and on each call's page shows the season's weather, a little different each day. Turn this on to show the weather outside instead. It works whether or not the web app is on.</p>
+  <p class="small muted">In fun mode, the den shows the season's weather. Turn this on to show the weather outside instead, with or without the web app.</p>
   <label class="check"><input type="checkbox" name="on" value="on" aria-describedby="weather-privacy"{% if weather_values.on %} checked{% endif %}> Show local weather</label>
   <div class="pair">
     <label class="field"><span>ZIP or postal code</span><input name="postal_code" value="{{ weather_values.postal_code }}" maxlength="10" autocomplete="postal-code" spellcheck="false"></label>
     <label class="field"><span>Country</span><input name="country" value="{{ weather_values.country }}" maxlength="2" autocomplete="country" spellcheck="false" aria-describedby="weather-country"></label>
   </div>
   <p class="small muted" id="weather-country">Two letters, such as US or CA.</p>
-  <p class="small muted" id="weather-privacy">When you save, Dinnerbell sends the postal code and country to Open-Meteo once, to find the place. After that, every 1 to 3 hours, it sends only that place's location, rounded to about 10 km. Open-Meteo also sees this server's internet address. Nothing about members leaves Dinnerbell.</p>
+  <p class="small muted" id="weather-privacy">Dinnerbell sends Open-Meteo the code and country once, to find the place, then that place, rounded to about 10 km, every 1 to 3 hours. Open-Meteo sees this server's address; nothing about members leaves Dinnerbell.</p>
   {% if weather and weather.on %}
   <p class="small" id="weather-status">Showing the weather near {{ weather.place.name }}.
     {%- if weather.failing_since %} <strong>Couldn't reach the weather service since {{ weather.failing_since|local_date(principal.household.timezone)|day }} at {{ weather.failing_since|clock(principal.household.timezone) }}.</strong> {{ "The den shows the last update until it's 6 hours old, then the season's weather." if weather_fresh else "The den shows the season's weather until it can." }}

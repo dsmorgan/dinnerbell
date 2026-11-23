@@ -13,7 +13,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ### Changed
 
-- **Shorter text on Preferences and Schedule** (#352). **Preferences** > **How it works** says in one line what your ratings do to your scores, the Schedule page's introduction is half as long, and **Skip a day** is shorter.
+- **Shorter text on Preferences, Schedule, and Admin** (#352). **Preferences** > **How it works** says in one line what your ratings do to your scores, the Schedule page's introduction is half as long, and **Skip a day** is shorter. On **Admin**, the hints for **Randomness**, **Feedback**, and the minutes to choose roles on **Ranking** are a third to a half as long, as are **Dinnerbone's weather** on **Web app** and the **Assistant** tab's introduction and hints. The Assistant tab now sums up what Dinnerbell sends Anthropic; [What Dinnerbell sends Anthropic](docs/configuration.md#what-dinnerbell-sends-anthropic) keeps the full list.
 
 ## [0.19.0] - 2026-11-23
 

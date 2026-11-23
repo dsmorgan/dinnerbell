@@ -54,28 +54,16 @@ class TestAdminAssistant:
         assert audit.payload["assistant_enabled"] == {"from": False, "to": True}
 
     def test_the_page_says_what_goes_to_anthropic(self, client: TestClient, provider: FakeProvider) -> None:
-        """The disclosure matches docs/configuration.md: active members' display names with their
-        labels (#277), never a guest's, and no one's ratings, a member's own data only when they ask
-        in private (#253), dietary needs named (#278), and the household hints the meal-history
-        tool sends (#264)."""
+        """The page sums up docs/configuration.md's disclosure in a few lines (#352): active members'
+        display names go (#277), no emails or Slack IDs, and a member's own data only when they ask in
+        private (#253), dietary needs named (#278). The docs keep the whole list."""
         sign_in(client, provider)
         shown = " ".join(page(client.get("/admin/assistant")).split())
         assert (
-            'with members shown as "Member 1", "Member 2", and so on. Each request also lists every active '
-            'member\'s display name with their label, such as "Member 2: Theodore", so the assistant can tell who a '
-            "member means by a name they type. Guests and former members are never listed. A name someone types, or "
-            "the assistant writes in a reply, stays in the conversation as written until Conversation hours delete "
-            "it. It never sends emails, Slack IDs, preferences, vetoes, or anyone's ratings."
-        ) in shown
-        assert (
-            "The one exception is a member's own preferences, vetoes, dietary needs, what they can usually do "
-            "(cook, pick up, or order), ratings, feedback, and away days, which it sends only when that member asks "
-            "about them in their own conversation, on the Assistant page or in a direct message. Dietary needs can "
-            "reveal health or religion."
-        ) in shown
-        assert (
-            "To answer questions about what the household has eaten, it sends each item's household hint, "
-            'such as "Well liked", the same words every member sees on Catalog.'
+            "acting only as the member asking, never with admin rights. It changes nothing until they confirm. "
+            "Anthropic gets the conversation, what the assistant looks up, and active members' names, never "
+            "emails or Slack IDs. A member's own preferences, ratings, and dietary needs go only when they ask "
+            "in private."
         ) in shown
 
     @pytest.mark.parametrize(
