@@ -94,7 +94,7 @@ deploy/dinnerbell-test down
 - To check test, look for the TEST banner, or `"instance":"TEST"` from `curl -s http://<DINNERBELL_BIND>:8014/healthz`. Test is usually stopped, so don't give it an always-on monitor.
 - A new test instance starts with an empty database and invites `DINNERBELL_ADMIN_EMAIL`. Add test members on **Admin** > **Members**, or [copy production's data](#copy-production-data-into-test).
 
-Always run test through `deploy/dinnerbell-test`, never `podman-compose` directly. The script sets the project, volume, env file, tag, and port together, and refuses anything that would mix test and production, such as test's Slack app on production's database, naming the reason. `deploy/dinnerbell-test --help` lists every check and variable.
+Always run test through `deploy/dinnerbell-test`, never `podman-compose` directly: running compose yourself can put test's Slack app on production's database. The script sets the project, volume, env file, tag, and port together, and refuses anything that would mix test and production, naming the reason. `deploy/dinnerbell-test --help` lists every check and variable.
 
 To change what the script uses, set a variable in front of a command, such as `DINNERBELL_TAG=X.Y.Z deploy/dinnerbell-test up -d`. Never `export` these variables: production's compose commands in the same shell would read them too.
 
@@ -143,7 +143,7 @@ A copy of production's data tests migrations and features against real history. 
    deploy/dinnerbell-test run --rm dinnerbell scrub-test --keep you@example.com
    ```
 
-   Before it changes anything, `scrub-test` prints the household, its last activity, and counts of members, slots, open events, unsent notifications, and feedback. Check that they match the backup and its date, then type `scrub`, or, without a terminal, run the command again with `--yes`.
+   Before it changes anything, `scrub-test` prints the household, its last activity, and counts of members, slots, open events, unsent notifications, and feedback. Check that they match the backup, and that the last activity is close to the backup's date, then type `scrub`, or, without a terminal, run the command again with `--yes`.
 
 6. Start test.
 
@@ -179,7 +179,7 @@ On test, you can throw a call away to test the same slot and day again. These co
 
 Discarding deletes the call and everything in it, including the meal it logged, its feedback, and its unsent notifications. You can't undo it, and IDs are never reused. Its Slack messages change to "Discarded (test)", with no buttons.
 
-On test, you can also start a called-off call again at any time that day. On production, **Start dinner again** works only until two hours after the usual meal time.
+On test, you can also start a called-off call again at any time that day, on the web, in App Home, or with `/dinnerbell-test call`. On production, **Start dinner again** works only until two hours after the usual meal time.
 
 ## Promote a release
 

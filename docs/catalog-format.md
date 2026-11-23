@@ -119,7 +119,7 @@ An entry without `meals` is for lunch and dinner, because most places don't serv
 - **An explicit empty value clears a field.** On an update, `notes: null`, `url: ""`, or `tags: []` removes the stored value.
 - **Imports are all or nothing.** If any entry fails validation, nothing is saved, and the preview lists every error with its location, such as `restaurants[3].modes[0]: "drive-thru" is not one of pickup, delivery`. Positions count from 0, so `restaurants[3]` is the fourth restaurant.
 - **Plain YAML only.** Dinnerbell refuses anchors and aliases (`&name`, `*name`), repeated keys in one mapping, nesting deeper than 20 levels, more than 50,000 values, and files over 1 MB.
-- **Preferences aren't part of the file.** Each person sets their own in the app.
+- **Preferences aren't part of the file.** Each person sets their own preferences in the app.
 
 ## Export the catalog
 

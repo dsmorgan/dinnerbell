@@ -50,7 +50,7 @@ A git clone and the [release bundle](install.md) run the same release the same w
 
 If Dinnerbell starts empty, compose created a new volume because the directory name or the user differs. Run `podman-compose down`, fix the name or user, and start it again. Your data is still in the old volume.
 
-A clone's `deploy/dinnerbell-test` runs `main` by default, and a bundle's runs the bundle's release, which may be older than the `main` that migrated test's database and so refuse it. To keep test on `main` after you move to the bundle, put `DINNERBELL_TAG=main` in front of each test command, and if you enabled the test boot unit, add `Environment=DINNERBELL_TAG=main` under `[Service]` with `systemctl --user edit dinnerbell-test.service`. The [boot units](setup.md#start-at-boot) need no other change, because the path stays the same.
+A clone's `deploy/dinnerbell-test` runs `main` by default, and a bundle's runs the bundle's release. If a newer `main` migrated test's database, the bundle's older image refuses it. To keep test on `main` after you move to the bundle, put `DINNERBELL_TAG=main` in front of each test command, and if you enabled the test boot unit, add `Environment=DINNERBELL_TAG=main` under `[Service]` with `systemctl --user edit dinnerbell-test.service`. The [boot units](setup.md#start-at-boot) need no other change, because the path stays the same.
 
 With Docker, stop test in step 2 with `DINNERBELL_COMPOSE="docker compose" deploy/dinnerbell-test down`.
 
