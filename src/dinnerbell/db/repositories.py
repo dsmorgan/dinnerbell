@@ -425,6 +425,14 @@ class AuditRepository:
         )
         return int(getattr(result, "rowcount", 0) or 0)
 
+    async def delete_action(self, household_id: int, action: str) -> int:
+        """Delete every row of the household with exactly this ``action``, for ``scrub-test``;
+        returns how many."""
+        result = await self._session.execute(
+            delete(AuditRow).where(AuditRow.household_id == household_id, AuditRow.action == action)
+        )
+        return int(getattr(result, "rowcount", 0) or 0)
+
     async def redact(self, household_id: int, prefixes: tuple[str, ...], payload: dict[str, Any]) -> int:
         """Replace the payload of every audit row whose action starts with one of ``prefixes``,
         and a target naming a Slack user, for ``scrub-test``. Returns how many changed."""

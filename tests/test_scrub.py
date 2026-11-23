@@ -33,13 +33,15 @@ from dinnerbell.db.models import (
     ShownPlaceRow,
 )
 from dinnerbell.db.outbox import OutboxRepository
-from dinnerbell.db.repositories import MemberRepository, SessionRepository
+from dinnerbell.db.repositories import AuditRepository, MemberRepository, SessionRepository
 from dinnerbell.domain.badges import Announcement, BadgeKey, Tier
 from dinnerbell.domain.contributions import Credit, Kind
 from dinnerbell.domain.events import EndReason, EventState
 from dinnerbell.domain.feedback import FeedbackInput, MealFacts, Rating
+from dinnerbell.domain.identity import IdentityClaims
 from dinnerbell.domain.meals import MemberRef, Slot
 from dinnerbell.domain.schedule import slot_schedules
+from dinnerbell.services import auth
 from dinnerbell.services.bootstrap import bootstrap
 from dinnerbell.services.database import Database, open_database
 from dinnerbell.services.scrub import ScrubPreview, ScrubRefused, ScrubSummary, scrub_test
@@ -342,6 +344,74 @@ async def test_scrub_deletes_the_local_weather_setting(house: House) -> None:
     again = await scrub(house)
     assert not again.local_weather_cleared
     assert not [line for line in again.lines() if "weather" in line.lower()]
+
+
+async def test_scrub_deletes_every_refused_sign_in(house: House) -> None:
+    """A refusal holds a stranger's OIDC subject, email, and Slack team ID: test never keeps them."""
+    async with house.sessionmaker() as db:
+        for number in (1, 2):
+            claims = IdentityClaims(
+                subject=f"U-stranger-{number}",
+                email=f"stranger{number}@elsewhere.example",
+                email_verified=True,
+                slack_team_id="T0ELSEWHERE",
+            )
+            await auth.sign_in(db, claims, required_team_id=None, now=house.clock())
+    assert len(await house.audits(auth.REFUSAL_ACTION)) == 2
+
+    summary = await scrub(house)
+
+    assert summary.refusals_deleted == 2
+    assert "Refused sign-ins deleted: 2" in summary.lines()
+    assert await house.audits(auth.REFUSAL_ACTION) == []
+    async with house.sessionmaker() as db:
+        payloads = [r.payload for r in await db.scalars(select(AuditRow))]
+    assert "elsewhere.example" not in str(payloads) and "T0ELSEWHERE" not in str(payloads)
+    again = await scrub(house)
+    assert again.refusals_deleted == 0
+
+
+MEMBER_SLACK_ROWS = {
+    "member.linked": {"oidc_subject": "U-oidc", "slack_user_id": "U09LINK"},
+    "member.slack_user_updated": {"slack_user_id": "U09UPD"},
+    "member.slack_user_conflict": {"slack_user_id": "U09CLASH", "held_by": 1},
+    "member.slack_user_set": {"from": "U09OLD", "to": "U09SET"},
+    "member.slack_user_cleared": {"from": "U09GONE", "to": None},
+    "member.slack_link_unlocked": {"slack_user_id": "U09UNLOCK"},
+    "member.slack_linked": {"slack_user_id": "U09MATCH", "matched_by": "email"},
+}
+
+
+async def test_scrub_redacts_the_slack_ids_of_members_it_doesnt_keep(house: House) -> None:
+    """The scrub unlinks every member it doesn't keep, so the audit rows naming their Slack
+    accounts lose their payloads too; a kept member's stay, as their link does."""
+    async with house.sessionmaker() as db:
+        audits = AuditRepository(db)
+        for name in ("Kim", "Sam"):
+            for action, payload in MEMBER_SLACK_ROWS.items():
+                await audits.record(
+                    household_id=house.household.id,
+                    actor_member_id=house[name].id,
+                    action=action,
+                    target=f"member:{house[name].id}",
+                    payload=payload,
+                    now=house.clock(),
+                )
+        await db.commit()
+
+    summary = await scrub(house)
+
+    assert summary.member_slack_audit_redacted == len(MEMBER_SLACK_ROWS)
+    assert f"Audit rows naming the Slack account of a member not kept, redacted: {len(MEMBER_SLACK_ROWS)}" in (
+        summary.lines()
+    )
+    rows = [r for r in await house.audits("member.") if r.action in MEMBER_SLACK_ROWS]
+    kim, sam = f"member:{house['Kim'].id}", f"member:{house['Sam'].id}"
+    redacted = {action: {"redacted": "scrub-test"} for action in MEMBER_SLACK_ROWS}
+    assert {r.action: r.payload for r in rows if r.target == kim} == redacted
+    assert {r.action: r.payload for r in rows if r.target == sam} == MEMBER_SLACK_ROWS
+    again = await scrub(house)
+    assert again.member_slack_audit_redacted == 0
 
 
 async def test_a_second_run_changes_nothing(house: House) -> None:

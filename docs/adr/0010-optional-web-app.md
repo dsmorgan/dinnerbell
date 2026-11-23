@@ -44,3 +44,7 @@ The owner's constraints: the feature is optional and changes nothing until an ad
 - A web-only member has no Slack buttons, App Home, slash command, or badge art in posts. The web pages already cover a call.
 - The service worker must be served from the site root with its own headers, not from `/static`, because of its scope and the CSP that `/static` gets.
 - Before the issue closes, the owner tests on a real iPhone: install the app, sign in with a code, get the 3:00 PM call, answer, vote, and see the decision. Delivery under Focus modes and Low Power Mode is checked then.
+
+## Amendments
+
+- 2026-11-22 (#335): An admin's **Sign out everywhere** no longer depends on the switch. Sessions last 90 days on every install, web app or not, so with the switch off, which is the default, a stolen signed-in laptop could be cut off only by deactivating the member. Ending sessions is a security control, not a web app feature. Sign-in codes, a member's own **Devices**, and signing out one device still need the switch.

@@ -27,6 +27,43 @@ GitHub sends a scheduled workflow's failure notice to the person who last change
 - **Bind only to the interface your reverse proxy reaches.** Keep the default `DINNERBELL_BIND`, `127.0.0.1`, when the proxy (for Pangolin, Newt) runs on this host; otherwise set it to that interface's address. Never use `0.0.0.0`: the proxy must be the only way in. To confirm, run `ss -ltn | grep -E ':801[34]'` and check the listening addresses.
 - **Keep the compose hardening flags.** `compose.yaml` runs the container with `read_only`, `cap_drop: ALL`, `no-new-privileges`, a size-capped `/tmp`, a process limit, a memory limit, and rotated logs. Don't remove them in `compose.override.yaml`.
 
+## Send HSTS from your reverse proxy
+
+Dinnerbell sends no `Strict-Transport-Security` (HSTS) header. Your reverse proxy terminates TLS, so it must send it. Without HSTS, a browser that opens your hostname without `https://` makes its first request over plain HTTP, which someone on the same network can intercept.
+
+With a self-hosted Pangolin, which runs Traefik:
+
+1. In the dynamic configuration file that Traefik loads, `config/traefik/dynamic_config.yml` in a default install, add a headers middleware under `http.middlewares`, beside the ones already there:
+
+   ```yaml
+   http:
+     middlewares:
+       hsts:
+         headers:
+           stsSeconds: 31536000
+   ```
+
+2. In `config/traefik/traefik_config.yml`, attach it to the HTTPS entry point, `websecure`, beside the keys already under `http`:
+
+   ```yaml
+   entryPoints:
+     websecure:
+       http:
+         middlewares:
+           - hsts@file
+   ```
+
+3. Restart Pangolin's Traefik container.
+4. Check that the header arrives:
+
+   ```sh
+   curl -sI https://<your hostname>/healthz | grep -i strict-transport-security
+   ```
+
+The entry point applies the header to every resource on that Pangolin, so each must serve HTTPS. Browsers remember it for `stsSeconds`, one year here. Add `stsIncludeSubdomains` or `stsPreload` only if every subdomain of your domain serves HTTPS.
+
+With any other reverse proxy, add `Strict-Transport-Security: max-age=31536000` to its HTTPS responses for Dinnerbell's hostname, and check it with the same `curl` command.
+
 ## Allow only the outbound connections Dinnerbell needs
 
 If your firewall limits outbound connections, Dinnerbell needs HTTPS (port 443) to these hosts, and only while the feature that uses them is on:

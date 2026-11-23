@@ -204,7 +204,6 @@ def test_off_every_code_and_device_route_is_the_usual_404(admin: TestClient, sam
         "/preferences/sign-in-code",
         f"/preferences/devices/{mine.public_id}/sign-out",
         f"/admin/members/{sam}/sign-in-code",
-        f"/admin/members/{sam}/sign-out",
     ):
         response = submit(admin, path)
         assert response.status_code == 404, path
@@ -212,8 +211,45 @@ def test_off_every_code_and_device_route_is_the_usual_404(admin: TestClient, sam
     assert 'href="/auth/code"' not in phone.get("/").text
     assert 'id="devices"' not in admin.get("/preferences").text
     members = admin.get("/admin/members").text
-    assert "/sign-in-code" not in members and "/sign-out" not in members
+    assert "/sign-in-code" not in members and "/preferences/devices/" not in members
     assert codes(migrated) == [] and len(sessions_of(migrated, mine.member_id)) == 1
+
+
+def test_off_an_admin_still_signs_a_member_out_everywhere(
+    admin: TestClient, provider: FakeProvider, sam: int, migrated: Settings
+) -> None:
+    """A lost laptop's session lasts 90 days whether or not the web app is on, so ending it
+    isn't a web app feature (ADR 0010, amended)."""
+    admin_id = member(migrated, "admin@example.com").id
+    laptop = device(admin, MAC_CHROME)
+    sign_in(laptop, provider, claims={"sub": SAM[0], "email": SAM[1]})
+    assert len(sessions_of(migrated, sam)) == 1
+    members = admin.get("/admin/members").text
+    assert f"/admin/members/{sam}/sign-out" in members and f"/admin/members/{admin_id}/sign-out" not in members
+    assert "/sign-in-code" not in members
+    assert admin.post(f"/admin/members/{sam}/sign-out").status_code == 403  # no CSRF token
+    assert len(sessions_of(migrated, sam)) == 1
+    response = submit(admin, f"/admin/members/{sam}/sign-out")
+    assert (response.status_code, response.headers["location"]) == (
+        303,
+        f"/admin/members?notice=signed_out#member-{sam}",
+    )
+    assert sessions_of(migrated, sam) == [] and 'href="/auth/login"' in laptop.get("/").text
+    [audit] = audits(migrated, "member.signed_out_everywhere")
+    assert (audit.actor_member_id, audit.target, audit.payload) == (
+        admin_id,
+        f"member:{sam}",
+        {"sessions": 1, "codes": 0},
+    )
+    sign_in_as(admin, provider, *SAM)
+    assert submit(admin, f"/admin/members/{admin_id}/sign-out").status_code == 403
+
+
+def test_off_the_htmx_row_keeps_sign_out_everywhere(admin: TestClient, sam: int) -> None:
+    assert submit(admin, f"/admin/members/{sam}/deactivate").status_code == 303
+    row = htmx(admin, f"/admin/members/{sam}/reactivate", {})
+    assert row.status_code == 200 and f"/admin/members/{sam}/sign-out" in row.text
+    assert "/sign-in-code" not in row.text
 
 
 def test_codes_and_sessions_stay_when_the_switch_goes_off(on: TestClient, sam: int, migrated: Settings) -> None:

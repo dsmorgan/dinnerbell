@@ -144,6 +144,13 @@ Dinnerbell calls only these hosts, at addresses it builds itself, over HTTPS, an
 
 Except for Slack's connection, every request Dinnerbell makes, to the sign-in provider, Anthropic, the push services, menu links, and the weather, ignores proxy and CA bundle environment variables, such as `HTTPS_PROXY` and `SSL_CERT_FILE`, verifies TLS against Dinnerbell's bundled certificate authorities, and never follows a redirect. The host must reach those services directly, without a proxy.
 
+Slack's connection, its API calls and Socket Mode, still follows these environment variables:
+
+- The first of `HTTPS_PROXY`, `https_proxy`, `HTTP_PROXY`, and `http_proxy` that is set, in that order, is the proxy for every Slack connection. So `HTTP_PROXY` applies to Slack's HTTPS connections too, when neither `HTTPS_PROXY` nor `https_proxy` is set. An empty variable counts as not set. `NO_PROXY` has no effect.
+- `SSL_CERT_FILE` and `SSL_CERT_DIR` replace the system's certificate authorities that Slack's connection verifies against.
+
+Set none of them unless the host must reach Slack through a proxy. Whoever can set the container's environment can send Slack's traffic through a proxy of their choosing and, with `SSL_CERT_FILE` or `SSL_CERT_DIR`, make it trust their own certificate, which exposes the Slack tokens.
+
 ## The sign-in rate limit
 
 Dinnerbell allows 20 requests a minute to the sign-in pages under `/auth/` from each client address. A sign-in takes two requests, and a sign-out one. Past the limit, the page says "Too many sign-in attempts. Wait a minute and try again."

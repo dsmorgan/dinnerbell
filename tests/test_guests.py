@@ -622,13 +622,13 @@ async def test_scrub_makes_guests_anonymous(house: House) -> None:
     veg = house.tags["Vegetarian"].id
     await act(house, guests.set_my_needs, house["Pat"], frozenset({veg}))
     # Slack links set or cleared by hand name a Slack account: a guest's lose their payloads,
-    # a member's stay.
+    # a kept member's stay (a member who isn't kept loses theirs, test_scrub.py).
     await act(house, guests.set_guest_slack_user, house["Alex"], house["Jo"].id, "U07JO")
     await act(house, guests.set_guest_slack_user, house["Alex"], house["Jo"].id, "")
     from dinnerbell.services import members as member_service
 
     await act(house, member_service.set_slack_user, house["Alex"], house["Kim"].id, "U03KIM")
-    summary = await act(house, scrub.scrub_test, instance_label="TEST", keep=["admin@example.com"])
+    summary = await act(house, scrub.scrub_test, instance_label="TEST", keep=["admin@example.com", "kim@example.com"])
     assert summary.guests_scrubbed == 2
     by_target = {(a.action, a.target): a.payload for a in await house.audits("member.slack_user_")}
     jo, kim = f"member:{house['Jo'].id}", f"member:{house['Kim'].id}"

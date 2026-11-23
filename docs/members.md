@@ -26,9 +26,21 @@ An admin can see and change any member's preferences. On **Admin** > **Members**
 - **Add people from the channel** lists everyone in the channel who isn't in Dinnerbell, to add as a guest or a member.
 - If someone you invited by email joins as a guest because their Slack email differs, select **Link to member** on their guest row to move their Slack account to their membership. Anyone can take any name in Slack, so check the Slack account and email shown on the row. If that email isn't the member's, or they use a Slack guest account, you type the member's name to confirm. Admins aren't listed; an admin sets their own Slack member ID.
 - **Remove** signs a guest out and stops them from joining again until you select **Add back**.
-- While the [web app](#the-web-app) is on, each active member's row has **Sign-in code**, which makes a [code](#sign-in-with-a-code) for them, and each other member's row has **Sign out everywhere**, which signs them out of every [device](#devices).
+- Each member's row but your own has **Sign out everywhere**, which signs them out of every device, whether or not the [web app](#the-web-app) is on. See [Sign out a lost device](#sign-out-a-lost-device).
+- While the web app is on, each active member's row also has **Sign-in code**, which makes a [code](#sign-in-with-a-code) for them.
 
 Joining needs no extra scopes for a public channel. A private channel needs `groups:read`.
+
+### Sign out a lost device
+
+A sign-in lasts 90 days after its last use, whether or not the web app is on. If a member loses a phone or laptop that's signed in to Dinnerbell, or it's stolen, an admin signs them out of it:
+
+1. On **Admin** > **Members**, find the member's row.
+2. Select **Sign out everywhere**.
+
+That ends the member's sessions on every device, and deletes any [sign-in code](#sign-in-with-a-code) of theirs not used yet. The member then signs in again on the devices they still have. It writes a `member.signed_out_everywhere` audit row. You don't need to deactivate the member.
+
+While the web app is off, this is the only way to end a session on a device nobody holds, because members have no **Devices** list. While it's on, a member can also sign out one device on their own **Preferences** > [**Devices**](#devices). Admins don't have the button on their own row: to be signed out everywhere yourself, ask another admin, or, while the web app is on, sign out each device on **Devices**.
 
 ## The web app
 
@@ -41,7 +53,7 @@ While it's on:
 - Slack skips direct messages, such as reminders, to members on **Web app**, instead of failing to send them. Channel posts still go to the channel.
 - Members can [sign in with a code](#sign-in-with-a-code), and see and sign out their [devices](#devices).
 
-A member on **Web app** who hasn't turned notifications on anywhere gets no direct messages at all, as a member without Slack gets none today; Dinnerbell logs a warning for each one it skips for a member who isn't linked to Slack. Turning the switch off keeps each member's choice for when it's on again. It also keeps every session and sign-in code, but the code pages, **Devices**, and the buttons on **Admin** > **Members** disappear until it's on again. It deletes every device's notifications: each member turns them on again.
+A member on **Web app** who hasn't turned notifications on anywhere gets no direct messages at all, as a member without Slack gets none today; Dinnerbell logs a warning for each one it skips for a member who isn't linked to Slack. Turning the switch off keeps each member's choice for when it's on again. It also keeps every session and sign-in code, but the code pages, **Devices**, and **Sign-in code** on **Admin** > **Members** disappear until it's on again. **Sign out everywhere** stays. It deletes every device's notifications: each member turns them on again.
 
 ### Sign in with a code
 
@@ -82,7 +94,7 @@ Making a code writes a `member.sign_in_code_created` audit row, and signing in w
 **Preferences** > **Devices** lists each device you're signed in on, such as "iPhone · Safari", with when it signed in and when it was last seen. **This device** marks the one you're using. Devices that signed in before this list existed show "Unknown device".
 
 - To sign a device out, such as a lost phone, select **Sign out** on its row. Signing out **This device** signs you out here.
-- An admin can sign a member out of every device: on **Admin** > **Members**, select **Sign out everywhere** on their row. It also deletes any code of theirs not used yet, so a lost phone's code can't sign in afterward. It writes a `member.signed_out_everywhere` audit row. To sign yourself out everywhere, use **Devices** on your own **Preferences**.
+- An admin can sign a member out of every device, with the web app on or off: on **Admin** > **Members**, select **Sign out everywhere** on their row ([Sign out a lost device](#sign-out-a-lost-device)). It also deletes any code of theirs not used yet, so a lost phone's code can't sign in afterward. To sign yourself out everywhere, use **Devices** on your own **Preferences**.
 
 ### Turn notifications on or off
 

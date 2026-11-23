@@ -30,7 +30,12 @@ Run it with test stopped, after restoring the backup. In one transaction it:
   being deactivated like any member who isn't kept, and the audit rows about guests and joining
   (``GUEST_AUDIT``), which hold names, Slack IDs, and dietary tags, lose their payloads, as do
   hand-set Slack links of guests (``GUEST_SLACK_AUDIT``). Their
-  invitations stay with the calls' history.
+  invitations stay with the calls' history;
+- deletes every refused sign-in (``auth.sign_in_refused``), which holds a stranger's OIDC
+  subject, email, and Slack team ID, as the hourly job would within 30 days;
+- redacts the payloads of audit rows that name the Slack account of a member it doesn't keep
+  (``MEMBER_SLACK_AUDIT``), as it unlinks those members' Slack users. A kept member's rows stay,
+  as their link does.
 
 The other contribution counts and badges stay on a test copy, because they derive from what the
 scrub keeps (names, calls, and assignments); ``gave_feedback`` and its badge go because feedback is
@@ -71,6 +76,7 @@ from dinnerbell.domain.recap import SETTINGS_KEY as RECAP_KEY
 from dinnerbell.domain.recap import month_key, previous_month
 from dinnerbell.domain.schedule import SLOTS_KEY, slot_schedules, slot_to_json
 from dinnerbell.services.assistant.retention import forget_for_test
+from dinnerbell.services.auth import REFUSAL_ACTION
 from dinnerbell.services.common import audit
 from dinnerbell.services.household import current_household
 
@@ -79,6 +85,17 @@ GUEST_AUDIT = ("guest.", "member.join", "member.imported")
 IDs, and dietary tags, all personal data of people outside the household."""
 GUEST_SLACK_AUDIT = ("member.slack_user_set", "member.slack_user_cleared")
 """Audit actions that name a Slack account, redacted when their target is a guest."""
+MEMBER_SLACK_AUDIT = (
+    "member.linked",
+    "member.slack_user_updated",
+    "member.slack_user_conflict",
+    "member.slack_user_set",
+    "member.slack_user_cleared",
+    "member.slack_link_unlocked",
+    "member.slack_linked",
+)
+"""Audit actions whose payloads name a member's Slack user ID, redacted when their target is a
+member the scrub doesn't keep."""
 NOT_LABELED = (
     "scrub-test runs only on a labeled instance. Set DINNERBELL_INSTANCE_LABEL (such as TEST) in the test "
     "instance's env file; never run it against production. Nothing changed."
@@ -196,6 +213,8 @@ class ScrubSummary:
     push_devices_deleted: int = 0
     pushes_deleted: int = 0
     local_weather_cleared: bool = False
+    refusals_deleted: int = 0
+    member_slack_audit_redacted: int = 0
 
     def lines(self) -> list[str]:
         return [
@@ -209,6 +228,8 @@ class ScrubSummary:
             f"Feedback rows deleted: {self.feedback_deleted}",
             f"Guests made anonymous: {self.guests_scrubbed}",
             f"Audit rows about guests redacted: {self.audit_rows_redacted}",
+            f"Audit rows naming the Slack account of a member not kept, redacted: {self.member_slack_audit_redacted}",
+            f"Refused sign-ins deleted: {self.refusals_deleted}",
             f"Badges not yet announced, now quiet: {self.badges_quieted}",
             f"Places shown on calls, forgotten: {self.shown_places_deleted}",
             *self._assistant_lines(),
@@ -340,6 +361,11 @@ async def _scrub(db: AsyncSession, *, instance_label: str, keep: Iterable[str], 
     # A guest's Slack links set or cleared by hand name their Slack account too.
     about_guests = {f"member:{m.id}" for m in members if m.is_guest}
     redacted += await AuditRepository(db).redact_about(household.id, GUEST_SLACK_AUDIT, about_guests, scrubbed)
+    # The scrub unlinked them above, so their Slack IDs go from the audit log too.
+    not_kept = {f"member:{m.id}" for m in members if m.id not in kept_ids}
+    slack_redacted = await AuditRepository(db).redact_about(household.id, MEMBER_SLACK_AUDIT, not_kept, scrubbed)
+    # Strangers' subjects, emails, and team IDs (``services.auth._record_refusal``).
+    refusals = await AuditRepository(db).delete_action(household.id, REFUSAL_ACTION)
     pending, rows = await OutboxRepository(db).clear(household.id)
     feedback_deleted = await FeedbackRepository(db).clear(household.id)
     shown_deleted = await ShownPlaceRepository(db).clear(household.id)  # every call's ended, so they're spent
@@ -375,6 +401,8 @@ async def _scrub(db: AsyncSession, *, instance_label: str, keep: Iterable[str], 
         push_devices_deleted=push_devices,
         pushes_deleted=push_rows,
         local_weather_cleared=weather_cleared,
+        refusals_deleted=refusals,
+        member_slack_audit_redacted=slack_redacted,
     )
     summary_payload = {"kept_member_ids": sorted(kept_ids), "instance_label": instance_label} | asdict(summary)
     target = f"household:{household.id}"

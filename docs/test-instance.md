@@ -151,7 +151,19 @@ A copy of production's data tests migrations and features against real history. 
    deploy/dinnerbell-test up -d
    ```
 
-`scrub-test` runs only while `DINNERBELL_INSTANCE_LABEL` is set. It deactivates and unlinks every member you didn't keep, strips guests of their names, emails, Slack links, and dietary needs, turns off every slot, ends open calls silently, empties the outbox, marks unannounced badges and the last monthly recap as done, deletes all feedback on meals and the places calls have shown, turns the assistant off and deletes its conversations and drafts, deletes every web push device, and deletes Dinnerbone's local weather setting with its postal code and place, so test never asks for production's weather. To try local weather on test, turn it on again on **Admin** > **Web app** with a code of your choosing. It keeps the meal log, catalog, and preferences. It migrates the database first, so run it with the tag you start next: an older release refuses a database that a newer one migrated.
+`scrub-test` runs only while `DINNERBELL_INSTANCE_LABEL` is set. It:
+
+- Deactivates, signs out, and unlinks from Slack every member you didn't keep, and redacts the audit rows that name their Slack accounts.
+- Strips guests of their names, emails, Slack links, and dietary needs.
+- Deletes every refused sign-in from the audit log, since each holds a stranger's email.
+- Turns off every slot, ends open calls silently, and empties the outbox.
+- Marks unannounced badges and the last monthly recap as done.
+- Deletes all feedback on meals and the places calls have shown.
+- Turns the assistant off and deletes its conversations and drafts.
+- Deletes every web push device.
+- Deletes Dinnerbone's local weather setting with its postal code and place, so test never asks for production's weather. To try local weather on test, turn it on again on **Admin** > **Web app** with a code of your choosing.
+
+It keeps the meal log, catalog, and preferences. It migrates the database first, so run it with the tag you start next: an older release refuses a database that a newer one migrated.
 
 The copy keeps production's household name and time zone, whatever `.env.test` says, and test's log warns on each start for each setting that differs. To stop those warnings, set `DINNERBELL_HOUSEHOLD_NAME` and `DINNERBELL_TIMEZONE` in `.env.test` to production's values.
 

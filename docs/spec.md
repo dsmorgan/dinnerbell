@@ -502,7 +502,7 @@ The web app with push notifications (FR-53, [ADR 0010](adr/0010-optional-web-app
 - The member types the code on `/auth/code`, in a POST body, never the URL. The page shows "You're signing in as NAME", without using the code. **Continue** uses it in one conditional update, so two taps can't both win, checks the member is still active, and signs the device in. That replaces any session cookie the device had with a new ordinary session, which lasts 90 days and renews with use.
 - Wrong codes count against the per-address limit every `/auth/` route has. Past 200 in an hour across all addresses, Dinnerbell logs it and tells the admin on **Admin** > **Web app**; nothing slows down or locks out. The `/auth/` form has no session to bind a CSRF token to, so the Origin check protects it.
 
-**Devices.** Each session records a short device label from the browser and a public ID that is never the token's hash. **Preferences** lists a member's sessions, with the current one marked, and **Sign out** ends any of them. **Admin** > **Members** can sign out all of a member's devices.
+**Devices.** Each session records a short device label from the browser and a public ID that is never the token's hash. While the switch is on, **Preferences** lists a member's sessions, with the current one marked, and **Sign out** ends any of them. **Admin** > **Members** can sign out all of a member's devices whether or not the switch is on (ADR 0010, amended): sessions last 90 days either way, so ending them is a security control, not part of the web app. It is audited, and deletes the member's unused code too.
 
 ## 7. Ranking
 
@@ -923,7 +923,7 @@ Household-level settings that change over time (slot schedule, weights, threshol
 | ID | Requirement |
 |---|---|
 | SEC-1 | No secrets in the repository or image. All secrets arrive by environment or secret file. |
-| SEC-2 | The web app sets `Content-Security-Policy` (self only, no inline scripts except HTMX with a nonce), `X-Content-Type-Options`, `Referrer-Policy`, and `Permissions-Policy`. HSTS is set by Pangolin. |
+| SEC-2 | The web app sets `Content-Security-Policy` (self only, no inline scripts except HTMX with a nonce), `X-Content-Type-Options`, `Referrer-Policy`, and `Permissions-Policy`. Dinnerbell sends no `Strict-Transport-Security`; the reverse proxy (Pangolin) sets it ([hardening](hardening.md#send-hsts-from-your-reverse-proxy)). |
 | SEC-3 | Authentication endpoints are rate-limited per IP and per session. |
 | SEC-4 | All database access goes through the ORM with bound parameters. All inbound data is validated with pydantic models before reaching services. |
 | SEC-5 | Logs contain member display names and IDs, never emails, tokens, or calendar URLs. |
