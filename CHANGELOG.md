@@ -6,6 +6,15 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+### Fixed
+
+- **Date and time fields fit their card on an iPhone** (#352). iOS Safari draws a date or time field as a menu button, at least as wide as the longest value it can show, so where two share a row, such as **First day away** and **Last day away** on **Preferences** > **Away**, or **Call time** and **Usual meal time** on **Schedule**, the second ran past the card's right edge. Now every date and time field fits its column and looks like the other fields, its value at the left instead of centered.
+- **The setup guide's example backup name** (#352). [Back up](docs/setup.md#back-up) gave `pre-migrate-0040-to-0044-…`; 0.19.0's backup is `pre-migrate-0040-to-0045-…`.
+
+### Changed
+
+- **Shorter text on Preferences and Schedule** (#352). **Preferences** > **How it works** says in one line what your ratings do to your scores, the Schedule page's introduction is half as long, and **Skip a day** is shorter.
+
 ## [0.19.0] - 2026-11-23
 
 ### Security
