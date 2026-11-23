@@ -12,10 +12,10 @@ No score, suggestion, or draw gets around these rules:
 - **Guests' needs.** If a guest needs a dietary tag, such as vegan, every proposal has it.
 - **Someone to do it.** A pickup needs someone who offered to pick up, a home meal needs someone who offered to cook and can cook it, and delivery needs someone who's in and can order.
 - **Recent repeats.** A place you ate within the variety window, 7 days by default, is out, unless nothing else fits at all.
-- **Already a proposal.** A place that's already on the call, from an offer, isn't proposed again. Each proposal is a different place.
+- **One proposal per place.** A place that's already on the call, such as from an offer, isn't proposed again.
 - **The meal.** Places for tonight's meal come first. Places for other meals, such as a breakfast place on a dinner call, are proposed only when too few dinner places fit, and their reasons say "Usually for breakfast."
 
-Everything that passes them is a candidate, and chance chooses only among candidates.
+Everything that passes these rules is a candidate, and chance chooses only among candidates.
 
 ## What makes a place more likely
 
@@ -30,15 +30,13 @@ Each candidate's score is the sum of these parts, each multiplied by its weight,
 | Usual way to get it | +0.5 if it's the slot's usual way, such as pickup | 1 |
 | Volunteer knows the dish | +0.5 if the volunteer cook is on its cook list | 1 |
 
-A place someone suggested for this call goes in ahead of the draw, if it passes the rules above: a suggestion is a request, not a preference. The last place in every vote is kept for the draw, so suggestions fill at most one fewer than the number of proposals: with 3 proposals, 2. When more places were suggested than that, the best-scoring suggestions go in, with ties chosen at random, and the others stay in the draw, where their suggestion makes them much more likely. The same limit covers a top-up with places for other meals.
+A place someone suggested for this call goes in ahead of the draw, if it passes the rules above. Suggestions fill at most one fewer than the number of proposals, so the last place is always drawn: with 3 proposals, 2. When more places were suggested than that, the best-scoring suggestions go in, and the others stay in the draw, where their suggestion makes them much more likely.
 
-The rest of the proposals are drawn at random, and each point of score makes a place more likely by the same factor. At the default randomness, a place 1 point better is about 2.7 times as likely to be picked, and 2 points better about 7.4 times. Names never matter.
-
-After each pick, places that share its cuisine drop to 0.3 of their chance, so a vote rarely has three taco places when other cuisines fit.
+The rest are drawn at random. At the default randomness, a place 1 point better is about 2.7 times as likely to be picked, and 2 points better about 7.4 times. After each pick, places that share its cuisine drop to 0.3 of their chance, so a vote rarely has three taco places when other cuisines fit.
 
 ## How ratings count
 
-When you rate a meal, your score for that place or recipe moves toward your rating: halfway, or three-quarters of the way for **Hated it** and **Didn't like it**. **Hated it** is −2 and **Loved it** is +2, so one rating of a place you never scored makes your score:
+When you rate a meal, your score for that place or recipe moves toward your rating: halfway, or three-quarters of the way for **Hated it** and **Didn't like it**. So one rating of a place you never scored makes your score:
 
 | Your rating | Your score becomes |
 |---|---|
@@ -48,10 +46,10 @@ When you rate a meal, your score for that place or recipe moves toward your rati
 | Liked it | +0.5 |
 | Loved it | +1 |
 
-The change halves every 3 months, counted from the meal, unless you rate it again. It's added to the score you set on **Preferences**, and the total stays between −2 and +2. Your ratings change only your own score, and only on calls you eat at, as your stated score does. They never veto anything or lift a veto.
+The change halves every 3 months, counted from the meal, unless you rate it again. It's added to the score you set on **Preferences**, and the total stays between −2 and +2. Your ratings change only your own score, only on calls you eat at, and never veto anything or lift a veto.
 
 - **Your edit wins.** Setting a score for a place on **Preferences**, even back to 0, replaces what your earlier ratings of it said. A rating after that counts again.
-- **See where you stand.** **Preferences** shows you, and an admin who opens your preferences, what your ratings make your score, such as "From your ratings: about +1".
+- **See where you stand.** **Preferences** shows what your ratings make your score, such as "From your ratings: about +1". An admin who opens your preferences sees it too.
 - **The admin sets how far ratings count** with **Feedback** (see [Tune the ranking](#tune-the-ranking)).
 
 ### The household's hint
@@ -62,27 +60,26 @@ Everyone sees a hint for each place, built from everyone's ratings and what went
 - **Not well liked**: otherwise, at least a quarter of the ratings were bad.
 - **Well liked**: otherwise, at least half were good.
 
-A verdict needs ratings from two people, each from roughly the last 3 months, and recent ones count more. What went wrong in the last 3 months adds the most important problem anyone checked: "a recent wrong order", "recently late", "recently cold", or "a recent problem". So a hint reads "Mixed reviews · recently late", or, with no verdict, "Recently cold". The words someone wrote for **Other** are never shown. A hint never changes a score.
+A verdict needs recent ratings from two people, and recent ones count more. What went wrong in the last 3 months adds the most important problem anyone checked, so a hint reads "Mixed reviews · recently late", or, with no verdict, "Recently cold". What someone wrote for **Other** is never shown. A hint never changes a score.
 
 ## Why the proposals differ between calls
 
-Each call has its own draw, so two calls with the same people and catalog can propose different places. Dinnerbell seeds the draw from the call itself, so the same call always gets the same proposals. If an admin re-runs a call, or someone starts a called-off call again, that's a new run, and it draws again.
+Each call has its own draw, so two calls with the same people and catalog can propose different places. The same call always gets the same proposals, but a re-run, or starting a called-off call again, draws again.
 
 Proposals are listed in the order they were drawn, suggestions first. The order matters only when a vote ties. A tie goes, in order, to the coordinator's or an admin's choice with **Break the tie**, then the coordinator's vote, then the most admins' votes when nobody coordinates, then the place you ate at longest ago (never counts as longest), and only then to the one drawn first. The decision says which rule decided it.
 
 ## Shuffling the proposals
 
-If the proposals don't appeal, the coordinator or an admin can tap **Shuffle proposals** while voting. A shuffle draws again with the call's next seed, so it's as reproducible as the first draw. Each call allows 3 shuffles.
+If the proposals don't appeal, the coordinator or an admin can tap **Shuffle proposals** while voting, up to 3 times a call. A re-run starts the count again.
 
 - **Nobody has voted yet:** every drawn proposal is replaced.
-- **Someone has voted:** only proposals with no votes are replaced. A vote that doesn't count yet, such as a late joiner's, still keeps its proposal, because it is someone's choice.
+- **Someone has voted:** only proposals with no votes are replaced. A vote that doesn't count yet, such as a late joiner's, still keeps its proposal.
 - **Never replaced:** proposals a member added, proposals from an offer, and places someone suggested.
-- **The same rules hold.** The new proposals pass everything in [What can never be picked](#what-can-never-be-picked), including a late joiner's guests' needs.
-- **Places not shown yet come first.** Dinnerbell remembers every place the call has shown as a ranked proposal, and a shuffle draws from the rest first: places for this meal, then places for other meals, as the top-up does. If too few of those fit, it fills the remaining slots from places shown before, those shown longest ago first, so the places it just shuffled out come back last of all. If nothing else fits at all, the shuffle is refused and doesn't count.
-- **One tap, one shuffle.** If someone shuffled since your message or page showed the proposals, such as when you tap twice or the coordinator and an admin tap together, your shuffle is refused and doesn't count. Votes and locks on proposals a shuffle replaced say "No such proposal." instead of landing on a new one.
-- **A re-run starts afresh.** A re-run or a restart is a new run, with no places shown yet.
+- **The same rules hold.** The new proposals pass everything in [What can never be picked](#what-can-never-be-picked).
+- **Places not shown yet come first.** A shuffle draws from places the call hasn't proposed yet. If too few of those fit, it brings back places shown before, those shown longest ago first. If nothing else fits at all, the shuffle is refused and doesn't count.
+- **One tap, one shuffle.** If someone shuffled since your message or page showed the proposals, such as after a double tap, your shuffle is refused and doesn't count. A vote or lock on a proposal a shuffle replaced says "No such proposal." instead of landing on a new one.
 
-The proposals message says who shuffled and how many were replaced, such as "Kim shuffled the proposals (2 replaced).", and the call's thread gets a short note that mentions nobody.
+The proposals message says who shuffled and how many were replaced, and the call's thread gets a short note that mentions nobody.
 
 ## A worked example
 
@@ -98,7 +95,7 @@ It's a dinner call. Alex and Sam are in, and Alex offered to pick up. Pickup is 
 | Curry House | Never had it (+1), usual way (+0.5) | 1.5 |
 | Taqueria | Had it 20 days ago, usual way (+0.5) | 0.5 |
 
-Burger Barn is in because Sam suggested it. With 3 proposals, up to 2 can be suggestions, so one suggestion leaves two places to draw from the other four. Each place's weight compares its score with the best one, Siam Garden's 2.5:
+Burger Barn is in because Sam suggested it, which leaves two places to draw from the other four. Each place's weight compares its score with the best one, Siam Garden's 2.5:
 
 | Place | Score | Weight | Chance of the next pick | Chance of making the vote |
 |---|---|---|---|---|
@@ -107,9 +104,7 @@ Burger Barn is in because Sam suggested it. With 3 proposals, up to 2 can be sug
 | Curry House | 1.5 | 0.37 | 20% | 49% |
 | Taqueria | 0.5 | 0.14 | 7% | 19% |
 
-The chance of the next pick is the place's weight over the total, 1.87. Once a place is picked, the draw repeats over the rest. The last column comes from 100,000 simulated calls with Dinnerbell's own ranking code.
-
-So Siam Garden usually makes the vote, but about one call in six it doesn't, and Taqueria gets a turn about one call in five. If Siam Garden had another Thai place behind it with the same score, that place's weight would drop from 1 to 0.3 once Siam Garden was picked.
+The chance of the next pick is the place's weight over the total, 1.87, and the draw repeats over the rest. The last column comes from 100,000 simulated calls with Dinnerbell's own ranking code. So Siam Garden usually makes the vote, but about one call in six it doesn't, and Taqueria gets a turn about one call in five.
 
 <a id="tune-it-on-admin"></a>
 
@@ -128,8 +123,8 @@ An admin changes these on the **Ranking** tab of **Admin**. Changes apply from t
   | 3 | A point better is about 1.4 times as likely | 63% | 38% |
 
   The last two columns are for the worked example. If the same places keep winning, raise it. If the proposals feel too random, lower it.
-- **Feedback** limits how far each rating pulls a person's score: 0 (off), 1, or 2. At 2, the default for a new household, **Loved it** pulls toward +2; at 1, toward +1, so ratings move a score by at most a point. A household from before the setting existed starts at 0; set it to 2 when you're ready to let ratings move scores. Hints show at every setting.
+- **Feedback** limits how far each rating pulls a person's score: 0 (off), 1, or 2. At 2, the default for a new household, **Loved it** pulls toward +2; at 1, toward +1. A household from before the setting existed starts at 0; set it to 2 when you're ready to let ratings move scores. Hints show at every setting.
 
-**Reset to defaults**, below the form, puts every setting on the tab back to what a new household starts with: the default weights in [What makes a place more likely](#what-makes-a-place-more-likely), Randomness 1, Feedback 2, 3 proposals, a 7-day variety window, and 15 minutes to choose roles. Open it, select **Reset ranking**, then confirm. It leaves call times, skipped days, and badge counts alone, and writes an audit row, as a save does. If **Feedback** was 0, the reset turns ratings on.
+**Reset to defaults**, below the form, puts every setting on the tab back to what a new household starts with: the default weights, Randomness 1, Feedback 2 (which turns ratings on if it was 0), 3 proposals, a 7-day variety window, and 15 minutes to choose roles. Open it, select **Reset ranking**, then confirm. It leaves call times, skipped days, and badge counts alone.
 
 Vetoes, guests' needs, coverage, and the variety window hold at every setting.
