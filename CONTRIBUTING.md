@@ -163,6 +163,38 @@ shasum -a 256 package/files/figtree-latin-wght-normal.woff2 package/files/figtre
 
 Copy each file to `src/dinnerbell/web/static/fonts/figtree-X.Y.Z-<subset>-wght-normal.woff2`, copy `package/LICENSE` over `Figtree-OFL-1.1.txt`, and delete the old font files. Then change the file names and the `unicode-range` lines in the `@font-face` rules at the top of `app.css` (the package's `wght.css` has them), the version in the comment above those rules, the version and hashes in `tests/test_vendored_assets.py`, and the line in CLAUDE.md. Never edit the files by hand.
 
+## Secure your GitHub account
+
+If you maintain a fork or cut releases, an attacker who takes over your GitHub account can publish an image your host pulls.
+
+1. Use a passkey or a hardware security key as your two-factor method, and remove SMS as a fallback.
+2. Watch the repository with **Custom** > **Security alerts**, to hear about Dependabot alerts, code scanning alerts, and private vulnerability reports.
+3. In **Settings** > **Notifications** > **System** > **Actions**, select **Email** and **Only notify for failed workflows**, so a failed nightly image scan reaches your inbox.
+
+GitHub sends a scheduled workflow's failure notice to whoever last changed its `cron` line, so if someone else edits the schedule in `scan-release.yml`, `pip-audit.yml`, or `scorecard.yml`, the notices go to them.
+
+## What CI enforces
+
+The `main` ruleset requires a pull request and these checks before a merge. An admin can bypass them only through a pull request, for emergencies.
+
+| Check | Workflow | What it does | Required to merge |
+|---|---|---|---|
+| `check` | `ci.yml` | Lint, type checks, tests with at least 90% coverage, and `pip-audit`. | Yes |
+| `image` | `ci.yml` | Builds the image, runs a smoke test against `/healthz`, and scans it with Grype. | Yes |
+| `dependency-review` | `dependency-review.yml` | Fails a PR that adds a dependency with a known moderate or worse vulnerability. | Yes |
+| `dco` | `dco.yml` | Fails a PR with any commit, merges included, that lacks a `Signed-off-by` for its author's email. Only Dependabot's own commits in its own PRs are exempt. See [Sign your commits](#sign-your-commits-developer-certificate-of-origin). | Yes |
+| CodeQL | Default setup | Scans Python, JavaScript, and the workflows. | Yes |
+| Release scan | `scan-release.yml` | Scans the image tagged `latest` with Grype every night. A fixable HIGH or CRITICAL finding fails the run: cut a patch release. | No (scheduled) |
+| `pip-audit` | `pip-audit.yml` | Audits the locked Python dependencies every Monday. | No (scheduled) |
+| Scorecard | `scorecard.yml` | Rates the repository's supply-chain practices every Monday and on each push to `main`. Treat the score as a checklist, not a target. | No (scheduled) |
+| Dependabot | `.github/dependabot.yml` | Opens grouped update PRs for Python, Actions, and base images every Monday, waiting 7 days after a release, plus security fixes for Python and Actions; Grype covers base images. Nothing auto-merges. | Its PRs pass the same checks |
+
+Every workflow pins its actions by commit SHA and grants each job only the token permissions it needs. The repository allows only GitHub-owned actions plus `astral-sh`, `docker`, `anchore`, and `ossf` actions.
+
+A pull request runs the workflows from its own branch, so a PR can change what its checks do. Outside contributors' runs wait for your approval: read any diff under `.github/` before you approve a run or merge.
+
+GitHub disables a public repository's scheduled workflows after 60 days without activity, which stops the nightly scan without a failed run. `scripts/verify-github-settings.sh` reads the repository's settings, disabled workflows included, and exits non-zero if any differs from what the lockdown expects. To turn a workflow back on, run `gh workflow enable scan-release.yml`, or select **Enable workflow** on its page in the **Actions** tab.
+
 ## Report a security problem
 
 Don't open a public issue. Follow [SECURITY.md](SECURITY.md).

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Scan the released image every night. A fixable HIGH or CRITICAL finding turns the run red,
-# which is the signal to cut a patch release (docs/hardening.md).
+# which is the signal to cut a patch release ("What CI enforces" in CONTRIBUTING.md).
 name: Scan release image
 
 on:

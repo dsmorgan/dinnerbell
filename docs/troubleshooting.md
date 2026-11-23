@@ -49,9 +49,9 @@ After you fix a setting, recreate the service: `podman-compose down && podman-co
 | `version` | The running version, also shown in the page footer. |
 | `database` | `ok` or `unreachable`. |
 | `scheduler` | Its `status` and `last_tick`. A tick older than 90 seconds reports `degraded`. |
-| `slack` | `connected`; `disconnected`, can't reach Slack and retrying; `error`, a startup check failed and the log says how to fix it; or `not_configured`, a Slack setting is missing and the bot posts nothing. `disconnected` and `error` report `degraded`. |
+| `slack` | `connected`; `disconnected`, Dinnerbell can't reach Slack and is retrying; `error`, a startup check failed and the log says how to fix it; or `not_configured`, a Slack setting is missing and the bot posts nothing. `disconnected` and `error` report `degraded`. |
 | `outbox` | `backlog`: notifications waiting, such as while Slack is down. `failed`: notifications that gave up. `oldest_pending_age`: seconds the oldest has waited; over an hour reports `degraded`, and after 24 hours it's dropped, not sent late. `null` while the database is unreachable. |
-| `push` | Only while the web app is on. `backlog` and `oldest_pending_age`, as for `outbox` (`null` when none waits): over an hour reports `degraded`, and after 24 hours a push closes unsent. |
+| `push` | Only while the web app is on. `backlog`: pushes waiting. `oldest_pending_age`, `null` when none waits: over an hour reports `degraded`, and after 24 hours a push closes unsent. |
 | `backup` | `last_success`, and `failing`, which reports `degraded`. |
 | `stuck_calls` | Calls whose next step has been due for more than an hour. Above 0, or `null` when the check failed or is out of date, reports `degraded`. |
 | `instance`, `slack_dms_dropped` | On a test instance only: its label, and the direct messages withheld from people outside the test channel. |

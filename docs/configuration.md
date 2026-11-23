@@ -88,7 +88,7 @@ How it behaves in Slack:
 
 ### Set the cap
 
-On **Admin** > **Assistant**, set the household's **Monthly cap**, $1 to $100 a calendar month in the household's time zone ($5 by default), and **Conversation hours**, how long Dinnerbell keeps a conversation after its last message, 0 to 168 (24 by default). Before each request, Dinnerbell reserves the most it could cost and refuses it if that would pass the cap, so spending never does. The page shows this month's usage in total and for each member, and says so if the cap is too low for even one short message, such as $1 with `claude-opus-5-5`.
+On **Admin** > **Assistant**, set the household's **Monthly cap**, $1 to $100 a calendar month in the household's time zone ($5 by default), and **Conversation hours**, how long Dinnerbell keeps a conversation after its last message, 0 to 168 (24 by default). Before each request, Dinnerbell reserves the most it could cost and refuses it if that would pass the cap, so spending never does. The page shows this month's usage in total and for each member, and, if the cap is too low for even one short message, such as $1 with `claude-opus-5-5`, names the smallest cap that covers one; long conversations need more.
 
 Production and a [test instance](test-instance.md) each keep their own cap and usage in their database. As a backstop, set a monthly spend limit on the key's workspace in the Anthropic Console, and give the test instance its own key, so one limit doesn't stop the other.
 
@@ -96,11 +96,11 @@ Production and a [test instance](test-instance.md) each keep their own cap and u
 
 **Admin** > **Assistant** sums this up; this section is the full list.
 
-- **Always:** the conversation and what the assistant looks up, with members shown as "Member 1", "Member 2", and so on, plus every active member's display name with their label, such as "Member 2: Theodore", so the assistant can tell who a member means by a name they type. Guests and former members are never listed. A name a member types, or the assistant writes, stays in the conversation as written until Conversation hours delete it, even after that member is deactivated.
+- **With every message:** the conversation and what the assistant looks up, with members shown as "Member 1", "Member 2", and so on, plus every active member's display name with their label, such as "Member 2: Theodore", so the assistant can tell who a member means by a name they type. Guests and former members are never listed. A name a member types, or the assistant writes, stays in the conversation as written until Conversation hours delete it, even after that member is deactivated.
 - **For questions about what the household ate:** each item's household hint, such as "Well liked", the words every member sees on **Catalog**.
-- **For a menu or recipe link a member gives it:** the text of that page, which Dinnerbell fetches.
+- **For a menu or recipe link a member gives it:** the text of that page, which Dinnerbell fetches. The separate call that drafts items from it carries only the page's text, with no conversation or member data.
 - **Only when a member asks about their own data in private,** on the Assistant page or in a direct message: their preferences, vetoes, dietary needs, what they can usually do (cook, pick up, or order), ratings, feedback, and away days. Dietary needs can reveal health or religion.
-- **Never:** emails, Slack IDs, or anyone else's preferences, vetoes, ratings, or notes, except what a member writes in their own message.
+- **Never:** emails, Slack IDs, an item's stored notes or links, or anyone else's preferences, vetoes, ratings, or notes, except what a member writes in their own message.
 
 Your Anthropic API terms govern how long Anthropic keeps requests. Conversation hours and draft expiry delete only Dinnerbell's live copy: backups keep the conversations and drafts they hold until you delete the backup ([What a backup holds](backup-and-upgrade.md#what-a-backup-holds)).
 
@@ -148,7 +148,7 @@ Dinnerbell calls only these hosts, at addresses it builds itself, directly, as [
 
 ## Outbound connections
 
-Every request Dinnerbell makes, except Slack's API calls and Socket Mode, to the sign-in provider, Anthropic, the push services, menu links, and the weather, ignores proxy and CA bundle environment variables, such as `HTTPS_PROXY` and `SSL_CERT_FILE`, verifies TLS against Dinnerbell's bundled certificate authorities, and never follows a redirect. The host must reach those services directly. [Allow only the outbound connections Dinnerbell needs](hardening.md#allow-only-the-outbound-connections-dinnerbell-needs) lists the hosts.
+Except for Slack's API calls and Socket Mode, every request Dinnerbell makes, to the sign-in provider, Anthropic, the push services, menu links, and the weather, ignores proxy and CA bundle environment variables, such as `HTTPS_PROXY` and `SSL_CERT_FILE`, and verifies TLS against Dinnerbell's bundled certificate authorities. None follows a redirect, except a menu link, which follows up to 5, checking that each address is public. The host must reach those services directly. [Allow only the outbound connections Dinnerbell needs](hardening.md#allow-only-the-outbound-connections-dinnerbell-needs) lists the hosts.
 
 Slack's connection, its API calls and Socket Mode, still follows these environment variables:
 
@@ -163,7 +163,7 @@ Dinnerbell allows 20 requests a minute to the sign-in pages under `/auth/` from 
 
 Dinnerbell takes a client's address from the connection, or from `X-Forwarded-For` when the connection comes from an address in `DINNERBELL_TRUSTED_PROXIES`. Behind a reverse proxy, every connection comes from the proxy, so without that setting all clients share one count, and one client that hits `/auth/` over and over makes everyone wait up to a minute.
 
-Under rootless podman, leave `DINNERBELL_TRUSTED_PROXIES` empty and accept the shared count. Podman forwards every connection to a published port from the container network's gateway, such as `10.89.0.1`, so trusting the gateway would let any device that reaches the port directly choose its own count. The exception is a proxy in a container on Dinnerbell's network that connects to it directly: trust that container's address, and keep it fixed or update the setting when it changes.
+Under rootless podman, leave `DINNERBELL_TRUSTED_PROXIES` empty: every connection to a published port comes from the container network's gateway, such as `10.89.0.1`, so trusting it would let any device that reaches the port choose its own count. The exception is a proxy in a container on Dinnerbell's network that connects to Dinnerbell directly, whose address you can trust if you keep it fixed.
 
 To see what Dinnerbell sees, set `DINNERBELL_LOG_LEVEL=DEBUG` and sign in: each request logs `peer_ip`, the connection's address, and `client_ip`, the address the rate limit counts. Trust the proxy only when nothing but the proxy connects from its `peer_ip`.
 
