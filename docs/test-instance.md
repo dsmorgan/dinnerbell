@@ -1,6 +1,6 @@
 # Run a test instance
 
-A test instance is an optional second Dinnerbell on the same host, with its own database, Slack app, channel, and hostname. Use it to run builds from `main`, and to rehearse each release on a copy of your data before your family sees it. [ADR 0006](adr/0006-test-instance.md) explains the design.
+A test instance is an optional second Dinnerbell on the same host, with its own database, Slack app, channel, and hostname. Use it to run builds from `main`, and to rehearse each release on a copy of your data before your household sees it ([ADR 0006](adr/0006-test-instance.md)).
 
 Setup takes about half an hour, after a working production install ([setup.md](setup.md)). Stop test when you aren't using it. The commands use podman; for Docker, see [Docker](#docker).
 
@@ -19,40 +19,40 @@ Both instances run from your production clone or bundle, as the same user:
 | Slack app and command | Dinnerbell, `/dinnerbell` | Dinnerbell Test, `/dinnerbell-test` |
 | Pangolin authentication | Off | On |
 
-The instances share `compose.yaml`, the Slack workspace, and `DINNERBELL_BIND`. Test doesn't read `compose.override.yaml`; it takes its Anthropic key file from `secrets-test/` instead ([Secrets in files for test](#secrets-in-files-for-test)). The secret key, both Slack tokens, and the client secret must differ.
+The instances share `compose.yaml`, the Slack workspace, and `DINNERBELL_BIND`. Test doesn't read `compose.override.yaml`. The secret key, both Slack tokens, and the client secret must differ.
 
 ## Create the test channel and Slack app
 
 Use the same workspace as production.
 
 1. Create a channel named `#dinnerbell-test-channel`, which can be private, and invite only the people who test with you. Test mentions and messages only members of this channel.
-2. Create a second Slack app as in [section 2 of setup.md](setup.md#2-create-the-slack-app), but paste `deploy/slack-app-manifest.test.yaml`, and replace `dinnerbell-test.example.com` with your test hostname. For its icon, upload `deploy/slack-app-icon-test-1024.png`, which shows Dinnerbot, the test mascot.
+2. Create a second Slack app as in [section 2 of setup.md](setup.md#2-create-the-slack-app), but paste `deploy/slack-app-manifest.test.yaml`, and replace `dinnerbell-test.example.com` with your test hostname. For its icon, upload `deploy/slack-app-icon-test-1024.png`.
 3. Create its app-level token, install it, and copy its bot token, client ID, and client secret, as in sections 3 to 5.
 4. Copy the test channel's ID, as in section 6.
 5. In `#dinnerbell-test-channel`, invite the bot: `/invite @Dinnerbell Test`.
 
 Never reuse production's tokens: Socket Mode delivers each event to one connection, so two instances on one app split button taps between them.
 
-To try the optional assistant on test, paste `deploy/slack-app-manifest.assistant.test.yaml` instead, or paste it later under **App Manifest** and reinstall the test app. It adds what the production assistant manifest adds; see [Talk to it in Slack](configuration.md#talk-to-it-in-slack). Give test its own Anthropic key, as [Set the cap](configuration.md#set-the-cap) explains.
+To try the assistant on test, paste `deploy/slack-app-manifest.assistant.test.yaml` instead, now or later ([Talk to it in Slack](configuration.md#talk-to-it-in-slack)), and give test its own Anthropic key ([Set the cap](configuration.md#set-the-cap)).
 
 ## Write .env.test
 
-`dinnerbell init --test` writes `.env.test` from your answers: the test hostname, the workspace's team ID, and the test app's values. It generates a new secret key, sets the `TEST` label and the `/dinnerbell-test` command, suggests the household name `Test`, and refuses production's secrets, client ID, and URL from the `.env` next to it. From your install's directory, replacing `X.Y.Z` with the release production runs, run:
+`dinnerbell init --test` writes `.env.test` from your answers: the test hostname, the team ID, and the test app's values. It generates a new secret key, sets the `TEST` label and the `/dinnerbell-test` command, and refuses production's secrets, client ID, and URL from the `.env` next to it. From your install's directory, replacing `X.Y.Z` with the release production runs, run:
 
 ```sh
 podman run --rm -it --userns keep-id --user "$(id -u):$(id -g)" -v "$PWD:/out:z" \
   ghcr.io/dsmorgan/dinnerbell:X.Y.Z init --test --output /out/.env.test
 ```
 
-To write it by hand instead, copy `.env.test.example` to `.env.test`, run `chmod 600 .env.test`, and fill it in. Git ignores `.env.test`; never commit it.
+To write it by hand instead, copy `.env.test.example` to `.env.test`, run `chmod 600 .env.test`, and fill it in. Never commit it.
 
 ### Secrets in files for test
 
 To keep test's secrets in files, follow [Keep secrets in files](setup.md#keep-secrets-in-files) in `secrets-test/`, from `.env.test`, and check them with `deploy/check-secrets --env-file .env.test secrets-test`. Test needs no `-f` options: when any of the four files exists, `deploy/dinnerbell-test` mounts them and requires all four.
 
-To keep test's [Anthropic API key](configuration.md#the-assistant) in a file too, create `secrets-test/DINNERBELL_ANTHROPIC_API_KEY`. The file is optional and works with or without the four: when it exists, `deploy/dinnerbell-test` adds `deploy/compose.test-anthropic.yaml`, which mounts it read-only at `/run/secrets/DINNERBELL_ANTHROPIC_API_KEY`. Test never reads production's `secrets/DINNERBELL_ANTHROPIC_API_KEY`, and doesn't need the `compose.override.yaml` that production uses for its key.
+Test's [Anthropic API key](configuration.md#the-assistant) can live in `secrets-test/DINNERBELL_ANTHROPIC_API_KEY`, with or without the four. When the file exists, `deploy/dinnerbell-test` mounts it; test never reads production's key file or needs a `compose.override.yaml` for it.
 
-1. Write the key into the file, owner-only and with no trailing newline. To keep the key out of your shell history, run `unset HISTFILE` first, or type a space before the command if your shell ignores such lines (`HISTCONTROL=ignorespace` in bash, `setopt HIST_IGNORE_SPACE` in zsh).
+1. Write the key into the file, owner-only and with no trailing newline. To keep it out of your shell history, run `unset HISTFILE` first, or start the command with a space if your shell ignores such lines (`HISTCONTROL=ignorespace` in bash, `setopt HIST_IGNORE_SPACE` in zsh).
 
    ```sh
    ( umask 077 && mkdir -p secrets-test && printf '%s' '<test key>' >secrets-test/DINNERBELL_ANTHROPIC_API_KEY )
@@ -66,7 +66,7 @@ To keep test's [Anthropic API key](configuration.md#the-assistant) in a file too
    ```
 
 3. Delete the `DINNERBELL_ANTHROPIC_API_KEY` line from `.env.test`, or leave it empty. If the line and the file both hold a value, they must match, or test refuses to start.
-4. Recreate test with `deploy/dinnerbell-test down` and `deploy/dinnerbell-test up -d`. Its first line names the file: `secrets from ..., Anthropic key from secrets-test/DINNERBELL_ANTHROPIC_API_KEY`, and the log no longer shows the `DINNERBELL_ANTHROPIC_API_KEY is set in the environment` warning.
+4. Recreate test with `deploy/dinnerbell-test down` and `deploy/dinnerbell-test up -d`. Its first line includes `Anthropic key from secrets-test/DINNERBELL_ANTHROPIC_API_KEY`, and the log no longer warns that `DINNERBELL_ANTHROPIC_API_KEY is set in the environment`.
 
 To go back to `.env.test`, put the line back, and delete the file.
 
@@ -75,7 +75,7 @@ To go back to `.env.test`, put the line back, and delete the file.
 1. Create a public HTTP resource for the test hostname, with the target on the host's port 8014.
 2. Leave **Use Platform SSO** on, and allow only your own Pangolin user.
 
-Test runs unreleased code that only you use, so it stays behind Pangolin's login. Sign in to Pangolin first, then select **Sign in with Slack**; if Slack's redirect lands on a Pangolin login page, do both again.
+Test runs unreleased code, so it stays behind Pangolin's login. Sign in to Pangolin first, then select **Sign in with Slack**; if Slack's redirect lands on a Pangolin login page, do both again.
 
 Pangolin protects only the hostname, so use your host firewall to allow port 8014 only from the address Newt connects from. With rootful Docker, published ports skip `ufw` rules, so add the rule to the `DOCKER-USER` chain.
 
@@ -91,12 +91,12 @@ deploy/dinnerbell-test down
 ```
 
 - To pick up a newer `main`, run `pull`, then `down` and `up -d`. The `main` tag moves with every merge and isn't attested, so give test no production data except a scrubbed copy.
-- To check test, look for the TEST banner in the browser, or `"instance":"TEST"` from `curl -s http://<DINNERBELL_BIND>:8014/healthz`. Test is usually stopped, so don't give it an always-on monitor.
+- To check test, look for the TEST banner, or `"instance":"TEST"` from `curl -s http://<DINNERBELL_BIND>:8014/healthz`. Test is usually stopped, so don't give it an always-on monitor.
 - A new test instance starts with an empty database and invites `DINNERBELL_ADMIN_EMAIL`. Add test members on **Admin** > **Members**, or [copy production's data](#copy-production-data-into-test).
 
-Always run test through `deploy/dinnerbell-test`, never through `podman-compose` directly. The script sets the project, volume, env file, tag, and port together; setting only some of them by hand mixes the instances, such as test's label and Slack app on production's database. Before any command that can start test, it checks `.env.test` and test's secret files with `dinnerbell config check`, and refuses anything that would mix test and production, naming the reason. `deploy/dinnerbell-test --help` lists every check and variable.
+Always run test through `deploy/dinnerbell-test`, never `podman-compose` directly. The script sets the project, volume, env file, tag, and port together, and refuses anything that would mix test and production, such as test's Slack app on production's database, naming the reason. `deploy/dinnerbell-test --help` lists every check and variable.
 
-To change what the script uses, set a variable in front of a command, such as `DINNERBELL_TAG=X.Y.Z deploy/dinnerbell-test up -d` to rehearse a release. Never `export` these variables: production's compose commands in the same shell would read them too.
+To change what the script uses, set a variable in front of a command, such as `DINNERBELL_TAG=X.Y.Z deploy/dinnerbell-test up -d`. Never `export` these variables: production's compose commands in the same shell would read them too.
 
 ### Start test at boot
 
@@ -106,7 +106,7 @@ To start test at boot with podman, install `deploy/dinnerbell-test.service` as i
 
 A copy of production's data tests migrations and features against real history. It holds member emails, so keep it on the host, and scrub it before test starts.
 
-1. Stop test. If it has never run, start and stop it once so that its volume exists.
+1. Stop test. If it has never run, start and stop it once so its volume exists.
 
    ```sh
    deploy/dinnerbell-test down
@@ -118,7 +118,7 @@ A copy of production's data tests migrations and features against real history. 
    podman volume exists dinnerbell_dinnerbell-data && podman volume exists dinnerbell-test_dinnerbell-data && echo ok
    ```
 
-3. List production's backups, and pick the newest nightly `dinnerbell-YYYY-MM-DD.db` or a `pre-upgrade-*.db`. `scrub-test` migrates the copy without a `pre-migrate-*` backup of its own, because the production backup you pick here is the original. Replace `X.Y.Z` with the release production runs; its image is already on the host.
+3. List production's backups, and pick the newest nightly `dinnerbell-YYYY-MM-DD.db` or a `pre-upgrade-*.db`. That backup is the original, so `scrub-test` takes no backup of its own. Replace `X.Y.Z` with the release production runs.
 
    ```sh
    podman run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
@@ -143,7 +143,7 @@ A copy of production's data tests migrations and features against real history. 
    deploy/dinnerbell-test run --rm dinnerbell scrub-test --keep you@example.com
    ```
 
-   Before it changes anything, `scrub-test` prints the household, its last activity, and counts of members, slots, open events, unsent notifications, and feedback. Check that they match the backup, and that the last activity is from around when the backup was taken. Then type `scrub`, or, without a terminal, run the command again with `--yes`.
+   Before it changes anything, `scrub-test` prints the household, its last activity, and counts of members, slots, open events, unsent notifications, and feedback. Check that they match the backup and its date, then type `scrub`, or, without a terminal, run the command again with `--yes`.
 
 6. Start test.
 
@@ -161,32 +161,32 @@ A copy of production's data tests migrations and features against real history. 
 - Deletes all feedback on meals and the places calls have shown.
 - Turns the assistant off and deletes its conversations and drafts.
 - Deletes every web push device.
-- Deletes Dinnerbone's local weather setting with its postal code and place, so test never asks for production's weather. To try local weather on test, turn it on again on **Admin** > **Web app** with a code of your choosing.
+- Deletes Dinnerbone's local weather setting with its postal code and place. To try local weather on test, turn it on again on **Admin** > **Web app** with a code of your choosing.
 
 It keeps the meal log, catalog, and preferences. It migrates the database first, so run it with the tag you start next: an older release refuses a database that a newer one migrated.
 
-The copy keeps production's household name and time zone, whatever `.env.test` says, and test's log warns on each start for each setting that differs. To stop those warnings, set `DINNERBELL_HOUSEHOLD_NAME` and `DINNERBELL_TIMEZONE` in `.env.test` to production's values.
+The copy keeps production's household name and time zone, whatever `.env.test` says, so test warns on each start until you set `DINNERBELL_HOUSEHOLD_NAME` and `DINNERBELL_TIMEZONE` in `.env.test` to production's values.
 
-To rehearse a scheduled call after a scrub, turn a slot on on the **Schedule** page, or start a call with `/dinnerbell-test call`.
+To rehearse a call after a scrub, turn a slot on on the **Schedule** page, or run `/dinnerbell-test call`.
 
 ## Discard a call and start again
 
-On test, you can throw a call away to test the same slot and day again. These controls work only while `DINNERBELL_INSTANCE_LABEL` is set; production keeps every call.
+On test, you can throw a call away to test the same slot and day again. These controls work only while `DINNERBELL_INSTANCE_LABEL` is set.
 
-- **On the web:** as an admin, select **Discard (test)** on the call's card, check what the confirmation page says it deletes, and select **Discard (test)** again.
+- **On the web:** as an admin, select **Discard (test)** on the call's card, check what the confirmation page deletes, and select **Discard (test)** again.
 - **In Slack:** as an admin, `/dinnerbell-test discard` discards today's dinner call. Add `breakfast` or `lunch`, and `tomorrow` or a date such as `2026-10-24`.
 - **On the host:** run `deploy/dinnerbell-test run --rm dinnerbell discard-call 12`, where `12` is the ID in the call's address, `/events/12`. It shows what it deletes and asks you to type `discard`; `--yes` skips the question.
 
-Discarding deletes the call and everything in it, including the meal it logged, its feedback, and its unsent notifications. Its Slack messages change to "Discarded (test)", with no buttons, and the audit log keeps an `event.discarded` row. You can't undo a discard, and IDs are never reused.
+Discarding deletes the call and everything in it, including the meal it logged, its feedback, and its unsent notifications. You can't undo it, and IDs are never reused. Its Slack messages change to "Discarded (test)", with no buttons.
 
-On test, you can also start a called-off call again at any time that day, on the web, in App Home, or with `/dinnerbell-test call`. On production, **Start dinner again** works only until the usual meal time plus two hours.
+On test, you can also start a called-off call again at any time that day. On production, **Start dinner again** works only until two hours after the usual meal time.
 
 ## Promote a release
 
 Use this checklist for every release: it runs the exact release on a fresh copy of production's data. Replace `X.Y.Z` with the new release, and note the release production runs now.
 
 1. Read the release's **Upgrade notes** in [CHANGELOG.md](../CHANGELOG.md).
-2. Check out the new release, so the rehearsal uses its `compose.yaml` and `deploy/dinnerbell-test`. In a bundle, download, check, and extract the new bundle instead, as in step 3 of the [bundle upgrade](install.md#upgrade). Production keeps running its current container until step 10.
+2. Check out the new release, so the rehearsal uses its `compose.yaml` and `deploy/dinnerbell-test`. In a bundle, download, check, and extract the new bundle instead, as in step 3 of the [bundle upgrade](install.md#upgrade). Production keeps running until step 10.
 
    ```sh
    git fetch --tags
@@ -208,7 +208,7 @@ Use this checklist for every release: it runs the exact release on a fresh copy 
    DINNERBELL_TAG=X.Y.Z deploy/dinnerbell-test up -d
    ```
 
-7. Check that the page shows the TEST banner and `X.Y.Z` in the footer, and that `/healthz` reports `"status":"ok"`.
+7. Check for the TEST banner, `X.Y.Z` in the footer, and `"status":"ok"` from `/healthz`.
 8. Rehearse a call: run `/dinnerbell-test call`, answer, vote, and let it reach a decision. Check that nobody outside the test channel was notified.
 9. Optional: if production recorded something new during the rehearsal, such as a call or a meal, [back up now](backup-and-upgrade.md#back-up-now) again, and use that backup if you roll back.
 10. Upgrade production. Check that the digest it pulls equals the one you verified, or pin it in a `compose.override.yaml`.
@@ -218,7 +218,7 @@ Use this checklist for every release: it runs the exact release on a fresh copy 
     podman-compose down && podman-compose up -d
     ```
 
-    If production keeps its secrets in files, add `-f compose.yaml -f compose.secrets.yaml` to each command, and `-f compose.override.yaml` after them if you have one. See [Run compose with secret files](setup.md#run-compose-with-secret-files).
+    With secrets in files, add `-f compose.yaml -f compose.secrets.yaml` to each command, then `-f compose.override.yaml` if you have one ([Run compose with secret files](setup.md#run-compose-with-secret-files)).
 
 11. Check production's footer and `/healthz`.
 12. Stop test: `deploy/dinnerbell-test down`.
@@ -234,4 +234,4 @@ If the rehearsal fails, stop test, and check out (or extract) the release produc
 
 ## Docker
 
-With Docker, put `DINNERBELL_COMPOSE="docker compose"` in front of each `deploy/dinnerbell-test` command, and use `docker` for `podman`: `docker volume inspect` checks a volume, and `init` runs without `--userns keep-id`. If production keeps its secrets in files (`secrets/`), run `deploy/dinnerbell-test` with `sudo`, so it can read them to check that test doesn't share them.
+With Docker, put `DINNERBELL_COMPOSE="docker compose"` in front of each `deploy/dinnerbell-test` command, and use `docker` for `podman`: `docker volume inspect` checks a volume, and `init` runs without `--userns keep-id`. If production keeps its secrets in files, run `deploy/dinnerbell-test` with `sudo`, so it can check that test doesn't share them.

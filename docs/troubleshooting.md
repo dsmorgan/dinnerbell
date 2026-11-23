@@ -1,15 +1,15 @@
 # Troubleshoot Dinnerbell
 
-Find your symptom in the table. A startup error names the setting and how to fix it; [configuration.md](configuration.md) has the rules for each setting, and [Keep secrets in files](setup.md#keep-secrets-in-files) covers secret file errors. For the test instance, see [Troubleshoot the test instance](test-instance.md#troubleshoot-the-test-instance).
+Find your symptom in the table. A startup error names the setting and how to fix it: [configuration.md](configuration.md) has each setting's rules, and [Keep secrets in files](setup.md#keep-secrets-in-files) covers secret file errors. For the test instance, see [Troubleshoot the test instance](test-instance.md#troubleshoot-the-test-instance).
 
-After you fix a setting, recreate the service: `podman-compose down && podman-compose up -d`. With Docker, use `docker compose`. If you keep secrets in files, add `-f compose.yaml -f compose.secrets.yaml` to each `podman-compose` command on this page, as [Run compose with secret files](setup.md#run-compose-with-secret-files) shows.
+After you fix a setting, recreate the service: `podman-compose down && podman-compose up -d`, or `docker compose` with Docker. With secrets in files, add `-f compose.yaml -f compose.secrets.yaml` to each `podman-compose` command on this page ([Run compose with secret files](setup.md#run-compose-with-secret-files)).
 
 ## Common problems
 
 | Symptom | Cause | Fix |
 |---|---|---|
 | Slack says "redirect_uri did not match" after **Sign in** | The app's redirect URL isn't exactly `https://<host>/auth/callback`. | Fix it under **OAuth & Permissions** > **Redirect URLs**, and check `DINNERBELL_BASE_URL`. |
-| Sign-in says "Too many sign-in attempts" | More than 20 requests to the sign-in pages in a minute. Without `DINNERBELL_TRUSTED_PROXIES`, which rootless podman installs usually leave empty, every client behind your proxy counts together. | Wait a minute and sign in again. See [The sign-in rate limit](configuration.md#the-sign-in-rate-limit). |
+| Sign-in says "Too many sign-in attempts" | More than 20 requests to the sign-in pages in a minute, counting every client behind your proxy together unless `DINNERBELL_TRUSTED_PROXIES` is set. | Wait a minute and sign in again. See [The sign-in rate limit](configuration.md#the-sign-in-rate-limit). |
 | Sign-in returns to a Pangolin login page or loops | Pangolin authentication is on. | Turn off **Use Platform SSO**, and leave password, PIN, email OTP, and header auth off. |
 | Every form fails with "Cross-origin request refused", or sign-in loops to the start page | `DINNERBELL_BASE_URL` differs from the URL in the browser: another host, a LAN IP, an explicit `:443`, or `http://`. | Set it to exactly the URL people type. Open Dinnerbell only at that URL. |
 | Sign-in works, but Dinnerbell says you aren't invited | The Slack email differs from the invited one, or isn't verified. | Compare the emails on **Admin** > **Members** and in Slack, and fix the member's email or `DINNERBELL_ADMIN_EMAIL`. |
@@ -17,14 +17,14 @@ After you fix a setting, recreate the service: `podman-compose down && podman-co
 | A member taps a button and Slack says "I don't know your Slack account yet" | Their Slack account isn't linked, often because the emails differ. | Ask them to sign in to the web app once, or link them on **Admin** > **Members**. |
 | Startup error about a token prefix | The tokens are swapped. | The app token starts with `xapp-`, and the bot token with `xoxb-`. |
 | The log warns `ignoring environment variables that match no setting` | A `DINNERBELL_` name in `.env` is misspelled, so that setting keeps its default. | Fix the name (see [configuration.md](configuration.md)). |
-| `migrate` or `serve` says `Can't back up the database before migrating it` | The checked backup Dinnerbell takes before a migration failed, often because the disk is full. Nothing changed, and the container restarts until the backup succeeds. | Free space on the volume, or fix the `backups` directory's permissions. See [Upgrade](backup-and-upgrade.md#upgrade). |
+| `migrate` or `serve` says `Can't back up the database before migrating it` | The backup before a migration failed, often because the disk is full. Nothing changed, and the container restarts until the backup succeeds. | Free space on the volume, or fix the `backups` directory's permissions. See [Upgrade](backup-and-upgrade.md#upgrade). |
 | `migrate` or `serve` says `The database is locked` | Another process, such as `reset-history`, held the write lock. Nothing changed. | Wait for it to finish, and try again. |
-| After an upgrade or a restart, Dinnerbell restarts in a loop, and the log says `NAME is required but not set` | You keep secrets in files, but ran compose without `compose.secrets.yaml`. | Recreate the service with `-f compose.yaml -f compose.secrets.yaml`, and `-f compose.override.yaml` after them if you have one. See [Run compose with secret files](setup.md#run-compose-with-secret-files). |
+| After an upgrade or restart, Dinnerbell restarts in a loop, and the log says `NAME is required but not set` | You keep secrets in files, but ran compose without `compose.secrets.yaml`. | Recreate the service with `-f compose.yaml -f compose.secrets.yaml`, then `-f compose.override.yaml` if you have one ([Run compose with secret files](setup.md#run-compose-with-secret-files)). |
 | Production starts with an empty database | You ran compose from another directory, with another project name, or as another user, so it created a new volume. | Run `podman-compose down`, and start it again as before. Your data is still in the old volume. |
-| `/healthz` reports `"slack":"not_configured"` | `DINNERBELL_SLACK_BOT_TOKEN`, `DINNERBELL_SLACK_APP_TOKEN` (in `.env` or its secret file), or `DINNERBELL_SLACK_CHANNEL` is missing. The log says which. | Set all three. |
+| `/healthz` reports `"slack":"not_configured"` | `DINNERBELL_SLACK_BOT_TOKEN`, `DINNERBELL_SLACK_APP_TOKEN`, or `DINNERBELL_SLACK_CHANNEL` is missing. The log says which. | Set all three. |
 | `/healthz` reports `"slack":"disconnected"` for more than a minute | The host can't reach Slack. | Allow outbound HTTPS and WebSocket connections to `slack.com` and `wss-primary.slack.com`. |
 | Pushes never arrive, and the log says `push failed, will retry` with `ConnectError` or `ConnectTimeout` | The host can't reach the push services. | Allow outbound HTTPS to the hosts in [Web push](configuration.md#web-push). |
-| The den shows the season's weather with local weather on, **Admin** > **Web app** says "Couldn't reach the weather service since", and the log says `local weather failed; the den shows the seasonal weather` | The host can't reach Open-Meteo, or Open-Meteo answered with something Dinnerbell couldn't use: the line's `reason` says which, such as `timeout`, `network`, or `status`. | Allow outbound HTTPS to the hosts in [Local weather](configuration.md#local-weather). Dinnerbell tries again every 1 to 3 hours, and logs `local weather recovered` when it gets through. Meanwhile, the rest of Dinnerbell works as usual. |
+| With local weather on, the den shows the season's weather, **Admin** > **Web app** says "Couldn't reach the weather service since", and the log says `local weather failed; the den shows the seasonal weather` | The host can't reach Open-Meteo, or got an answer it couldn't use. The line's `reason` says which, such as `timeout`, `network`, or `status`. | Allow outbound HTTPS to the hosts in [Local weather](configuration.md#local-weather). Dinnerbell tries again every 1 to 3 hours, and logs `local weather recovered` when it gets through. |
 | **Admin** > **Web app** says push services are refusing notifications, and the log says `push services are refusing Dinnerbell's signature` | The server's clock is off by more than a few minutes, or `DINNERBELL_SECRET_KEY` changed. | Fix the clock (NTP). After a key change, members tap **Turn on notifications** again. |
 | The log says `Slack refused DINNERBELL_SLACK_BOT_TOKEN` | The bot token is wrong, revoked, or from another app. Notifications wait until it's fixed. | Copy the **Bot User OAuth Token** from **Install App** again. |
 | The log says `Slack refused DINNERBELL_SLACK_APP_TOKEN` | The app-level token is wrong or lacks `connections:write`, or Socket Mode is off. | Create the token again ([section 3](setup.md#3-create-the-app-level-token)), and check that **Socket Mode** is on. |
@@ -33,11 +33,11 @@ After you fix a setting, recreate the service: `podman-compose down && podman-co
 | The log says `The bot isn't a member of the channel` | The bot isn't invited. | Send `/invite @Dinnerbell` in the channel. Dinnerbell notices within a minute. |
 | The log says `The channel … is archived` | The channel is archived. | Unarchive it, or set `DINNERBELL_SLACK_CHANNEL` to another channel. |
 | `/healthz` shows `outbox.failed` above 0 | Slack refused some notifications for good, such as a direct message to someone with no Slack link. | Find `notification delivery gave up` in the log, and fix the link or the channel. |
-| `/healthz` reports the scheduler `stale` or `stopped` after the host's clock was set back, such as by an NTP correction | The scheduler's repeating jobs wait for the clock to reach the time each was next due, so the heartbeat, calls, and notifications stop for as long as the clock went back. A clock set forward does no harm. | Restart the container: `podman-compose restart dinnerbell`. Calls catch up on the next tick. |
-| `/healthz` shows `stuck_calls` above 0 | A call's next step, such as closing its answers, has failed for more than an hour. A restart doesn't help. | On **Admin**, a banner lists each stuck call. Call it off, or re-run a voting or decided call from its **Admin** menu. Report the `could not advance call` log line on the issue tracker. |
+| `/healthz` reports the scheduler `stale` or `stopped` after the host's clock was set back, such as by an NTP correction | The scheduler's jobs wait for the clock to reach each one's next due time, so the heartbeat, calls, and notifications stop for as long as the clock went back. | Restart the container: `podman-compose restart dinnerbell`. Calls catch up on the next tick. |
+| `/healthz` shows `stuck_calls` above 0 | A call's next step, such as closing its answers, has failed for more than an hour. A restart doesn't help. | A banner on **Admin** lists each stuck call. Call it off, or re-run a voting or decided call from its **Admin** menu. Report the `could not advance call` log line on the issue tracker. |
 | Badges show as text, and the log says `badge art not available` with `missing_scope` | The Slack app lacks `files:write`. | Paste the current manifest and reinstall the app (see [Upgrade](backup-and-upgrade.md#upgrade)). |
-| Badges show as text, and the log says `slack refused badge art` | Slack refused the art. | Report the line, with its `slack_error`, on the issue tracker (#110). |
-| Members message or mention Dinnerbell and get no reply | The assistant is off, or the Slack app still has the default manifest, which doesn't deliver those messages. | Check the two conditions in [The assistant](configuration.md#the-assistant), and apply the assistant manifest as in [Talk to it in Slack](configuration.md#talk-to-it-in-slack). |
+| Badges show as text, and the log says `slack refused badge art` | Slack refused the art. | Report the line, with its `slack_error`, on the issue tracker. |
+| Members message or mention Dinnerbell and get no reply | The assistant is off, or the Slack app still has the default manifest, which doesn't deliver those messages. | Check both conditions in [The assistant](configuration.md#the-assistant), and apply the assistant manifest ([Talk to it in Slack](configuration.md#talk-to-it-in-slack)). |
 
 ## Check /healthz
 
@@ -45,13 +45,13 @@ After you fix a setting, recreate the service: `podman-compose down && podman-co
 
 | Key | Meaning |
 |---|---|
-| `status` | `ok`; `degraded` when something below needs attention, with HTTP 200, so you can still sign in to fix it; or `error`, with HTTP 503, when the database is unreachable or the scheduler hasn't ticked for 5 minutes. |
+| `status` | `ok`; `degraded`, with HTTP 200, when something below needs attention; or `error`, with HTTP 503, when the database is unreachable or the scheduler hasn't ticked for 5 minutes. |
 | `version` | The running version, also shown in the page footer. |
 | `database` | `ok` or `unreachable`. |
 | `scheduler` | Its `status` and `last_tick`. A tick older than 90 seconds reports `degraded`. |
-| `slack` | `connected`. `disconnected`: Dinnerbell can't reach Slack and is retrying. `error`: a startup check failed, and the log says how to fix it. `not_configured`: a Slack setting is missing, and the bot posts nothing. `disconnected` and `error` report `degraded`. |
+| `slack` | `connected`; `disconnected`, can't reach Slack and retrying; `error`, a startup check failed and the log says how to fix it; or `not_configured`, a Slack setting is missing and the bot posts nothing. `disconnected` and `error` report `degraded`. |
 | `outbox` | `backlog`: notifications waiting, such as while Slack is down. `failed`: notifications that gave up. `oldest_pending_age`: seconds the oldest has waited; over an hour reports `degraded`, and after 24 hours it's dropped, not sent late. `null` while the database is unreachable. |
-| `push` | Only while the web app is on. `backlog`: pushes waiting, such as while the push services are unreachable. `oldest_pending_age`: seconds the oldest has waited, or `null` when none waits; over an hour reports `degraded`, and after 24 hours it closes unsent. |
+| `push` | Only while the web app is on. `backlog` and `oldest_pending_age`, as for `outbox` (`null` when none waits): over an hour reports `degraded`, and after 24 hours a push closes unsent. |
 | `backup` | `last_success`, and `failing`, which reports `degraded`. |
 | `stuck_calls` | Calls whose next step has been due for more than an hour. Above 0, or `null` when the check failed or is out of date, reports `degraded`. |
 | `instance`, `slack_dms_dropped` | On a test instance only: its label, and the direct messages withheld from people outside the test channel. |
@@ -60,7 +60,7 @@ To be alerted on `degraded`, see [Monitor it](hardening.md#monitor-it).
 
 ## Read the logs
 
-Dinnerbell writes one JSON line per log entry to standard output, including one `info` line for every action on a call and every refusal. Logs never contain emails, tokens, sign-in subjects, calendar URLs, or what members write.
+Dinnerbell writes one JSON line per entry to standard output, including one for every action on a call and every refusal. Logs never contain emails, tokens, sign-in subjects, calendar URLs, or what members write.
 
 | Field | What it holds |
 |---|---|
@@ -75,7 +75,7 @@ Dinnerbell writes one JSON line per log entry to standard output, including one 
 | `kind`, `channel_id`, `message_ts` | On a delivery: the notification, and where Slack posted it. |
 | `end_reason` | Why a call ended on its own: `too_few`, `no_coverage`, or `missed`. |
 
-To follow call 12, filter on its ID, or use `jq` to show its story. To see everything one tap did, filter on its `request_id` instead.
+To follow call 12, filter on its ID, or use `jq`. To see everything one tap did, filter on its `request_id`.
 
 ```sh
 podman-compose logs dinnerbell 2>&1 | grep '"event_id": 12,'
