@@ -34,7 +34,7 @@ You need:
 
 4. Create the Slack app. In your household's Slack workspace, create a channel such as `#dinnerbell-channel`, named apart from the bot. At [api.slack.com/apps](https://api.slack.com/apps), select **Create New App** > **From a manifest**, paste `deploy/slack-app-manifest.yaml`, and replace `dinnerbell.example.com` with your hostname. Create an app-level token with the `connections:write` scope, install the app, and invite it to the channel with `/invite @Dinnerbell`. [Sections 1 to 7 of the setup guide](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#1-create-the-slack-workspace-and-channel) show each screen.
 
-5. Write `.env` with `dinnerbell init`. It asks for your hostname, admin email, time zone, household name, and the Slack app's values, and hides secrets as you type. It generates the secret key, writes `.env` with mode 600, and checks it. To skip a Slack value, press Enter and fill it in `.env` later.
+5. Write `.env` with `dinnerbell init`. It asks for your hostname, admin email, time zone, household name, and the Slack app's values, and hides secrets as you type. Type your own time zone: Enter keeps the suggested `America/New_York`, and you can't change it after the first start. It generates the secret key, writes `.env` with mode 600, and checks it. To skip a Slack value, press Enter and fill it in `.env` later.
 
    ```sh
    podman run --rm -it --userns keep-id --user "$(id -u):$(id -g)" -v "$PWD:/out:z" \
@@ -68,7 +68,7 @@ You need:
 
    With Docker: `cd dinnerbell && docker compose pull && docker compose down && docker compose up -d`
 
-   With secrets in files, add `-f compose.yaml -f compose.secrets.yaml` to each command, as [Run compose with secret files](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#run-compose-with-secret-files) shows.
+   With secrets in files, add `-f compose.yaml -f compose.secrets.yaml` to each command, and `-f compose.override.yaml` last if you have one, as [Run compose with secret files](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#run-compose-with-secret-files) shows.
 
 ## Options
 

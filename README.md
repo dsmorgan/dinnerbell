@@ -2,7 +2,7 @@
 
 Dinnerbell answers three questions for your household at the same time each day: who's eating, what are we eating, and who's cooking, picking up, or ordering it.
 
-It asks in Slack, ranks meals that fit everyone eating, assigns the work, and celebrates who did it with badges. It runs as one container on your own hardware, with a mobile-friendly web site for the catalog, preferences, history, and stats.
+It asks in Slack, ranks meals that fit everyone eating, assigns the work, and celebrates who did it with badges. It runs as one container on your own hardware, with a mobile-friendly website for the catalog, preferences, history, and stats.
 
 An admin can also turn on the web app: members install Dinnerbell on their phone, answer calls there, and get push notifications. A member who doesn't use Slack signs in with a code an admin gives them.
 
@@ -88,9 +88,10 @@ flowchart LR
     classDef proxyc fill:#E0994C,stroke:#B9712F,color:#2A1810
     classDef appc fill:#2E6B6F,stroke:#1F4A4D,color:#FFFFFF
     classDef dbc fill:#FBE8CC,stroke:#2E6B6F,color:#2A1810
+    classDef ext fill:#FFFFFF,stroke:#8A7F72,color:#2A1810
     class slackapp,browser device
     class slack slackc
-    class push proxyc
+    class push ext
     class proxy proxyc
     class app appc
     class db dbc
@@ -98,7 +99,7 @@ flowchart LR
     style host fill:#EAF3F3,stroke:#2E6B6F,color:#2A1810
 ```
 
-Dinnerbell opens every outside connection: to Slack, to the push services while the web app is on, and, when you turn them on, to Open-Meteo for local weather and to Anthropic for the assistant. The only inbound traffic is HTTPS from phones, through your proxy or tunnel, including the return from Sign in with Slack.
+Dinnerbell opens every outside connection: to Slack; to the push services while the web app is on; to Open-Meteo when you turn on local weather; and to Anthropic and the menu pages members give it when you turn on the assistant. The only inbound traffic is HTTPS from phones, through your proxy or tunnel, including the return from Sign in with Slack.
 
 ## What you need
 
@@ -106,7 +107,7 @@ Dinnerbell opens every outside connection: to Slack, to the push services while 
 |---|---|---|
 | A Linux host that runs containers, always on | Runs one container and its data volume | podman with podman-compose 1.0.6 or later, or Docker with the compose plugin |
 | A Slack workspace where you can create apps | Dinnerbell posts calls in a Slack channel, and signs people in with Slack | A new workspace for the household; the free plan is enough |
-| An HTTPS hostname that phones can reach | The web site and web app, and the Sign in with Slack redirect, which must land on HTTPS | Any reverse proxy or tunnel with TLS: Pangolin, Cloudflare Tunnel, Tailscale Funnel, or Caddy or Traefik on a public IP |
+| An HTTPS hostname that phones can reach | The website and web app, and the Sign in with Slack redirect, which must land on HTTPS | Any reverse proxy or tunnel with TLS: Pangolin, Cloudflare Tunnel, Tailscale Funnel, or Caddy or Traefik on a public IP |
 | A way for each adult to answer | Members answer calls and get reminders | Slack, or the [web app](docs/members.md#the-web-app) with push notifications, signing in with a code instead of Slack; Google or another OpenID Connect provider can replace Sign in with Slack |
 
 You don't need a calendar or an email server. The [assistant](docs/configuration.md#the-assistant) is optional and needs an Anthropic API key. One install serves one household of a handful of adults. Dinnerbell backs up its database every night inside its data volume; you copy the backups off the host.
