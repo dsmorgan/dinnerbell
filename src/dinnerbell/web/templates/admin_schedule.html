@@ -30,7 +30,7 @@
       <label class="field"><span>Variety window (days)</span><input type="number" inputmode="numeric" min="1" max="60" name="variety_window_days" value="{{ values['variety_window_days'] }}" required></label>
     </div>
     <label class="field"><span>Minutes for the coordinator to choose roles</span><input type="number" inputmode="numeric" min="1" max="120" name="roles_choice_minutes" value="{{ values['roles_choice_minutes'] }}" aria-describedby="roles-help" required></label>
-    <p class="small muted" id="roles-help">When several people offered the winner's role, or nobody did, the coordinator has this long to pick who does it. Then the first who offered does.</p>
+    <p class="small muted" id="roles-help">When several people offered the winner's role, or nobody did, the coordinator has this long to choose the way and who does it. Then the first who offered does.</p>
     <button type="submit" class="button admin block">{{ key_icon() }}Save ranking</button>
   </fieldset>
 </form>
