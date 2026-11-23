@@ -4,7 +4,7 @@
 {% block title %}Schedule{% endblock %}
 {% block content %}
 <h1>Schedule</h1>
-<p class="small muted">When each meal's daily call goes out, and how long people have to answer and vote. Anyone in the household can change it. Each change is posted in the Dinnerbell channel with your name, and applies from the next call: a call that's already out or scheduled keeps its times, and a call started again uses the new ones. If today's call hasn't gone out yet, it uses the new schedule when it still can; if the new time has already passed today, today's call keeps the old time. Times are in the household's time zone.</p>
+<p class="small muted">When each meal's daily call goes out, and how long people have to answer and vote. Anyone in the household can change it. Each change is posted in the channel with your name and applies from the next call. Times are in the household's time zone.</p>
 {% for slot in slots %}{% set p = slot.value %}
 <form method="post" action="/schedule/{{ p }}" class="stack" id="{{ p }}">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -40,7 +40,7 @@
 <section class="card" id="skip" aria-labelledby="skip-title">
   <h2 id="skip-title">Skip a day</h2>
   {% if skipped %}<p class="alert ok" role="status">{{ skipped }}</p>{% endif %}
-  <p class="small muted">Admins only. Skip one day's call, today or up to a week ahead, before it goes out. Nothing is posted, and anyone can still start that call from the Today page. To end a call that's already out, use <strong>Call it off</strong> on the call.</p>
+  <p class="small muted">Admins only. Skip a call before it goes out, today or up to a week ahead. Anyone can still start it on Today. To end a call that's already out, use <strong>Call it off</strong>.</p>
   {% if skip_error %}<p class="alert error" role="alert">{{ skip_error }}</p>{% endif %}
   {% if skip_slots %}
   <form method="post" action="/admin/schedule/skip" class="stack">

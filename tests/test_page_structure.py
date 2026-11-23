@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import re
 from html.parser import HTMLParser
+from importlib.resources import files
 
 import pytest
 from fastapi.testclient import TestClient
@@ -201,6 +202,30 @@ def test_the_top_bar_lets_go_on_a_short_screen() -> None:
     inner = dict(rules(short.split("{", 1)[1]))
     assert inner[".topbar"] == "position: static;"
     assert inner["html"] == "scroll-padding-top: 0;"
+
+
+# Date and time fields on a phone -------------------------------------------------------------
+
+
+def test_date_and_time_fields_fit_their_column_on_an_iphone() -> None:
+    """#352: iOS Safari draws a date or time field as a menu button. It sets the field's min-width
+    to the widest value it can show and makes it content-box, so in a two-column row, such as
+    Preferences > Away or a Schedule card, the field ran past the card. Without that appearance it
+    sizes as the other fields do, and its value starts at the left, as theirs does, not centered."""
+    field = block('input:is([type="date"], [type="time"])')
+    assert "-webkit-appearance: none;" in field and "appearance: none;" in field
+    assert "min-width: 0;" in field
+    assert block("input::-webkit-date-and-time-value") == "text-align: start;"
+    assert block(".pair > *") == "min-width: 0;"
+    # The rule covers every date or time type a template uses.
+    templates = files("dinnerbell").joinpath("web", "templates")
+    used = {
+        kind
+        for template in templates.iterdir()
+        if template.name.endswith(".html")
+        for kind in re.findall(r'<input type="(date|time|datetime-local|month|week)"', template.read_text())
+    }
+    assert used == {"date", "time"}
 
 
 # The skip link -------------------------------------------------------------------------------

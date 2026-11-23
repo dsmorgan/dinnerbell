@@ -255,7 +255,7 @@ Every night at 03:30 household time, Dinnerbell backs up its database to `/data/
 Besides the nightly `dinnerbell-YYYY-MM-DD.db` copies, Dinnerbell takes a one-off copy before anything hard to undo. Each is named for what it came before, with the UTC time:
 
 - `pre-upgrade-VERSION-TIME.db`: [`dinnerbell backup`](#back-up-now), which you run before an upgrade.
-- `pre-migrate-FROM-TO-TIME.db`, such as `pre-migrate-0040-to-0044-20261122T013000.123456Z.db`: `serve` or `migrate`, when the database needs migrating. See [Upgrade](#upgrade).
+- `pre-migrate-FROM-TO-TIME.db`, such as `pre-migrate-0040-to-0045-20261122T013000.123456Z.db`: `serve` or `migrate`, when the database needs migrating. See [Upgrade](#upgrade).
 - `pre-reset-VERSION-TIME.db`: `reset-history`. See [Going live](#going-live).
 
 ### What pruning keeps
@@ -265,7 +265,7 @@ After each nightly backup, Dinnerbell deletes the copies it no longer needs. It 
 - The 14 newest nightly copies, and the newest nightly copy from each of the last 8 weeks.
 - The five newest `pre-migrate-*` copies. A migration that fails restarts the container, and each start takes another copy, so these would otherwise fill the disk.
 
-Pruning never deletes `pre-upgrade-*` or `pre-reset-*` copies, or any file it didn't name, so delete old ones yourself. To keep a `pre-migrate-*` copy for good, copy it off the host, or rename it without the time, such as `pre-migrate-0040-to-0044-before-the-move.db`.
+Pruning never deletes `pre-upgrade-*` or `pre-reset-*` copies, or any file it didn't name, so delete old ones yourself. To keep a `pre-migrate-*` copy for good, copy it off the host, or rename it without the time, such as `pre-migrate-0040-to-0045-before-the-move.db`.
 
 ### What a backup holds
 

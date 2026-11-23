@@ -117,7 +117,7 @@ def one_off_name(purpose: str, version: str, now: datetime) -> str:
 
 def migration_backup_name(from_revision: str, to_revision: str, now: datetime) -> str:
     """The name of the backup taken before migrating, such as
-    ``pre-migrate-0040-to-0044-20261122T013000.123456Z.db``: the two revisions' numbers and the
+    ``pre-migrate-0040-to-0045-20261122T013000.123456Z.db``: the two revisions' numbers and the
     UTC time to the microsecond, so two starts in the same second, such as ``migrate`` while
     ``serve`` starts, or a quick restart, never pick the same name."""
     stamp = f"{now.astimezone(UTC):%Y%m%dT%H%M%S.%fZ}"
