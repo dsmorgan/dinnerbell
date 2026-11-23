@@ -70,12 +70,12 @@ A member on **Web app** who hasn't turned notifications on anywhere gets no dire
 A member doesn't need Slack while the web app is on. They answer calls in the app and get push notifications.
 
 1. On **Admin** > **Web app**, turn on the web app, if it's off.
-2. On **Admin** > **Members**, add the member with any email address they use. Nothing is sent to it.
+2. On **Admin** > **Members**, add the member with any email address they use. Dinnerbell sends nothing to it.
 3. Select **Sign-in code** on their row, and give them the code in person or by text. It works once, for 15 minutes.
 4. On their phone, they open your Dinnerbell address, select **Get the app**, follow its steps, and [sign in with the code](#sign-in-with-a-code) in the installed app.
 5. They [turn on notifications](#turn-notifications-on-or-off).
 
-Their **Notifications** choice is **Web app**. If they join Slack later with the same email, signing in with Slack links them.
+Their **Notifications** choice is **Web app**. If they join Slack later with the same email, Dinnerbell links them, and they move to **Both**.
 
 ### Sign in with a code
 

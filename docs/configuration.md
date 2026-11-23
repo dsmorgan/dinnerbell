@@ -1,6 +1,6 @@
 # Configuration reference
 
-Dinnerbell reads its settings from environment variables, which compose loads from `.env`. [setup.md](setup.md#9-run-dinnerbell) covers the values a first install needs; the defaults suit most households. `.env.example` lists every setting with a comment. An empty value counts as unset.
+Dinnerbell reads its settings from environment variables, which compose loads from `.env`. `dinnerbell init`, in [setup.md](setup.md#9-run-dinnerbell), asks for the values a first install needs; the defaults suit most households. `.env.example` lists every setting with a comment. An empty value counts as unset.
 
 After you change `.env`, recreate the service so that the container picks up the change:
 

@@ -29,7 +29,7 @@ Keep the directory name `dinnerbell`, and run every command in this guide as the
 ## 1. Create the Slack workspace and channel
 
 1. At [slack.com/get-started](https://slack.com/get-started), create a workspace for your household. The free plan is enough.
-2. Create a public channel named `#dinnerbell-channel`, or any name that isn't the bot's, so that `#dinnerbell` and `@Dinnerbell` don't look alike. A private channel also needs the `groups:read` bot scope, which you add in the manifest.
+2. Create a public channel named `#dinnerbell-channel`, or any name that isn't the bot's, so that `#dinnerbell` and `@Dinnerbell` don't look alike. A private channel also needs the `groups:read` bot scope, which you add in Slack's manifest editor.
 
 ## 2. Create the Slack app
 
@@ -76,11 +76,11 @@ Point your hostname at the host's port 8013, with the proxy's own sign-in turned
 2. In the resource's authentication settings, turn off **Use Platform SSO**, which is on by default.
 3. Leave password, PIN, email OTP, and header auth off.
 
-`compose.yaml` publishes port 8013 on `DINNERBELL_BIND`, which defaults to `127.0.0.1`. If the proxy runs on another host or in a container network, set `DINNERBELL_BIND` in `.env` to the host's address on the interface the proxy reaches, such as `192.168.1.20`. Avoid `0.0.0.0` unless a firewall limits who can reach the port.
+By default, `compose.yaml` publishes port 8013 on `127.0.0.1`. If the proxy runs on another host or in a container network, you set `DINNERBELL_BIND` in section 9.
 
 ## 9. Run Dinnerbell
 
-1. Write `.env` with `dinnerbell init`. It asks for your hostname, admin email, time zone, household name, and the Slack values from sections 3 to 6, and hides secrets as you type. It generates the secret key, writes `.env` with mode 600, and checks it.
+1. Write `.env` with `dinnerbell init`. It asks for your hostname, admin email, time zone, household name, and the Slack values from sections 3 to 6, and hides secrets as you type. Type your own time zone: Enter keeps the suggested `America/New_York`. It generates the secret key, writes `.env` with mode 600, and checks it.
 
    ```sh
    VERSION="$(git describe --tags --exact-match | sed 's/^v//')"
@@ -88,7 +88,9 @@ Point your hostname at the host's port 8013, with the proxy's own sign-in turned
      "ghcr.io/dsmorgan/dinnerbell:$VERSION" init --output /out/.env
    ```
 
-   With Docker, leave out `--userns keep-id`. To write `.env` by hand instead, copy `.env.example`, which explains each setting.
+   With Docker or rootful podman, leave out `--userns keep-id`. To write `.env` by hand instead, copy `.env.example` to `.env`, run `chmod 600 .env`, and fill it in.
+
+   If the proxy runs on another host or in a container network, set `DINNERBELL_BIND` in `.env` (`dinnerbell init` writes it as a comment: uncomment it) to this host's address on the interface the proxy reaches, such as `192.168.1.20`. Avoid `0.0.0.0` unless a firewall limits who can reach the port.
 
    Check these before you start:
 
@@ -150,7 +152,7 @@ To import a file on first start instead, see [Load a catalog on first start](con
 
 ## Going live
 
-While you try Dinnerbell out, it records test calls, votes, meals, and feedback. Before the household relies on it, run `dinnerbell reset-history` once, on production, so History and stats start clean. It deletes calls and everything in them, the meal log, feedback, contributions and badges, assistant conversations and drafts, and the Slack notification queue. It keeps the catalog, members, Slack links, preferences, sign-ins, the audit log, and every setting.
+While you try Dinnerbell out, it records test calls, votes, meals, and feedback. Before the household relies on it, run `dinnerbell reset-history` once, on production, so History and stats start clean. It deletes calls and everything in them, the meal log, feedback, contributions and badges, assistant conversations and drafts, and the notification queues. It keeps the catalog, members, Slack links, preferences, sign-ins, the audit log, and every setting.
 
 1. Call off every open call: on its card or in Slack, select **Call it off**. The reset refuses while any call is scheduled or still going. Calling off someone else's call for a later day sends them a direct message, so tell them first.
 2. [Back up now](backup-and-upgrade.md#back-up-now), and copy the backup off the host.
@@ -162,11 +164,11 @@ While you try Dinnerbell out, it records test calls, votes, meals, and feedback.
 
    The command prints the database path, the household name, and what it deletes and keeps in each table. Check that **Notifications not yet sent** is 0; if you just called off a call, type anything but `reset`, wait a minute, and run it again. If it says the scheduler posts today's call again, run the reset after today's answer deadline.
 
-   Then type `reset`, or without a terminal, run it again with `--yes`. The command backs up the database to `/data/backups/pre-reset-VERSION-TIME.db` first.
+   Then type `reset`, or, without a terminal, run it again with `--yes`. The command backs up the database to `/data/backups/pre-reset-VERSION-TIME.db` first.
 
 4. Check that History and Stats are empty, and that the catalog, Members, Preferences, and Schedule are unchanged.
 
-Old messages stay in Slack, and their buttons reply "No such call." Days you skipped stay skipped. The next scheduled call posts as usual. To undo the reset, [roll back](backup-and-upgrade.md#roll-back) to the `pre-reset-*.db` file, skipping step 2.
+Old messages stay in Slack, and their buttons reply "No such call." Days you skipped stay skipped; to have a call on one after all, start it from App Home, Today, or `/dinnerbell call`. The next scheduled call posts as usual. To undo the reset, [roll back](backup-and-upgrade.md#roll-back) to the `pre-reset-*.db` file, skipping step 2.
 
 ## Optional setup
 

@@ -83,7 +83,7 @@ A minor release after 1.0 can, with **Upgrade notes** that say what to do:
 
 Log lines, the database schema, and the Python modules aren't promised; they can change in any release.
 
-You can upgrade to a newer release from any release since 0.2.0. The 1.0 review migrated every release up to the newest and back down. To go back after an upgrade, restore the backup taken before it ([Upgrade](docs/backup-and-upgrade.md#roll-back)).
+You can upgrade to a newer release from any release since 0.2.0. The 1.0 review migrated every release up to the newest and back down. To go back after an upgrade, restore the backup taken before it ([Roll back](docs/backup-and-upgrade.md#roll-back)).
 
 ## Release
 

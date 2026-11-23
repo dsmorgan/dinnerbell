@@ -5,7 +5,7 @@
 # dinnerbell.example.com in redirect_urls to your public hostname in Slack's
 # manifest editor, before you select Next. The path must stay /auth/callback.
 # To keep a copy with your hostname, write it to a *.local.yaml file, which git
-# ignores. See docs/setup.md.
+# ignores.
 
 display_information:
   name: Dinnerbell

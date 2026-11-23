@@ -2,7 +2,7 @@
 
 This page covers backups, upgrades, rollbacks, and moving Dinnerbell to a new host. The commands use podman and a git clone. With Docker, replace `podman-compose` with `docker compose` and `podman` with `docker`. With the release bundle, upgrade as [install.md](install.md#upgrade) shows.
 
-If you keep secrets in files, name the compose files in every `podman-compose` command, as [Run compose with secret files](setup.md#run-compose-with-secret-files) shows. Without them, Dinnerbell starts without its secrets and restarts in a loop.
+If you keep secrets in files, add `-f compose.yaml -f compose.secrets.yaml` to every `podman-compose` command below, and `-f compose.override.yaml` last if you have one, as [Run compose with secret files](setup.md#run-compose-with-secret-files) shows. Without the first two, Dinnerbell starts without its secrets and restarts in a loop; without the last, compose skips your override file.
 
 ## Back up
 
@@ -71,13 +71,13 @@ Production runs a release tag, never `latest` or `main`, and your clone stays ch
    git checkout vX.Y.Z
    ```
 
-4. Pull the image, and [verify it](#verify-an-image) if you like. If you pinned a digest in `compose.override.yaml`, update or remove the pin first, or you keep the old image.
+4. Pull the image. Optional: [verify it](#verify-an-image). If you pinned a digest in `compose.override.yaml`, update or remove the pin first, or you keep the old image.
 
    ```sh
    podman-compose pull
    ```
 
-5. Recreate the service. `down` keeps the data volume; never add `-v`, which deletes it.
+5. Recreate the service. `down` keeps the data volume; never add `-v`, which deletes it. With secrets in files, name the compose files, as at the top of this page.
 
    ```sh
    podman-compose down && podman-compose up -d
@@ -119,7 +119,7 @@ To roll back, run the previous release on the backup you took before the upgrade
    podman-compose run --rm --entrypoint sh dinnerbell -c 'umask 077 && rm -f /data/dinnerbell.db-wal /data/dinnerbell.db-shm && cp /data/backups/pre-upgrade-X.Y.Z-YYYYMMDDTHHMMSSZ.db /data/dinnerbell.db'
    ```
 
-5. Pull the previous image and start the service.
+5. Pull the previous image and start the service, with the `-f` options from the top of this page.
 
    ```sh
    podman-compose pull
