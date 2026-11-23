@@ -211,7 +211,7 @@ def test_off_every_code_and_device_route_is_the_usual_404(admin: TestClient, sam
     assert 'href="/auth/code"' not in phone.get("/").text
     assert 'id="devices"' not in admin.get("/preferences").text
     members = admin.get("/admin/members").text
-    assert "/sign-in-code" not in members and "/preferences/devices/" not in members
+    assert "/sign-in-code" not in members and "Sign-in code" not in members
     assert codes(migrated) == [] and len(sessions_of(migrated, mine.member_id)) == 1
 
 
@@ -241,6 +241,7 @@ def test_off_an_admin_still_signs_a_member_out_everywhere(
         f"member:{sam}",
         {"sessions": 1, "codes": 0},
     )
+    # A member who isn't an admin can't use it at all. (An admin's own row only hides the button.)
     sign_in_as(admin, provider, *SAM)
     assert submit(admin, f"/admin/members/{admin_id}/sign-out").status_code == 403
 

@@ -31,7 +31,7 @@ GitHub sends a scheduled workflow's failure notice to the person who last change
 
 Dinnerbell sends no `Strict-Transport-Security` (HSTS) header. Your reverse proxy terminates TLS, so it must send it. Without HSTS, a browser that opens your hostname without `https://` makes its first request over plain HTTP, which someone on the same network can intercept.
 
-With a self-hosted Pangolin, which runs Traefik:
+With a self-hosted Pangolin, which runs Traefik, follow these steps. They follow Pangolin's Traefik hardening guide but haven't been tried on a real Pangolin, so keep a copy of each file you change, and check that Traefik starts again afterward.
 
 1. In the dynamic configuration file that Traefik loads, `config/traefik/dynamic_config.yml` in a default install, add a headers middleware under `http.middlewares`, beside the ones already there:
 
