@@ -14,7 +14,7 @@ When nobody coordinates, tap **I'll coordinate** while answers are open or durin
 | The call message | While voting |
 | The call's page on the web | While answers are open, and while voting |
 
-**Coordinating puts you in.** If you said Out or Maybe, or hadn't answered, coordinating changes your answer to In. The same applies when someone hands it to you or an admin assigns it to you, and you get a message if that changes your answer. During the vote, you [join late](spec.md#63-proposals-ranking-and-voting): any guests or eat window on an earlier answer are cleared, and, unlike other late joiners, your vote counts. After the decision, only someone who's already in can take over. A late joiner the coordinator switched off can't take it on.
+**Coordinating puts you in.** If you said Out or Maybe, or hadn't answered, coordinating changes your answer to In. The same applies when someone hands it to you or an admin assigns it to you, and you get a message if that changes your answer. During the vote, you [join late](spec.md#63-proposals-ranking-and-voting): any guests or eat window on an earlier answer are cleared, and, unlike other late joiners, your vote counts. After the decision, only someone who's already in can take over. A late joiner who's been switched off can't take it on.
 
 ### If nobody claims it
 
@@ -86,7 +86,7 @@ Before the meal time, whoever you assign is told, and so is whoever loses the ro
 
 ### When you end up eating somewhere else
 
-Change the place to record where you're really eating: any place in the catalog, or a new name, even one nobody offered or someone vetoed. Pick a way the place allows; a new name needs one, because **Cook** makes it a home meal and **Pickup** or **Delivery** a restaurant. People keep their roles if the new way still has them. A role nobody has yet goes to the first person who offered, or to nobody, for you to assign. Before the meal time, each person who's in gets one message about the new place, saying if they lost or gained a role. Once the meal is marked done, only an admin can correct the place, on the web.
+Change the place to record where you're really eating: any place in the catalog, or a new name, even one nobody offered or someone vetoed. Pick a way the place allows; a new name needs one, because **Cook** makes it a home meal and **Pickup** or **Delivery** a restaurant. People keep their roles if the new way still has them. A role nobody has yet goes to the first person who offered, or to nobody, for you to assign. Before the meal time, everyone else who's in gets one message about the new place, saying if they lost or gained a role. Once the meal is marked done, only an admin can correct the place, on the web.
 
 ### Takeout: who orders and who picks up
 
