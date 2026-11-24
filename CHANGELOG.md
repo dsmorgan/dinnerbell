@@ -6,8 +6,13 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+### Added
+
+- **`dinnerbell admin add EMAIL`, and a start-up warning about a mistyped admin email** (#360). When no admin can sign in, run `podman-compose exec dinnerbell dinnerbell admin add EMAIL` on the host. It invites, promotes, or reactivates the member with that email as an admin, clears its sign-in and Slack links so their next sign-in claims it, prints what it did by member ID, and writes a `member.admin_added` audit row with no actor. A guest with that Slack email is never made the admin; see [Get an admin back in](docs/troubleshooting.md#get-an-admin-back-in). And while the first admin's invitation is unclaimed, Dinnerbell looks up `DINNERBELL_ADMIN_EMAIL` in Slack once at start, and logs a warning that names the setting, not the email, when nobody in the workspace has it.
+
 ### Fixed
 
+- **A mistyped admin email at install no longer locks out the first admin** (#360). With the wrong `DINNERBELL_ADMIN_EMAIL`, the first admin's Sign in with Slack joined them from the channel as a guest, and after the email was fixed, every sign-in still landed on that guest, which only an admin could link; the way out was editing the database. Now an invitation wins over a guest the same person joined as: Sign in with Slack with an invited member's verified email signs them in as the member, admin or not, and folds the guest into it as **Link to member** does, audited as `guest.linked_to_member` with the member as the actor. The same goes for a member who joined from the channel before you invited them. A Slack guest account never folds on email alone. See [Members and guests](docs/members.md#controls-on-members).
 - **Date and time fields fit their card on an iPhone** (#352). iOS Safari draws a date or time field as a menu button, at least as wide as the longest value it can show, so where two share a row, such as **First day away** and **Last day away** on **Preferences** > **Away**, or **Call time** and **Usual meal time** on **Schedule**, the second ran past the card's right edge. Now every date and time field fits its column and looks like the other fields, its value at the left instead of centered.
 - **The setup guide's example backup name** (#352). [Back up](docs/backup-and-upgrade.md#back-up) gave `pre-migrate-0040-to-0044-…`; 0.19.0's backup is `pre-migrate-0040-to-0045-…`.
 
