@@ -8,16 +8,20 @@ adds no risk.
 It makes the member with that email an active admin that their next sign-in claims: invited if
 there's none, promoted, reactivated, and with its own sign-in and Slack links cleared, so a new
 account with that email signs in and links again. A guest isn't a member, so it never becomes
-the admin: a guest who joined from the channel with that Slack email is folded into the admin at
-their next Sign in with Slack (``domain.identity``), except a Slack guest account, which is never
-linked on email alone; that guest's sign-in link is cleared instead, so the email wins. Audited
-as ``member.admin_added``, with no actor.
+the admin. For each guest with that Slack email:
+
+- One that signed in on the web is folded into the admin at their next Sign in with Slack
+  (``domain.identity``), unless it's a Slack guest account, which is never linked on email
+  alone, or removed. Then its sign-in link is cleared instead, so the email wins.
+- One that holds a Slack account and won't be folded keeps it: the output says how to move it.
+
+Audited as ``member.admin_added``, with no actor.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, replace
 from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,6 +36,35 @@ log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
+class GuestNote:
+    """A guest whose Slack email is the admin's."""
+
+    guest_id: int
+    folds: bool = False
+    """It signed in on the web, so its next Sign in with Slack folds it into the admin."""
+    unlinked: str | None = None
+    """Why its sign-in link was cleared: it's a Slack guest account, or removed."""
+    holds_slack: bool = False
+    """It keeps a Slack account that won't move to the admin on its own."""
+
+    def lines(self, who: str) -> list[str]:
+        guest, lines = f"guest {self.guest_id}", []
+        if self.folds:
+            lines.append(
+                f"{guest.capitalize()} has this Slack email and signed in on the web: "
+                f"their next Sign in with Slack folds it into {who}."
+            )
+        if self.unlinked:
+            lines.append(f"Cleared the sign-in link of {guest} ({self.unlinked}), so it doesn't stop the sign-in.")
+        if self.holds_slack:
+            lines.append(
+                f"{guest.capitalize()} holds this Slack account. Once you're in, clear its Slack link on its "
+                "guest row, then set your Slack member ID on your row."
+            )
+        return lines
+
+
+@dataclass(frozen=True, slots=True)
 class AdminAdded:
     member_id: int
     invited: bool = False
@@ -39,14 +72,15 @@ class AdminAdded:
     reactivated: bool = False
     unlinked: bool = False
     """Its sign-in and Slack links were cleared, and its sessions ended."""
-    guest_id: int | None = None
-    """An active guest who joined with this email as their Slack email."""
-    guest_unlinked: bool = False
-    """That guest uses a Slack guest account, so its sign-in link was cleared."""
+    guests: tuple[GuestNote, ...] = ()
+
+    @property
+    def guests_unlinked(self) -> list[int]:
+        return [g.guest_id for g in self.guests if g.unlinked]
 
     @property
     def changed(self) -> bool:
-        return self.invited or self.promoted or self.reactivated or self.unlinked or self.guest_unlinked
+        return self.invited or self.promoted or self.reactivated or self.unlinked or bool(self.guests_unlinked)
 
     def lines(self) -> list[str]:
         """What it did, by member ID: never a name or an email."""
@@ -60,19 +94,23 @@ class AdminAdded:
             lines.append(f"Made {who} an admin.")
         if self.unlinked:
             lines.append(f"Cleared the sign-in and Slack links of {who}, and signed it out everywhere.")
-        if self.guest_id is not None and self.guest_unlinked:
-            lines.append(
-                f"Cleared the sign-in link of guest {self.guest_id}, who uses a Slack guest account. "
-                f"Once you're in, remove that guest or clear its Slack link on Admin > Members."
-            )
-        elif self.guest_id is not None:
-            lines.append(f"Guest {self.guest_id} has this Slack email: signing in with Slack folds it into {who}.")
+        for guest in self.guests:
+            lines += guest.lines(who)
         if not self.changed:
             lines.append(
                 f"{who.capitalize()} is already an active admin that the next sign-in claims. Nothing changed."
             )
         lines.append("Sign in with this email to finish.")
         return lines
+
+    def payload(self) -> dict[str, object]:
+        return {
+            "invited": self.invited,
+            "promoted": self.promoted,
+            "reactivated": self.reactivated,
+            "unlinked": self.unlinked,
+            "guests_unlinked": self.guests_unlinked,
+        }
 
 
 async def add_admin(db: AsyncSession, email: str, *, now: datetime) -> AdminAdded:
@@ -82,7 +120,7 @@ async def add_admin(db: AsyncSession, email: str, *, now: datetime) -> AdminAdde
     clean = normalize_email(email)
     household = await current_household(db)
     async with write_transaction(db):
-        members, sessions = MemberRepository(db), SessionRepository(db)
+        members = MemberRepository(db)
         found = await members.by_email(household.id, clean)
         if found is None:
             member = await members.add(
@@ -96,17 +134,15 @@ async def add_admin(db: AsyncSession, email: str, *, now: datetime) -> AdminAdde
             result = AdminAdded(member.id, invited=True)
         else:
             result = await _claimable(db, found, now)
-        guest = await members.guest_by_slack_email(household.id, clean)
-        if guest is not None:
-            unlink = guest.slack_guest_account and guest.oidc_subject is not None
-            if unlink:
-                await members.update(household.id, guest.id, now, oidc_subject=None)
-                await sessions.delete_for_member(guest.id)
-            result = replace(result, guest_id=guest.id, guest_unlinked=unlink)
+        notes = []
+        for guest in await members.guests_by_slack_email(household.id, clean):
+            note = await _guest_note(db, guest, now)
+            if note is not None:
+                notes.append(note)
+        result = replace(result, guests=tuple(notes))
         if not result.changed:
             return result
-        payload = {k: v for k, v in asdict(result).items() if k != "member_id"}
-        await audit(db, household.id, None, "member.admin_added", f"member:{result.member_id}", payload, now)
+        await audit(db, household.id, None, "member.admin_added", f"member:{result.member_id}", result.payload(), now)
         await db.commit()
     log.info("admin added from the command line", extra={"member_id": result.member_id})
     return result
@@ -128,3 +164,20 @@ async def _claimable(db: AsyncSession, member: Member, now: datetime) -> AdminAd
     if changes:
         await MemberRepository(db).update(member.household_id, member.id, now, **changes)
     return AdminAdded(member.id, promoted="role" in changes, reactivated="active" in changes, unlinked=linked)
+
+
+async def _guest_note(db: AsyncSession, guest: Member, now: datetime) -> GuestNote | None:
+    """What happens to ``guest``, whose Slack email is the admin's, at the next sign-in. Only a
+    guest that signed in on the web folds (``domain.identity``); one that can't, a Slack guest
+    account or a removed guest, has its sign-in link cleared so the email wins."""
+    signed_in = guest.oidc_subject is not None
+    folds = signed_in and guest.active and not guest.slack_guest_account
+    unlinked = None
+    if signed_in and not folds:
+        unlinked = "a Slack guest account" if guest.active else "removed"
+        await MemberRepository(db).update(guest.household_id, guest.id, now, oidc_subject=None)
+        await SessionRepository(db).delete_for_member(guest.id)
+    holds_slack = guest.slack_user_id is not None and not folds
+    if not (folds or unlinked or holds_slack):
+        return None  # such as a guest folded into a member already
+    return GuestNote(guest.id, folds=folds, unlinked=unlinked, holds_slack=holds_slack)

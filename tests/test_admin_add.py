@@ -91,8 +91,7 @@ async def test_a_missing_member_is_invited_as_an_admin(house: House) -> None:
         "promoted": False,
         "reactivated": False,
         "unlinked": False,
-        "guest_id": None,
-        "guest_unlinked": False,
+        "guests_unlinked": [],
     }
     signed_in = await slack_sign_in(house, "sub-riley", "riley@example.com", "U01RILEY")
     assert signed_in.member.id == result.member_id and signed_in.member.is_admin
@@ -147,8 +146,11 @@ async def test_an_admin_that_the_next_sign_in_claims_changes_nothing(house: Hous
     assert await audits(house) == []
 
 
-async def joined_guest(house: House, email: str, *, slack_guest_account: bool = False) -> int:
-    """A guest who joined from the channel with ``email`` as their Slack email, and signed in."""
+async def joined_guest(
+    house: House, email: str, *, slack_guest_account: bool = False, signed_in: bool = True, active: bool = True
+) -> int:
+    """A guest who joined from the channel with ``email`` as their Slack email, and signed in on
+    the web unless ``signed_in`` is False."""
     async with house.sessionmaker() as db:
         members = MemberRepository(db)
         guest = await members.add_guest(
@@ -159,38 +161,83 @@ async def joined_guest(house: House, email: str, *, slack_guest_account: bool = 
             slack_guest_account=slack_guest_account,
             now=house.clock(),
         )
-        await members.update(house.household.id, guest.id, house.clock(), slack_email=email, oidc_subject="sub-riley")
+        subject = "sub-riley" if signed_in else None
+        await members.update(
+            house.household.id, guest.id, house.clock(), slack_email=email, oidc_subject=subject, active=active
+        )
         await db.commit()
     return guest.id
 
 
-async def test_a_guest_with_the_email_is_folded_into_the_admin_at_their_next_sign_in(house: House) -> None:
+def holds(guest_id: int) -> str:
+    return (
+        f"Guest {guest_id} holds this Slack account. Once you're in, clear its Slack link on its guest row, "
+        "then set your Slack member ID on your row."
+    )
+
+
+async def test_a_guest_that_signed_in_on_the_web_is_folded_at_their_next_sign_in(house: House) -> None:
     """A guest isn't a member, so it never becomes the admin: the command invites one, and the
     guest's next Sign in with Slack folds it in (#360)."""
     guest_id = await joined_guest(house, "riley@example.com")
     result = await add(house, "riley@example.com")
-    assert result.invited and result.guest_id == guest_id and not result.guest_unlinked
+    assert result.invited and result.guests == (admin_add.GuestNote(guest_id, folds=True),)
     assert (await row(house, guest_id)).oidc_subject == "sub-riley"  # untouched
-    assert f"Guest {guest_id} has this Slack email: signing in with Slack folds it into member {result.member_id}." in (
-        result.lines()
-    )
+    assert result.lines() == [
+        f"Invited member {result.member_id} as an admin.",
+        f"Guest {guest_id} has this Slack email and signed in on the web: their next Sign in with Slack folds it "
+        f"into member {result.member_id}.",
+        "Sign in with this email to finish.",
+    ]
     signed_in = await slack_sign_in(house, "sub-riley", "riley@example.com", "U01RILEY")
     assert signed_in.member.id == result.member_id
     assert (await row(house, guest_id)).active is False
 
 
-async def test_a_slack_guest_accounts_sign_in_link_is_cleared(house: House) -> None:
-    """A Slack guest account is never folded on email alone, so its sign-in link would keep
-    winning: the command clears it, and the email claims the admin."""
-    guest_id = await joined_guest(house, "riley@example.com", slack_guest_account=True)
+async def test_a_guest_that_never_signed_in_on_the_web_keeps_its_slack_account(house: House) -> None:
+    """Joined from Slack only: nothing folds it, so the output says how to move the account."""
+    guest_id = await joined_guest(house, "riley@example.com", signed_in=False)
     result = await add(house, "riley@example.com")
-    assert result.guest_unlinked
+    assert result.guests == (admin_add.GuestNote(guest_id, holds_slack=True),)
+    assert holds(guest_id) in result.lines() and "folds" not in " ".join(result.lines())
+    signed_in = await slack_sign_in(house, "sub-riley", "riley@example.com", "U01RILEY")
+    assert signed_in.member.id == result.member_id  # by email; the guest keeps the Slack account
+    assert (await row(house, guest_id)).slack_user_id == "U01RILEY"
+
+
+@pytest.mark.parametrize("signed_in", [True, False])
+async def test_a_slack_guest_account_never_folds(house: House, signed_in: bool) -> None:
+    """A Slack guest account is never folded on email alone, so a sign-in link would keep
+    winning: the command clears it, and the email claims the admin."""
+    guest_id = await joined_guest(house, "riley@example.com", slack_guest_account=True, signed_in=signed_in)
+    result = await add(house, "riley@example.com")
+    unlinked = "a Slack guest account" if signed_in else None
+    assert result.guests == (admin_add.GuestNote(guest_id, unlinked=unlinked, holds_slack=True),)
+    assert holds(guest_id) in result.lines() and "folds" not in " ".join(result.lines())
     guest = await row(house, guest_id)
     assert (guest.oidc_subject, guest.active, guest.slack_user_id) == (None, True, "U01RILEY")
-    signed_in = await slack_sign_in(house, "sub-riley", "riley@example.com", "U01RILEY")
-    assert signed_in.member.id == result.member_id and signed_in.member.is_admin
+    signed_in_now = await slack_sign_in(house, "sub-riley", "riley@example.com", "U01RILEY")
+    assert signed_in_now.member.id == result.member_id and signed_in_now.member.is_admin
     (audit,) = await audits(house)
-    assert audit.payload["guest_id"] == guest_id and audit.payload["guest_unlinked"] is True
+    assert audit.payload["guests_unlinked"] == ([guest_id] if signed_in else [])
+
+
+async def test_a_removed_guests_sign_in_link_is_cleared(house: House) -> None:
+    """A removed guest holding the person's subject would refuse the sign-in as inactive."""
+    guest_id = await joined_guest(house, "riley@example.com", active=False)
+    result = await add(house, "riley@example.com")
+    assert result.guests == (admin_add.GuestNote(guest_id, unlinked="removed", holds_slack=True),)
+    assert f"Cleared the sign-in link of guest {guest_id} (removed), so it doesn't stop the sign-in." in result.lines()
+    assert (await row(house, guest_id)).oidc_subject is None
+    signed_in = await slack_sign_in(house, "sub-riley", "riley@example.com", "U01RILEY")
+    assert signed_in.member.id == result.member_id
+
+
+async def test_a_guest_folded_already_is_not_mentioned(house: House) -> None:
+    guest_id = await joined_guest(house, "riley@example.com", signed_in=False, active=False)
+    await run(house, "UPDATE member SET slack_user_id = NULL WHERE id = :id", id=guest_id)
+    result = await add(house, "riley@example.com")
+    assert result.guests == ()
 
 
 async def test_a_bad_email_and_a_missing_household_are_refused(database: Database, clock: FakeClock) -> None:
