@@ -53,6 +53,7 @@ from dinnerbell.domain.assistant_coordinating import (
     plan_lines,
     plan_title,
     shuffle_lines,
+    with_people,
 )
 from dinnerbell.domain.assistant_drafts import Draft, DraftKind, day_words
 from dinnerbell.domain.catalog import MODE_ORDER, CatalogItem, Mode, name_key
@@ -613,21 +614,24 @@ def _plan_changed(exc: EventRuleViolation | NotFound) -> EventRuleViolation | No
     return exc
 
 
-async def _name(db: AsyncSession, actor: Member, member_id: int) -> str:
-    """A person's name for their coordinator's Confirm result, which only the coordinator sees and
-    never goes to the model."""
-    found = await MemberRepository(db).get(actor.household_id, member_id)
-    return found.display_name if found is not None else "a former member"
+async def _naming(db: AsyncSession, actor: Member, event_id: int, told: str) -> ActionConfirmed:
+    """A Confirm result that names people: ``told`` marks each as ``person`` of their member ID,
+    and the coordinator's card names them, which only the coordinator sees and never goes to the
+    model. The conversation records ``told``, with labels (#363)."""
+    names = {m.id: m.display_name for m in await MemberRepository(db).list(actor.household_id)}
+    text = with_people(told, lambda member_id: names.get(member_id) or "a former member")
+    return ActionConfirmed(event_id, text, told=told)
 
 
-async def _decided_text(db: AsyncSession, actor: Member, draft: Draft, when: str, slot: Slot) -> str:
+def _decided_text(draft: Draft, when: str, slot: Slot) -> str:
+    """The decision's result, with each person as ``person`` of their member ID."""
     payload = draft.payload
-    text = f"Confirmed. {when.capitalize()}'s {slot.value} call is decided on {payload['name']}."
+    text = f"Confirmed. {when.capitalize()}'s {slot.value} call is decided on {plain(str(payload['name']))}."
     lead, pickup, way = payload.get("lead"), payload.get("pickup"), payload.get("way")
     mode = Mode(str(way or payload["mode"]))
     for who, role in ((lead, LEAD_ROLE[mode]), (pickup, AssignmentRole.PICKUP)):
         if who is not None:
-            text += f" {await _name(db, actor, int(who))} {ROLE_DOES[role]}."
+            text += f" {person(int(who))} {ROLE_DOES[role]}."
     return text
 
 
@@ -669,7 +673,7 @@ async def confirm(
                     await calls.lock(db, actor, event.id, proposal_id, run=run, roles=roles, now=now)
             except (EventRuleViolation, NotFound) as exc:
                 raise _plan_changed(exc) from None
-            return ActionConfirmed(event.id, await _decided_text(db, actor, draft, when, slot))
+            return await _naming(db, actor, event.id, _decided_text(draft, when, slot))
         if draft.kind is DraftKind.SHUFFLE:
             if event.shuffles != int(payload["shuffles"]):
                 raise _stale("The picks were shuffled since the draft. Look at them again first.")
@@ -689,8 +693,7 @@ async def confirm(
         if draft.kind is DraftKind.HAND_OFF:
             to = int(payload["to"])
             await calls.hand_off(db, actor, event.id, to, run=run, now=now)
-            name = await _name(db, actor, to)
-            return ActionConfirmed(event.id, f"Confirmed. {name} coordinates {when}'s {slot.value} now.")
+            return await _naming(db, actor, event.id, f"Confirmed. {person(to)} coordinates {when}'s {slot.value} now.")
         if event.state.value != payload["state"]:
             raise _stale()
         if draft.kind is DraftKind.MARK_DONE:

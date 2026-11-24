@@ -926,6 +926,9 @@ fieldset.card > .button.block { margin-bottom: 0; }
 .turn-mine { align-self: flex-end; background: var(--accent-soft); color: var(--accent-soft-text); border-bottom-right-radius: 4px; }
 .turn-reply { align-self: flex-start; background: var(--surface); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
 .turn-reply .turn-who { color: var(--muted); }
+/* A draft you confirmed or cancelled (#363): a centered note between messages, not a message. */
+.turn-draft { align-self: center; max-width: min(34rem, 100%); margin: 0; text-align: center; color: var(--muted); overflow-wrap: anywhere; }
+.turn-draft .badge { margin-right: 0.25rem; }
 
 .draft { margin: 0; border-left: 4px solid var(--accent); }
 .draft-done { border-left-color: var(--line); }

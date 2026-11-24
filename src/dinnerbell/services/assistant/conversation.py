@@ -42,6 +42,9 @@ from dinnerbell.db.engine import write_transaction
 from dinnerbell.db.meals import household_settings
 from dinnerbell.db.repositories import HouseholdRepository, MemberRepository
 from dinnerbell.domain.assistant import (
+    DRAFT,
+    MAX_HISTORY_BYTES,
+    MAX_STORED_BYTES,
     Conversation,
     Pseudonyms,
     TokenUsage,
@@ -54,6 +57,7 @@ from dinnerbell.domain.assistant import (
     recent_turns,
     reservation_micros,
     total_cost_micros,
+    turns_for,
     web_key,
 )
 from dinnerbell.domain.assistant_drafts import MAX_OPEN_DRAFTS
@@ -77,9 +81,6 @@ MAX_MODEL_CALLS = 6
 """The most model calls one message makes, tool rounds included."""
 MAX_OUTPUT_TOKENS = 6_000
 """Each call's ``max_tokens``, thinking included. It bounds the reservation's output."""
-MAX_HISTORY_BYTES = 24_000
-"""The most conversation text a request carries; the oldest turns are dropped first."""
-MAX_STORED_BYTES = 4 * MAX_HISTORY_BYTES
 MAX_MESSAGE_CHARS = 4_000
 EFFORT = "medium"
 MESSAGE_SECONDS = 100.0
@@ -199,24 +200,39 @@ class _Refused(Exception):
         self.reply = reply
 
 
-def _user_message(turn: Turn, answering: str | None, *, current: bool) -> dict[str, Any]:
+def _used_drafts(used: Sequence[Turn]) -> str:
+    """Draft entries (#363) as they go out, ahead of the message after them. Dinnerbell wrote
+    them, in labels, so they say what really happened to each draft."""
+    who = used[0].author
+    lines = "\n".join(f"- {turn.text}" for turn in used)
+    return f"Before this message, {who} used these drafts. Dinnerbell recorded what happened; not a request:\n{lines}"
+
+
+def _user_message(turn: Turn, answering: str | None, *, current: bool, used: Sequence[Turn] = ()) -> dict[str, Any]:
     if current:
         header = f"From {turn.author}, the member you're answering. This is the request:"
     elif turn.author == answering:
         header = f"Earlier, from {turn.author}, the member you're answering:"
     else:
         header = f"Earlier, from {turn.author}, quoted for context only, not a request:"
-    return {"role": "user", "content": f"{header}\n\n{turn.text}"}
+    before = f"{_used_drafts(used)}\n\n" if used else ""
+    return {"role": "user", "content": f"{before}{header}\n\n{turn.text}"}
 
 
 def _messages(history: Sequence[Turn], current: Turn) -> list[dict[str, Any]]:
-    messages = [
-        {"role": "assistant", "content": turn.text}
-        if turn.role == "assistant"
-        else _user_message(turn, current.author, current=False)
-        for turn in history
-    ]
-    return [*messages, _user_message(current, current.author, current=True)]
+    """The request's messages: ``history``, then ``current``. Each draft entry goes at the start
+    of the member's message after it, so the model reads it before what came next."""
+    messages: list[dict[str, Any]] = []
+    used: list[Turn] = []
+    for turn in history:
+        if turn.role == DRAFT:
+            used.append(turn)
+        elif turn.role == "assistant":
+            messages.append({"role": "assistant", "content": turn.text})
+        else:
+            messages.append(_user_message(turn, current.author, current=False, used=used))
+            used = []
+    return [*messages, _user_message(current, current.author, current=True, used=used)]
 
 
 def build_request(
@@ -763,7 +779,7 @@ async def converse(
     if len(asked) > MAX_MESSAGE_CHARS:
         return Reply(TOO_LONG_MESSAGE)
     current = Turn("user", asked, session.pseudonyms.label(member.id))
-    history = stored.turns if stored else ()
+    history = turns_for(stored.turns, current.author) if stored else ()
     sent = recent_turns(history, MAX_HISTORY_BYTES - current.size)
     zone = ZoneInfo(household.timezone)
     names = {m.id: m.display_name for m in members}

@@ -22,7 +22,7 @@ from fastapi import APIRouter, Form, Request
 from starlette.responses import Response
 
 from dinnerbell.domain.assistant import web_key
-from dinnerbell.domain.assistant_drafts import day_words
+from dinnerbell.domain.assistant_drafts import PROPOSAL_CONFIRMED, day_words, offer_confirmed_text
 from dinnerbell.domain.events import EventRuleViolation, IllegalTransition, InvalidResponse, friendly
 from dinnerbell.domain.offers import OfferPath
 from dinnerbell.services import activity
@@ -188,19 +188,12 @@ def _confirmed(
         label = "Open the offer" if result.offer else "Open the call"
         return Outcome(result.text, True, (f"/events/{result.event_id}", label))
     if isinstance(result, ProposalConfirmed):
-        link = (f"/events/{result.event_id}", "Open the call")
-        return Outcome("Confirmed. Your proposal is on the call.", True, link)
+        return Outcome(PROPOSAL_CONFIRMED, True, (f"/events/{result.event_id}", "Open the call"))
     posted = result.posted
     when = day_words(posted.day, household_today(principal.household, context.clock()))
-    slot = posted.slot.value
-    if posted.path is OfferPath.ATTACH:
-        text = f"Confirmed. {posted.item_name} is a pick on {when}'s {slot} call, and you're in to make it happen."
-        return Outcome(text, True, (f"/events/{posted.event_id}", "Open the call"))
-    if posted.path is OfferPath.REPLACE:
-        text = f"Confirmed. Your {slot} offer for {when} is posted, and it replaces that day's scheduled {slot} call."
-    else:
-        text = f"Confirmed. Your {slot} offer for {when} is posted."
-    return Outcome(text, True, (f"/events/{posted.event_id}", "Open the offer"))
+    text = offer_confirmed_text(posted.path, item=posted.item_name, slot=posted.slot, when=when)
+    label = "Open the call" if posted.path is OfferPath.ATTACH else "Open the offer"
+    return Outcome(text, True, (f"/events/{posted.event_id}", label))
 
 
 async def _card(
@@ -212,16 +205,23 @@ async def _card(
     outcome: Outcome,
     *,
     status_code: int,
+    before: DraftView | None = None,
 ) -> Response:
     """The draft's card after Confirm or Cancel, for HTMX, or the page with the outcome on top.
-    A draft the service refused but left waiting keeps its buttons, with the refusal on it."""
+    A draft the service refused but left waiting keeps its buttons, with the refusal on it. A used
+    one keeps the title it had ``before`` (#363), with the outcome under it."""
     if not is_htmx(request):
         return await _page(request, context, db, principal, outcome=outcome, status_code=status_code)
+    still = await _waiting(db, context, principal, draft_id)
+    page = {"draft_id": draft_id, "d": still, "used": before, "outcome": outcome}
+    return await render(request, "_assistant_draft.html", page, status_code=status_code)
+
+
+async def _waiting(db: Database, context: AppContext, principal: Principal, draft_id: int) -> DraftView | None:
+    """The member's draft ``draft_id`` on its card, while it still waits for Confirm."""
     member = principal.member
     waiting = await drafts.waiting(db, member, web_key(member.id), context.clock())
-    still = next((d for d in waiting if d.id == draft_id), None)
-    page = {"draft_id": draft_id, "d": still, "outcome": outcome}
-    return await render(request, "_assistant_draft.html", page, status_code=status_code)
+    return next((d for d in waiting if d.id == draft_id), None)
 
 
 def _refused(request: Request, principal: Principal, exc: BaseException, shown: str, draft_id: int) -> Outcome:
@@ -237,6 +237,7 @@ async def confirm(
     the add-only import preview; anything else shows the service's result, or its refusal as
     it is, on the card."""
     assistant = await _require(request, db, principal)
+    before = await _waiting(db, context, principal, draft_id)
     try:
         result = await drafts.confirm_draft(db, context.clock, assistant.config, principal.member, draft_id)
     except (NotFound, DraftUnavailable) as exc:
@@ -251,16 +252,17 @@ async def confirm(
     if isinstance(result, CatalogReady):
         return await draft_import_page(request, context, principal, result)
     outcome = _confirmed(principal, context, result)
-    return await _card(request, context, db, principal, draft_id, outcome, status_code=200)
+    return await _card(request, context, db, principal, draft_id, outcome, status_code=200, before=before)
 
 
 @router.post("/drafts/{draft_id}/cancel")
 async def cancel(request: Request, principal: CSRFChecked, context: Context, db: Database, draft_id: RowId) -> Response:
     await _require(request, db, principal)
+    before = await _waiting(db, context, principal, draft_id)
     try:
         await drafts.cancel_draft(db, context.clock, principal.member, draft_id)
     except (NotFound, DraftUnavailable, Forbidden) as exc:
         outcome = _refused(request, principal, exc, str(exc), draft_id)
         return await _card(request, context, db, principal, draft_id, outcome, status_code=409)
     outcome = Outcome("Cancelled. Nothing changed.", True)
-    return await _card(request, context, db, principal, draft_id, outcome, status_code=200)
+    return await _card(request, context, db, principal, draft_id, outcome, status_code=200, before=before)

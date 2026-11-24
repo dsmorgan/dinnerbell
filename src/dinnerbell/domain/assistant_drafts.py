@@ -208,6 +208,23 @@ def day_words(day: date, today: date) -> str:
     return f"{day:%a, %b} {day.day}"
 
 
+# What Confirm did -------------------------------------------------------------------------------
+
+PROPOSAL_CONFIRMED = "Confirmed. Your proposal is on the call."
+
+
+def offer_confirmed_text(path: OfferPath, *, item: str, slot: Slot, when: str) -> str:
+    """What a confirmed offer's card says it did, by how it was posted (``offers.Posted``)."""
+    if path is OfferPath.ATTACH:
+        return f"Confirmed. {item} is a pick on {when}'s {slot.value} call, and you're in to make it happen."
+    if path is OfferPath.REPLACE:
+        return (
+            f"Confirmed. Your {slot.value} offer for {when} is posted, and it replaces that day's scheduled "
+            f"{slot.value} call."
+        )
+    return f"Confirmed. Your {slot.value} offer for {when} is posted."
+
+
 # What Confirm does -------------------------------------------------------------------------------
 
 

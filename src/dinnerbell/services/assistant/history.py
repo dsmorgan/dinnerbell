@@ -10,6 +10,7 @@ reads it or starts it over. Both raise NotFound while the assistant doesn't answ
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -19,7 +20,7 @@ from dinnerbell.db.assistant import AssistantRepository
 from dinnerbell.db.engine import write_transaction
 from dinnerbell.db.meals import household_settings
 from dinnerbell.db.repositories import MemberRepository
-from dinnerbell.domain.assistant import Conversation, assistant_settings, web_key
+from dinnerbell.domain.assistant import DRAFT, USER, Conversation, Turn, assistant_settings, web_key
 from dinnerbell.domain.members import Member
 from dinnerbell.services.assistant.runtime import AssistantConfig, available
 from dinnerbell.services.errors import NotFound
@@ -32,10 +33,12 @@ NOT_HERE = "That page doesn't exist."
 @dataclass(frozen=True, slots=True)
 class Shown:
     """One message as the page shows it: the member's own (``mine``), or the assistant's, with
-    members' names put back."""
+    members' names put back. ``draft`` marks a draft entry instead (#363): what happened to a
+    draft the member confirmed or cancelled, names put back too."""
 
     mine: bool
     text: str
+    draft: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,8 +65,9 @@ def _owned(stored: Conversation | None, member: Member) -> Conversation | None:
 
 
 async def web_conversation(db: AsyncSession, config: AssistantConfig, member: Member, now: datetime) -> WebConversation:
-    """``member``'s web conversation as the page shows it: their messages and the assistant's
-    answers, oldest first, until Admin's Conversation hours pass since the last message."""
+    """``member``'s web conversation as the page shows it: their messages, the assistant's
+    answers, and the drafts they used, oldest first, until Admin's Conversation hours pass since
+    the last message."""
     await _require(db, config, member)
     hours = assistant_settings(await household_settings(db, member.household_id)).conversation_hours
     stored = _owned(await AssistantRepository(db).conversation(member.household_id, web_key(member.id)), member)
@@ -71,11 +75,14 @@ async def web_conversation(db: AsyncSession, config: AssistantConfig, member: Me
         return WebConversation((), hours)
     names = {m.id: m.display_name for m in await MemberRepository(db).list(member.household_id)}
     restore = stored.pseudonyms.restore_names
-    turns = tuple(
-        Shown(True, turn.text) if turn.role == "user" else Shown(False, restore(turn.text, names))
-        for turn in stored.turns
-    )
+    turns = tuple(_shown(turn, restore, names) for turn in stored.turns)
     return WebConversation(turns, hours)
+
+
+def _shown(turn: Turn, restore: Callable[[str, Mapping[int, str]], str], names: Mapping[int, str]) -> Shown:
+    if turn.role == USER:
+        return Shown(True, turn.text)
+    return Shown(False, restore(turn.text, names), draft=turn.role == DRAFT)
 
 
 async def start_over(db: AsyncSession, config: AssistantConfig, member: Member, now: datetime) -> int:
