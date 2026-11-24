@@ -13,6 +13,9 @@ holds up the web app. Each pass:
    and reconnects by itself after a drop. If it stays down for two minutes, the app-level token
    is checked again, so a revoked ``xapp-`` token shows as an error.
 3. Links active members who have no Slack user yet by email (``users.lookupByEmail``, FR-42).
+   On the first pass that gets this far, while the first admin's invitation is unclaimed, it
+   also warns when nobody in the workspace has ``DINNERBELL_ADMIN_EMAIL`` (#360): a typo there
+   locks the first admin out.
 
 A failed check is logged once with what to do, shown in /healthz as ``error``, and holds
 deliveries (see ``channel.Hold``); the next pass checks again, so inviting the bot fixes it
@@ -202,6 +205,7 @@ class SlackConnection:
         composite_for: CompositeSource = composite_png,
         assistant: Assistant | None = None,
         import_link: ImportLink | None = None,
+        admin_email: str | None = None,
     ) -> None:
         """A non-empty ``instance_label`` (``DINNERBELL_INSTANCE_LABEL``, such as test's) also
         limits DMs and mentions to the channel's members. ``version`` is
@@ -210,13 +214,16 @@ class SlackConnection:
         assistant (ADR 0009), built only with ``DINNERBELL_ANTHROPIC_API_KEY``; with it, DMs and
         mentions are answered while it's available (``SlackAssistant``), and without it they're
         never even listened for. ``import_link`` builds a catalog draft's link to the web's
-        import preview; the assistant needs it."""
+        import preview; the assistant needs it. ``admin_email`` is ``DINNERBELL_ADMIN_EMAIL``, looked
+        up once to catch a typo (#360)."""
         client = web_client or AsyncWebClient(token=bot_token, timeout=WEB_TIMEOUT_SECONDS)
         self.api = SlackApi(client, webhook=webhook)
         self.api.on_auth_error = self._token_refused
         self.app_token = app_token
         self.channel_id = channel_id
         self.required_team = team_id
+        self.admin_email = admin_email
+        """Looked up once, on the first pass whose checks pass; then None."""
         self.sessionmaker = sessionmaker
         self.clock = clock
         self.state = state
@@ -407,6 +414,9 @@ class SlackConnection:
         finally:
             self._checking = False
         self._report(None, HoldScope.NONE)
+        if self.admin_email is not None:
+            email, self.admin_email = self.admin_email, None
+            await self._check_admin_email(email)
         try:
             await self.link_members()
         except Exception:
@@ -569,6 +579,23 @@ class SlackConnection:
                 "reading the channel's members failed; members unknown, so DMs wait and nobody is mentioned",
                 extra={"error": error},
             )
+
+    async def _check_admin_email(self, email: str) -> None:
+        """Warn when nobody in the workspace has ``DINNERBELL_ADMIN_EMAIL`` while the first admin's
+        invitation is unclaimed (#360). Never names the email (SEC-5), and never stops anything:
+        any other answer from Slack is logged at debug and dropped."""
+        try:
+            async with self.sessionmaker() as db:
+                if not await slack_members.admin_invitation_unclaimed(db, email):
+                    return
+            if await self.api.user_by_email(email) is None:
+                log.warning(
+                    "Nobody in the Slack workspace has the email in DINNERBELL_ADMIN_EMAIL, so the first admin "
+                    "can't sign in with Slack. Set it to the email on the admin's Slack account and recreate the "
+                    "service, or run dinnerbell admin add; see docs/troubleshooting.md."
+                )
+        except Exception as exc:
+            log.debug("could not look up DINNERBELL_ADMIN_EMAIL in Slack", extra={"error": type(exc).__name__})
 
     # Linking members (FR-42) -------------------------------------------------------------------
 

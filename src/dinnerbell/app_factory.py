@@ -191,6 +191,7 @@ def _slack(
         schema_revision=schema_revision(),
         assistant=assistant,
         import_link=lambda draft_id, member_id: draft_import_url(settings, clock, draft_id, member_id),
+        admin_email=settings.admin_email,
     )
 
 

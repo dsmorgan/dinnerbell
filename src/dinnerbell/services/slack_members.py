@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.repositories import HouseholdRepository, MemberRepository
 from dinnerbell.domain.household import Household
-from dinnerbell.domain.members import Member
+from dinnerbell.domain.members import Member, MemberStatus
 from dinnerbell.services import guests
 from dinnerbell.services.common import audit
 from dinnerbell.services.errors import NotFound
@@ -65,6 +65,14 @@ async def today(db: AsyncSession, actor: Member, *, now: datetime) -> date:
     if household is None:  # pragma: no cover - members cascade with their household
         raise NotFound("No such household.")
     return household_today(household, now)
+
+
+async def admin_invitation_unclaimed(db: AsyncSession, email: str) -> bool:
+    """Whether the admin invited by ``email``, as bootstrap invites ``DINNERBELL_ADMIN_EMAIL``,
+    hasn't signed in yet (#360)."""
+    household = await HouseholdRepository(db).first()
+    member = await MemberRepository(db).by_email(household.id, email) if household is not None else None
+    return member is not None and member.is_admin and member.status is MemberStatus.INVITED
 
 
 @dataclass(frozen=True, slots=True)
