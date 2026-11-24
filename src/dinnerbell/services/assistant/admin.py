@@ -65,6 +65,22 @@ class AssistantAdmin:
     def cap_below_any_call(self) -> bool:
         return self.least_channel_call_micros > self.settings.cap_micros
 
+    @property
+    def left_micros(self) -> int:
+        """What's left under the cap this month; never below zero."""
+        return max(0, self.settings.cap_micros - self.spent_micros)
+
+    @property
+    def left_below_one_call(self) -> bool:
+        """Whether what's left can't cover the smallest private message's first call, though the
+        whole cap can, so private messages wait for next month or a higher cap (#362)."""
+        return not self.cap_below_one_call and self.least_call_micros > self.left_micros
+
+    @property
+    def left_below_any_call(self) -> bool:
+        """``left_below_one_call``, for a channel thread's smallest message too: no message fits."""
+        return self.left_below_one_call and self.least_channel_call_micros > self.left_micros
+
 
 def _require(config: AssistantConfig, actor: Member) -> None:
     require_admin(actor, ADMINS_ONLY)

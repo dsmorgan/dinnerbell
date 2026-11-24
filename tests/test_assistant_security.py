@@ -87,6 +87,7 @@ from dinnerbell.services.assistant.conversation import (
     AT_CAP,
     FAILED,
     MESSAGE_SECONDS,
+    NEAR_CAP,
     OUT_OF_TIME,
     Assistant,
     Reply,
@@ -2284,8 +2285,8 @@ async def test_a_links_drafting_call_is_reserved_under_the_cap_like_any_other(
     for reading a page, hoping the drafting call slips past the cap. Must hold: before the
     fetch, Dinnerbell checks the cap against the drafting call for a full page; with room for
     it, the drafting call is reserved under the cap, its reservation counted before it runs;
-    a micro-dollar short, nothing is fetched or drafted, the model is told the cap is reached,
-    and the message's next call still fits."""
+    a micro-dollar short, nothing is fetched or drafted, the model is told the month is too
+    near the cap for it, and the message's next call still fits."""
     await switch(house, helper, enabled=True, cap_dollars=1)
     cap = 1_000_000
     worst = menu_links.drafting_request(MODEL, "x" * menu_links.MAX_PAGE_BYTES, kind=None, cut=True)
@@ -2319,7 +2320,8 @@ async def test_a_links_drafting_call_is_reserved_under_the_cap_like_any_other(
         assert not link.is_error and fetch.asked == [MENU_LINK]
         assert seen == [cap - after_first + reserved] and seen[0] <= cap  # reserved first, under the cap
     else:
-        assert link == ToolResult(AT_CAP, is_error=True)
+        # The message's next call still fits, so it's too near the cap, not at it (#362).
+        assert link == ToolResult(NEAR_CAP, is_error=True)
         assert fetch.asked == [] and counts.drafting == [] and seen == []
     rows = await usage_rows(house)
     assert {r.state for r in rows} == {"settled"} and sum(r.cost_micros for r in rows) <= cap
@@ -3096,6 +3098,7 @@ async def test_a_fetch_still_running_at_the_deadline_is_cut_off(house: House, he
             house["Sam"],
             ZoneInfo("America/Chicago"),
             house.clock() + timedelta(microseconds=1),
+            private=True,
         )
         with pytest.raises(tools.ToolRefusal, match=OUT_OF_TIME):
             await asyncio.wait_for(links.fetch(MENU_LINK), 10)

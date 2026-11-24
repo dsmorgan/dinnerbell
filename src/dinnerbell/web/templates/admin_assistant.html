@@ -26,6 +26,8 @@
 <section class="card" aria-labelledby="usage-title">
   <h2 id="usage-title">Usage in {{ month }}</h2>
   <p>{{ spent }} of {{ cap }} this month.</p>
+  {% if left_below_any_call %}<p class="alert error" role="status" id="left-low">Members can't get answers until next month or until you raise the cap. Each message first sets aside the most it can cost, at least {{ least_channel_call }} in a channel thread and {{ least_call }} on the Assistant page or in a direct message with {{ model }}, and {{ left }} is left.</p>
+  {% elif left_below_one_call %}<p class="alert error" role="status" id="left-low">Members can't get answers on the Assistant page or in direct messages until next month or until you raise the cap. Each private message first sets aside the most it can cost, at least {{ least_call }} with {{ model }}, and {{ left }} is left. Short messages in a channel thread can still fit.</p>{% endif %}
   {% if by_member %}
   <dl class="counts">
     {% for name, amount in by_member %}<div><dt>{{ name }}</dt><dd>{{ amount }}</dd></div>{% endfor %}

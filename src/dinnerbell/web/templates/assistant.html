@@ -1,5 +1,5 @@
 {#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
-{#- Expects: conversation (hours, keeps_history), turns (what the log shows), drafts (cards still waiting), notice, outcome (a draft's result, for a page posted without HTMX), send_timeout, max_chars. -#}
+{#- Expects: conversation (hours, keeps_history), turns (what the log shows), drafts (cards still waiting), notice, outcome (a draft's result, for a page posted without HTMX), cap_notice (why no message can be answered this month, or none), send_timeout, max_chars. -#}
 {% extends "base.html" %}
 {% block title %}Assistant{% endblock %}
 {% block content %}
@@ -20,6 +20,7 @@
     {%- for d in drafts %}{% include "_assistant_draft.html" %}{% endfor %}
   </div>
   <p class="assistant-empty small muted">No messages yet.</p>
+  {% if cap_notice %}<p class="alert error" role="status" id="assistant-cap">{{ cap_notice }}</p>{% endif %}
 
   <form id="ask" method="post" action="/assistant" class="card stack assistant-form"
         hx-post="/assistant" hx-target="#assistant-log" hx-swap="beforeend" hx-disabled-elt="find button"

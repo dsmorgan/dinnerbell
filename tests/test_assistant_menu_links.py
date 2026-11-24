@@ -29,7 +29,15 @@ from dinnerbell.domain.catalog_file import parse_catalog
 from dinnerbell.domain.fetch_policy import FetchError, FetchFailure
 from dinnerbell.services.assistant import admin, drafts, menu_links, tools
 from dinnerbell.services.assistant.client import ModelReply
-from dinnerbell.services.assistant.conversation import AT_CAP, FAILED, TURNED_OFF, Assistant, Reply, converse
+from dinnerbell.services.assistant.conversation import (
+    AT_CAP,
+    FAILED,
+    NEAR_CAP,
+    TURNED_OFF,
+    Assistant,
+    Reply,
+    converse,
+)
 from dinnerbell.services.assistant.drafts import IMPORT_LINK_LIFETIME, LINK_NOT_IMPORTABLE, CatalogReady
 from dinnerbell.services.assistant.menu_links import (
     CAP_TOO_LOW,
@@ -781,7 +789,7 @@ async def test_before_the_fetch_the_cap_is_checked_for_a_full_page(
     spends = SpendsFirst(script=[tool_call("draft_catalog_from_link", link()), answer("At the cap.")])
     reply = await ask(house, replace(helper, client=spends))
     assert reply == Reply("At the cap.")
-    assert results(spends.requests[-1])[0]["content"] == AT_CAP
+    assert results(spends.requests[-1])[0]["content"] == NEAR_CAP  # a smaller request still fits (#362)
     assert fetch.asked == []
 
 

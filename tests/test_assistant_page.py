@@ -19,7 +19,14 @@ from joserfc.jwk import RSAKey
 
 from dinnerbell.app_factory import create_app
 from dinnerbell.config import SLACK_ISSUER, Settings
-from dinnerbell.db.models import AssistantConversationRow, AssistantDraftRow, CatalogItemRow, EventRow, MemberRow
+from dinnerbell.db.models import (
+    AssistantConversationRow,
+    AssistantDraftRow,
+    AssistantUsageRow,
+    CatalogItemRow,
+    EventRow,
+    MemberRow,
+)
 from dinnerbell.db.repositories import MemberRepository
 from dinnerbell.domain.catalog import Mode
 from dinnerbell.domain.events import EventRuleViolation, EventState, IllegalTransition, Proposal, ProposalSource
@@ -27,7 +34,14 @@ from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.offers import OfferPath
 from dinnerbell.services.assistant import drafts
 from dinnerbell.services.assistant.call_drafts import ActionConfirmed
-from dinnerbell.services.assistant.conversation import FAILED
+from dinnerbell.services.assistant.conversation import (
+    AT_CAP,
+    FAILED,
+    NEAR_CAP,
+    NEAR_CAP_WEB,
+    PAGE_AT_CAP,
+    PAGE_CAP_TOO_LOW,
+)
 from dinnerbell.services.assistant.drafts import EXPIRED, NO_SUCH_DRAFT, USED, OfferConfirmed, ProposalConfirmed
 from dinnerbell.services.database import open_database
 from dinnerbell.services.household import current_household
@@ -39,6 +53,7 @@ from tests.support.fake_model import FakeModel, answer, failure, tool_call, usag
 from tests.support.fake_oidc import FakeProvider
 from tests.support.links import MENU_LINK, link_draft
 from tests.support.web import add_item, htmx, submit
+from tests.test_assistant_web import least_calls, spend
 from tests.test_auth_flow import rows
 
 KEY = "sk-ant-test-not-a-real-key"
@@ -328,6 +343,52 @@ def test_at_the_cap_the_reply_says_so(client: TestClient, provider: FakeProvider
     at_cap = page(send(client, "Hello again", **HX))
     assert "reached this month's spending limit" in at_cap and "Hello again" in at_cap
     assert len(model.requests) == 1
+
+
+def test_the_page_says_the_assistant_is_unavailable_only_once_no_message_fits(
+    client: TestClient, provider: FakeProvider, model: FakeModel, migrated: Settings, clock: FakeClock
+) -> None:
+    """#362: a refused message isn't kept, so coming back to the page shows nothing of it. Once
+    what's left this month is below the smallest private message, the page says, above the
+    composer, that the assistant is unavailable until next month. No dollar amounts."""
+    furnish(client, provider, cap_dollars="1")
+    as_who(client, provider, "kim")
+    least, _ = least_calls(migrated, "claude-sonnet-5-5")
+    spend(migrated, clock, 1_000_000 - least)  # the smallest private message still fits
+    assert 'id="assistant-cap"' not in client.get("/assistant").text
+    near = page(send(client, "Hello", **HX))
+    assert NEAR_CAP in near and AT_CAP not in near
+    spend(migrated, clock, 1)
+    assert AT_CAP in page(send(client, "Hello again", **HX))
+    shown = page(client.get("/assistant"))
+    assert 'id="assistant-cap"' in shown and PAGE_AT_CAP in shown and "$" not in PAGE_AT_CAP
+    assert "Hello again" not in shown and shown.index(PAGE_AT_CAP) < shown.index('id="ask"')
+    assert model.requests == [] and rows(migrated, AssistantConversationRow) == []
+
+
+@pytest.mark.parametrize("settings_overrides", [{"anthropic_api_key": KEY, "assistant_model": "claude-opus-5-5"}])
+def test_with_a_cap_below_one_message_the_page_says_next_month_wont_help(
+    client: TestClient, provider: FakeProvider, model: FakeModel
+) -> None:
+    furnish(client, provider, cap_dollars="1")
+    as_who(client, provider, "kim")
+    shown = page(client.get("/assistant"))
+    assert PAGE_CAP_TOO_LOW in shown and PAGE_AT_CAP not in shown
+
+
+def test_near_the_cap_with_earlier_messages_it_suggests_start_over(
+    client: TestClient, provider: FakeProvider, model: FakeModel, migrated: Settings, clock: FakeClock
+) -> None:
+    furnish(client, provider, cap_dollars="1")
+    as_who(client, provider, "kim")
+    model.script = [answer("Siam Garden.")]
+    assert "Siam Garden." in page(send(client, "Anything Thai?", **HX))
+    spent = sum(r.cost_micros for r in rows(migrated, AssistantUsageRow))
+    least, _ = least_calls(migrated, "claude-sonnet-5-5")
+    spend(migrated, clock, 1_000_000 - spent - least)
+    shown = page(send(client, "Something cheaper", **HX))
+    assert NEAR_CAP_WEB in shown and "Select Start over" in shown
+    assert 'id="assistant-cap"' not in client.get("/assistant").text
 
 
 def test_an_empty_message_sends_nothing(client: TestClient, provider: FakeProvider, model: FakeModel) -> None:

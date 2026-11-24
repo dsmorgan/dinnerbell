@@ -29,7 +29,7 @@ from dinnerbell.services import activity
 from dinnerbell.services.assistant import drafts
 from dinnerbell.services.assistant import history as web_history
 from dinnerbell.services.assistant.call_drafts import ActionConfirmed
-from dinnerbell.services.assistant.conversation import MAX_MESSAGE_CHARS, Assistant, Reply, converse
+from dinnerbell.services.assistant.conversation import MAX_MESSAGE_CHARS, Assistant, Reply, at_cap_notice, converse
 from dinnerbell.services.assistant.drafts import (
     CatalogReady,
     DraftUnavailable,
@@ -115,6 +115,7 @@ async def _page(
         "drafts": waiting,
         "notice": notice,
         "outcome": outcome,
+        "cap_notice": await at_cap_notice(db, assistant.config, member, now),
         "send_timeout": SEND_TIMEOUT_MS,
         "max_chars": MAX_MESSAGE_CHARS,
     }

@@ -5,13 +5,20 @@ change audited, and this month's usage by member."""
 from __future__ import annotations
 
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
 
 from dinnerbell.config import Settings
-from dinnerbell.db.models import AuditRow, HouseholdRow
+from dinnerbell.db.models import AssistantUsageRow, AuditRow, HouseholdRow, MemberRow
+from dinnerbell.db.repositories import to_member
+from dinnerbell.domain.assistant import format_dollars, month_key
+from dinnerbell.services.assistant.conversation import least_call_micros, least_private_call_micros
 from tests.conftest import csrf_from, invite, page, sign_in
+from tests.support.clock import FakeClock
 from tests.support.fake_oidc import FakeProvider
 from tests.test_admin import sign_in_as
 from tests.test_auth_flow import rows
@@ -21,6 +28,40 @@ FORM = {"enabled": "on", "cap_dollars": "12", "conversation_hours": "6"}
 
 def save(client: TestClient, data: dict[str, str]) -> Any:
     return client.post("/admin/assistant", data=data | {"csrf_token": csrf_from(client)})
+
+
+def spend(settings: Settings, clock: FakeClock, micros: int) -> None:
+    """Add ``micros`` to this month's spending, as one settled row."""
+    [household] = rows(settings, HouseholdRow)
+    now = clock()
+    engine = create_engine(settings.sync_database_url)
+    try:
+        with Session(engine) as db:
+            db.add(
+                AssistantUsageRow(
+                    household_id=household.id,
+                    member_id=None,
+                    model="earlier",
+                    month=month_key(now, ZoneInfo(household.timezone)),
+                    input_tokens=0,
+                    output_tokens=0,
+                    cache_read_tokens=0,
+                    cache_write_tokens=0,
+                    cost_micros=micros,
+                    state="settled",
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            db.commit()
+    finally:
+        engine.dispose()
+
+
+def least_calls(settings: Settings, model: str) -> tuple[int, int]:
+    """What the smallest private message, and the smallest channel-thread message, set aside."""
+    members = [to_member(row) for row in rows(settings, MemberRow)]
+    return least_private_call_micros(model, members), least_call_micros(model, private=False, members=members)
 
 
 def test_without_the_key_there_is_no_tab_and_no_page(
@@ -149,3 +190,60 @@ def test_the_cap_alert_says_which_messages_it_stops() -> None:
     assert (view(2).cap_below_one_call, view(2).cap_below_any_call) == (True, False)
     assert (view(1).cap_below_one_call, view(1).cap_below_any_call) == (True, True)
     assert (view(3).cap_below_one_call, view(3).cap_below_any_call) == (False, False)
+
+
+def test_whats_left_below_one_call_says_which_messages_wait() -> None:
+    """#362: with the cap above the smallest message but what's left below it, the usage note
+    says so; it says nothing while the whole cap is below, which the settings alert covers."""
+    from dinnerbell.domain.assistant import AssistantSettings
+    from dinnerbell.services.assistant.admin import AssistantAdmin
+
+    def view(cap: int, spent: int) -> AssistantAdmin:
+        settings = AssistantSettings(enabled=True, cap_dollars=cap)
+        return AssistantAdmin(
+            settings, "2026-10", spent, (), least_call_micros=400_000, least_channel_call_micros=300_000
+        )
+
+    assert (view(2, 1_600_000).left_below_one_call, view(2, 1_600_000).left_below_any_call) == (False, False)
+    assert (view(2, 1_600_001).left_below_one_call, view(2, 1_600_001).left_below_any_call) == (True, False)
+    assert (view(2, 1_700_001).left_below_one_call, view(2, 1_700_001).left_below_any_call) == (True, True)
+    assert view(2, 2_500_000).left_micros == 0 and view(2, 2_500_000).left_below_any_call
+    tiny = AssistantSettings(enabled=True, cap_dollars=1)
+    below = AssistantAdmin(tiny, "2026-10", 900_000, (), least_call_micros=1_500_000, least_channel_call_micros=1)
+    assert below.cap_below_one_call and not below.left_below_one_call
+
+
+@pytest.mark.parametrize("settings_overrides", [{"anthropic_api_key": "sk-ant-test-not-a-real-key"}])
+def test_usage_says_why_members_get_no_answers_with_room_left(
+    client: TestClient, provider: FakeProvider, migrated: Settings, clock: FakeClock
+) -> None:
+    """#362: "$1.65 of $2" with no answers. Once what's left is below what the smallest private
+    message sets aside, Usage says members wait for next month or a higher cap, and why."""
+    sign_in(client, provider)
+    assert save(client, FORM | {"cap_dollars": "2"}).status_code == 303
+    private, channel = least_calls(migrated, "claude-sonnet-5-5")
+    spend(migrated, clock, 2_000_000 - private)  # exactly the smallest private message left
+    assert 'id="left-low"' not in page(client.get("/admin/assistant"))
+    spend(migrated, clock, 1)
+    shown = " ".join(page(client.get("/admin/assistant")).split())
+    left = 2_000_000 - (2_000_000 - private + 1)
+    assert (
+        "Members can't get answers on the Assistant page or in direct messages until next month or until you "
+        f"raise the cap. Each private message first sets aside the most it can cost, at least "
+        f"{format_dollars(private)} with claude-sonnet-5-5, and {dollars_down(left)} is left. Short messages in "
+        "a channel thread can still fit."
+    ) in shown
+    spend(migrated, clock, private - channel)  # a micro-dollar short of a channel thread's too
+    shown = " ".join(page(client.get("/admin/assistant")).split())
+    assert (
+        "Members can't get answers until next month or until you raise the cap. Each message first sets aside "
+        f"the most it can cost, at least {format_dollars(channel)} in a channel thread and "
+        f"{format_dollars(private)} on the Assistant page or in a direct message with claude-sonnet-5-5, and "
+        f"{dollars_down(channel - 1)} is left."
+    ) in shown
+    assert 'id="cap-low"' not in shown
+
+
+def dollars_down(micros: int) -> str:
+    cents = micros // 10_000
+    return f"${cents // 100}.{cents % 100:02d}"

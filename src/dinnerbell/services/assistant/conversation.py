@@ -54,6 +54,7 @@ from dinnerbell.domain.assistant import (
     recent_turns,
     reservation_micros,
     total_cost_micros,
+    web_key,
 )
 from dinnerbell.domain.assistant_drafts import MAX_OPEN_DRAFTS
 from dinnerbell.domain.members import Member
@@ -96,6 +97,35 @@ CAP_BELOW_ONE_CALL = (
 )
 """When one call's reservation is more than the household's whole cap, as with a $1 cap and a
 model whose worst case is more: ``AT_CAP`` would be false, since nothing was spent."""
+NEAR_CAP = (
+    "This month's assistant spending is too close to its limit to answer this request. Try asking for less at "
+    "once, or ask an admin to raise the cap."
+)
+"""When this request's reservation won't fit in what's left this month, but the smallest message's
+would (#362): ``AT_CAP`` would be false, since a smaller request may still be answered. A tool
+result says this too, as when a menu link won't fit."""
+NEAR_CAP_WEB = (
+    "This month's assistant spending is too close to its limit to answer this request. Select Start over and ask "
+    "again, since a new conversation sends less, or ask an admin to raise the cap."
+)
+"""``NEAR_CAP`` on the Assistant page, for a conversation with earlier messages."""
+NEAR_CAP_SLACK = (
+    "This month's assistant spending is too close to its limit to answer this request. Ask again in a new "
+    "message, not in this thread, since a new conversation sends less, or ask an admin to raise the cap."
+)
+"""``NEAR_CAP`` in a Slack thread with earlier messages: a new top-level message starts a new
+conversation, as **Start over** does on the web."""
+PAGE_AT_CAP = (
+    "The assistant is unavailable until next month, because this month's spending is too close to its limit. "
+    "An admin can raise the cap."
+)
+"""What the Assistant page shows above the composer when what's left this month can't cover the
+smallest private message (``at_cap_notice``), so a member who comes back sees why."""
+PAGE_CAP_TOO_LOW = (
+    "The assistant's monthly spending limit is too low for this model to answer a message here, so waiting "
+    "until next month won't help. An admin can raise the cap."
+)
+"""``PAGE_AT_CAP`` when the whole cap can't cover the smallest private message."""
 TURNED_OFF = "The assistant was just turned off."
 FAILED = "The assistant couldn't answer just now. Try again in a minute."
 REFUSED = "I can't help with that one."
@@ -276,6 +306,7 @@ async def _call(
     zone: ZoneInfo,
     request: Mapping[str, Any],
     *,
+    private: bool,
     deadline: datetime,
     earlier_output_tokens: int = 0,
     events: ModelEvents | None = None,
@@ -286,7 +317,8 @@ async def _call(
     call can't run, including ``OUT_OF_TIME`` once the message's ``deadline`` passes, before
     the call or during it. ``earlier_output_tokens`` is what this message's earlier calls wrote:
     their thinking goes back in this request as signed blocks and bills as input. ``events``
-    hears the reply's text as it's written, for Slack; it changes nothing about the call."""
+    hears the reply's text as it's written, for Slack; it changes nothing about the call.
+    ``private`` is the conversation's, for which refusal a call over the cap gets (``_over_cap``)."""
     if _seconds_left(assistant, deadline) <= 0:
         raise _Refused(OUT_OF_TIME)
     household_id = member.household_id
@@ -307,9 +339,9 @@ async def _call(
             raise _Refused(CAP_BELOW_ONE_CALL)
         now = assistant.clock()
         month = month_key(now, zone)
-        if await repo.month_total(household_id, month) + reserved > settings.cap_micros:
-            log.info("assistant at its monthly cap", extra={"member_id": member.id})
-            raise _Refused(AT_CAP)
+        spent = await repo.month_total(household_id, month)
+        if spent + reserved > settings.cap_micros:
+            raise _Refused(await _over_cap(db, assistant, member, spent, settings.cap_micros, private=private))
         usage_id = await repo.reserve(household_id, member.id, model, month, reserved, now)
         await db.commit()
 
@@ -393,7 +425,9 @@ def _over_covered(reply: ModelReply, model: str, member: Member) -> bool:
     return True
 
 
-async def _check_room(db: AsyncSession, assistant: Assistant, member: Member, zone: ZoneInfo, reserved: int) -> None:
+async def _check_room(
+    db: AsyncSession, assistant: Assistant, member: Member, zone: ZoneInfo, reserved: int, *, private: bool
+) -> None:
     """Raise ``_Refused`` as ``_call`` would for a menu link's drafting call reserving
     ``reserved``, reserving nothing, or ``ToolRefusal`` when the member has ``MAX_OPEN_DRAFTS``
     waiting already. A reservation over the whole cap gets ``CAP_TOO_LOW``: next month wouldn't
@@ -410,9 +444,23 @@ async def _check_room(db: AsyncSession, assistant: Assistant, member: Member, zo
             log.info("assistant cap below a menu link's reservation", extra={"member_id": member.id})
             raise _Refused(CAP_TOO_LOW)
         month = month_key(assistant.clock(), zone)
-        if await repo.month_total(household_id, month) + reserved > settings.cap_micros:
-            log.info("assistant at its monthly cap", extra={"member_id": member.id})
-            raise _Refused(AT_CAP)
+        spent = await repo.month_total(household_id, month)
+        if spent + reserved > settings.cap_micros:
+            raise _Refused(await _over_cap(db, assistant, member, spent, settings.cap_micros, private=private))
+
+
+async def _over_cap(
+    db: AsyncSession, assistant: Assistant, member: Member, spent: int, cap: int, *, private: bool
+) -> str:
+    """Why a reservation that won't fit under ``cap`` with ``spent`` is refused: ``AT_CAP`` when
+    what's left can't cover the smallest message of this kind (``least_call_micros``), so nothing
+    will fit until next month, and otherwise ``NEAR_CAP``, since a smaller request may (#362)."""
+    members = await MemberRepository(db).list(member.household_id)
+    if spent + least_call_micros(assistant.config.model, private=private, members=members) > cap:
+        log.info("assistant at its monthly cap", extra={"member_id": member.id})
+        return AT_CAP
+    log.info("assistant too near its monthly cap for this request", extra={"member_id": member.id})
+    return NEAR_CAP
 
 
 @dataclass
@@ -427,6 +475,7 @@ class _LinkCalls:
     member: Member
     zone: ZoneInfo
     deadline: datetime
+    private: bool
     fetched: int = 0
     over: bool = False
 
@@ -460,7 +509,9 @@ class _LinkCalls:
         if _seconds_left(self.assistant, self.deadline) <= 0:
             raise ToolRefusal(OUT_OF_TIME)
         try:
-            await _check_room(self.db, self.assistant, self.member, self.zone, self._reserved(request))
+            await _check_room(
+                self.db, self.assistant, self.member, self.zone, self._reserved(request), private=self.private
+            )
         except _Refused as refused:
             raise ToolRefusal(refused.reply) from None
         self.fetched += 1  # the fetch comes next, and counts whether it works or not
@@ -469,7 +520,7 @@ class _LinkCalls:
         """The drafting call for the link ``check_room`` let through."""
         try:
             reply, overran = await _call(
-                self.db, self.assistant, self.member, self.zone, request, deadline=self.deadline
+                self.db, self.assistant, self.member, self.zone, request, private=self.private, deadline=self.deadline
             )
         except _Refused as refused:
             raise ToolRefusal(refused.reply) from None
@@ -557,7 +608,7 @@ async def _run_loop(
     tools = tools_for(private)
     written = 0  # output tokens of this message's calls so far
     over = False  # a call billed more attempts than its reservation covered
-    links = _LinkCalls(db, assistant, member, zone, deadline)
+    links = _LinkCalls(db, assistant, member, zone, deadline, private=private)
     session.links = links
     for _ in range(MAX_MODEL_CALLS):
         if over or links.over:
@@ -569,7 +620,15 @@ async def _run_loop(
             events.started(len(session.drafts))
         try:
             reply, overran = await _call(
-                db, assistant, member, zone, request, deadline=deadline, earlier_output_tokens=written, events=events
+                db,
+                assistant,
+                member,
+                zone,
+                request,
+                private=private,
+                deadline=deadline,
+                earlier_output_tokens=written,
+                events=events,
             )
         except _Refused as refused:
             return refused.reply, False
@@ -648,7 +707,8 @@ async def converse(
     Returns None, storing and sending nothing, when the assistant doesn't answer this member
     (``available``) or the message is empty. Raises Forbidden for a private conversation that
     isn't the member's. Otherwise the reply is the model's answer with members' names put back,
-    or a short message from Dinnerbell: at the cap, unavailable until next month; on a refusal,
+    or a short message from Dinnerbell: at the cap, unavailable until next month; too near it
+    for this request, how to ask with less (``NEAR_CAP``); on a refusal,
     a failure, or ``MESSAGE_SECONDS`` passing, a line saying so. The exchange is kept for
     Admin's Conversation hours, in pseudonym form, unless that's 0 or the model didn't answer.
 
@@ -709,7 +769,27 @@ async def converse(
         stream=stream,
     )
     pseudonyms = session.pseudonyms  # with anyone the tools named
+    if not answered and answer == NEAR_CAP and sent:
+        # Earlier messages went with it, so a new conversation sends less.
+        answer = NEAR_CAP_WEB if key == web_key(member.id) else NEAR_CAP_SLACK
     if answered:
         await _keep(db, assistant, member, key, private, pseudonyms, current, Turn("assistant", answer))
     log.info("assistant replied", extra={"member_id": member.id, "answered": answered, "drafts": len(session.drafts)})
     return Reply(pseudonyms.restore_names(answer, names), tuple(session.drafts))
+
+
+async def at_cap_notice(db: AsyncSession, config: AssistantConfig, member: Member, now: datetime) -> str | None:
+    """What the Assistant page says above the composer when no private message can be answered
+    this month (#362): ``PAGE_CAP_TOO_LOW`` when the whole cap is below the smallest private
+    message's first call (``least_private_call_micros``), ``PAGE_AT_CAP`` when what's left this
+    month is, and None otherwise. A refused message isn't kept, so this is how a member who comes
+    back learns why. No dollar amounts."""
+    household = await HouseholdRepository(db).get(member.household_id)
+    if household is None:  # pragma: no cover - members cascade with their household
+        raise NotFound("No such household.")
+    cap = assistant_settings(await household_settings(db, household.id)).cap_micros
+    least = least_private_call_micros(config.model, await MemberRepository(db).list(household.id))
+    if least > cap:
+        return PAGE_CAP_TOO_LOW
+    spent = await AssistantRepository(db).month_total(household.id, month_key(now, ZoneInfo(household.timezone)))
+    return PAGE_AT_CAP if spent + least > cap else None

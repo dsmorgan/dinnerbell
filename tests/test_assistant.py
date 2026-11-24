@@ -42,6 +42,9 @@ from dinnerbell.services.assistant.conversation import (
     FAILED,
     MAX_MODEL_CALLS,
     MESSAGE_SECONDS,
+    NEAR_CAP,
+    NEAR_CAP_SLACK,
+    NEAR_CAP_WEB,
     OUT_OF_TIME,
     REFUSED,
     TOO_LONG_ANSWER,
@@ -258,12 +261,59 @@ class TestAssistantOn:
         )
         need = reservation_micros("claude-sonnet-5-5", payload_bytes=request_bytes(request), max_tokens=6_000)
         await _spend(house, 1_000_000 - need + 1)
-        assert await ask(house, helper, "Sam", "Hello") == Reply(AT_CAP)
+        # The smallest message would still fit, so it's too near the cap, not at it (#362).
+        assert await ask(house, helper, "Sam", "Hello") == Reply(NEAR_CAP)
         assert model.requests == []
         assert len(await usage_rows(house)) == 1  # nothing reserved
         await _spend(house, -1)  # one micro-dollar less spent, and it fits exactly
         assert (await ask(house, helper, "Sam", "Hello")) == Reply("OK")
         assert len(model.requests) == 1
+
+    async def test_too_near_the_cap_says_how_to_ask_with_less_and_at_it_says_next_month(
+        self, house: House, helper: Assistant, model: FakeModel
+    ) -> None:
+        """#362: a request that won't fit in what's left, while the smallest message would, isn't
+        the cap reached. With earlier messages, the member hears to start a new conversation, in
+        the words of where they asked; once what's left can't cover the smallest private message,
+        it's unavailable until next month. Neither refused message is kept."""
+        await switch(house, helper, cap_dollars=1)
+        dm = slack_key("D0SAM", "1730000000.000900")
+        model.script = [answer("Hi."), answer("Hi.")]
+        await ask(house, helper, "Sam", "Hello")
+        await ask(house, helper, "Sam", "Hello", key=dm)
+        async with house.sessionmaker() as db:
+            least = conversation.least_private_call_micros(
+                helper.config.model, await MemberRepository(db).list(house.household.id)
+            )
+            spent = await AssistantRepository(db).month_total(house.household.id, "2026-10")
+        await _spend(house, 1_000_000 - spent - least)  # exactly the smallest private message left
+        kept = [len(c.transcript) for c in await conversations(house)]
+        assert await ask(house, helper, "Sam", "Something cheaper") == Reply(NEAR_CAP_WEB)
+        assert await ask(house, helper, "Sam", "Something cheaper", key=dm) == Reply(NEAR_CAP_SLACK)
+        assert "Start over" in NEAR_CAP_WEB and "Start over" not in NEAR_CAP_SLACK
+        assert "new message, not in this thread" in NEAR_CAP_SLACK
+        assert all("$" not in text for text in (NEAR_CAP, NEAR_CAP_WEB, NEAR_CAP_SLACK))
+        await _spend(house, 1)  # one micro-dollar short of the smallest private message
+        assert await ask(house, helper, "Sam", "Something cheaper") == Reply(AT_CAP)
+        assert await ask(house, helper, "Sam", "Something cheaper", key=dm) == Reply(AT_CAP)
+        assert len(model.requests) == 2
+        assert [len(c.transcript) for c in await conversations(house)] == kept == [2, 2]
+
+    async def test_a_channel_thread_is_at_the_cap_only_below_its_own_smallest_message(
+        self, house: House, helper: Assistant, model: FakeModel
+    ) -> None:
+        """A channel thread offers fewer tools, so its smallest message sets aside less: with room
+        for that but not a private one, a channel thread hears it's too near the cap, not at it."""
+        await switch(house, helper, cap_dollars=1)
+        async with house.sessionmaker() as db:
+            members = await MemberRepository(db).list(house.household.id)
+        channel = conversation.least_call_micros(helper.config.model, private=False, members=members)
+        assert channel < conversation.least_private_call_micros(helper.config.model, members)
+        await _spend(house, 1_000_000 - channel)
+        thread = slack_key("C0HOUSE", "1730000000.000950")
+        assert await ask(house, helper, "Sam", "Hello", key=thread, private=False) == Reply(NEAR_CAP)
+        assert await ask(house, helper, "Sam", "Hello") == Reply(AT_CAP)
+        assert model.requests == []
 
     async def test_each_call_settles_to_what_it_cost_cache_tokens_included(
         self, house: House, helper: Assistant, model: FakeModel

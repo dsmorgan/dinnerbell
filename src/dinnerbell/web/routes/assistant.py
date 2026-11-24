@@ -62,6 +62,12 @@ def _values(settings: AssistantSettings) -> dict[str, Any]:
     }
 
 
+def _dollars_down(micros: int) -> str:
+    """Micro-dollars as dollars to the cent, rounded down: what's left never shows as more than it is."""
+    cents = micros // 10_000
+    return f"${cents // 100}.{cents % 100:02d}"
+
+
 async def _page(
     request: Request,
     context: AppContext,
@@ -83,6 +89,9 @@ async def _page(
         "by_member": [(usage.name, format_dollars(usage.micros)) for usage in view.by_member],
         "cap_below_one_call": view.cap_below_one_call,
         "cap_below_any_call": view.cap_below_any_call,
+        "left_below_one_call": view.left_below_one_call,
+        "left_below_any_call": view.left_below_any_call,
+        "left": _dollars_down(view.left_micros),
         "least_call": format_dollars(view.least_call_micros),
         "least_channel_call": format_dollars(view.least_channel_call_micros),
         "least_cap": f"${-(-view.least_call_micros // 1_000_000)}",
