@@ -201,3 +201,55 @@ def test_another_provider_never_folds_a_guest(client: TestClient, provider: Fake
     nova = next(m for m in rows(migrated, MemberRow) if m.email == "nova@example.com")
     assert nova.oidc_subject is None
     assert not [a for a in rows(migrated, AuditRow) if a.action == "guest.linked_to_member"]
+
+
+@pytest.mark.anyio
+async def test_the_fold_decides_again_under_the_write_lock(
+    migrated: Settings, clock: FakeClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Another writer links the member between the first look and the write lock: the sign-in
+    decides again on what it wrote, and signs in as the guest instead of taking the member."""
+    from contextlib import asynccontextmanager
+
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from dinnerbell.db.repositories import MemberRepository
+    from dinnerbell.domain.identity import IdentityClaims
+    from dinnerbell.services import auth
+    from dinnerbell.services.database import open_database
+    from tests.support.calls import make_house
+
+    database = open_database(migrated.async_database_url)
+    try:
+        house = await make_house(database.sessionmaker, clock, migrated.admin_email)
+        riley = await house.add_member("Riley", admin=True)
+        async with house.sessionmaker() as db:
+            members = MemberRepository(db)
+            guest = await members.add_guest(
+                household_id=house.household.id,
+                display_name="Riley",
+                dietary_needs=frozenset(),
+                slack_user_id="U01RILEY",
+                slack_guest_account=False,
+                now=clock(),
+            )
+            await members.update(house.household.id, guest.id, clock(), oidc_subject="sub-riley")
+            await db.commit()
+        real = auth.write_transaction
+
+        @asynccontextmanager
+        async def linked_meanwhile(db: AsyncSession) -> Any:
+            async with house.sessionmaker() as other:
+                await MemberRepository(other).update(house.household.id, riley.id, clock(), oidc_subject="sub-other")
+                await other.commit()
+            async with real(db):
+                yield
+
+        monkeypatch.setattr(auth, "write_transaction", linked_meanwhile)
+        claims = IdentityClaims("sub-riley", riley.email, True, slack_team_id=TEAM, slack_user_id="U01RILEY")
+        async with house.sessionmaker() as db:
+            result = await auth.sign_in(db, claims, required_team_id=TEAM, slack_sign_in=True, now=clock())
+        assert isinstance(result, auth.SignedIn) and result.member.id == guest.id
+        assert (await house.refresh("Riley")).oidc_subject == "sub-other"
+    finally:
+        await database.close()

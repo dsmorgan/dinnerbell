@@ -103,11 +103,13 @@ def _invitation_wins(claims: IdentityClaims, guest: Member, invited: Member) -> 
     member. Their Slack email, verified in the household's workspace, proves it, as at a first
     sign-in. Only for an invitation an automatic Slack link may claim (as the hourly match:
     no Slack user yet, none set or cleared by hand), and never for a Slack guest account, which
-    joining and the hourly match never link on email alone. An admin's invitation qualifies:
+    joining and the hourly match never link on email alone, nor for a guest linked to another
+    Slack account than the one signing in. An admin's invitation qualifies:
     the proof is the email, not a display name, as it is for **Link to member**."""
     return (
         guest.is_guest
         and not guest.slack_guest_account
+        and guest.slack_user_id in (None, claims.slack_user_id)
         and claims.email_verified
         and bool(claims.email)
         and invited.is_member

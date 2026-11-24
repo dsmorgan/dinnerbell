@@ -218,6 +218,7 @@ class TestInvitationWinsOverJoinedGuest:
             ({}, JOINED, replace(INVITED_ADMIN, slack_link_locked=True), SLACK),  # cleared by hand
             ({}, replace(JOINED, slack_guest_account=True), INVITED_ADMIN, SLACK),
             ({}, MEMBER, INVITED_ADMIN, SLACK),  # a member's subject is theirs
+            ({"slack_user_id": "U09ELSE"}, JOINED, INVITED_ADMIN, SLACK),  # the guest is another account's
         ],
         ids=[
             "unverified",
@@ -230,6 +231,7 @@ class TestInvitationWinsOverJoinedGuest:
             "member_locked",
             "slack_guest_account",
             "not_a_guest",
+            "guest_on_other_slack",
         ],
     )
     def test_the_guest_signs_in_as_before(
@@ -238,6 +240,11 @@ class TestInvitationWinsOverJoinedGuest:
         subject = replace(guest, oidc_subject="sub")
         decision = decide_sign_in(from_slack(**overrides), by_subject=subject, by_email=invited, **slack)  # type: ignore[arg-type]
         assert decision == Allow(subject, link_subject=False)
+
+    def test_a_guest_with_no_slack_user_folds(self) -> None:
+        bare = replace(JOINED, slack_user_id=None)
+        decision = decide_sign_in(from_slack(), by_subject=bare, by_email=INVITED_ADMIN, **SLACK)  # type: ignore[arg-type]
+        assert decision == Allow(INVITED_ADMIN, link_subject=True, fold_guest=bare)
 
     def test_the_wrong_workspace_is_refused(self) -> None:
         decision = decide_sign_in(
