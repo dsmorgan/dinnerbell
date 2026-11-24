@@ -34,7 +34,7 @@ An admin can see and change any member's preferences. On **Admin** > **Members**
 
 - To add only the people you choose, turn **Join from the channel** off. Someone who isn't linked then gets a private "I don't know your Slack account yet" message when they tap a button.
 - **Add people from the channel** lists everyone in the channel who isn't in Dinnerbell, to add as a guest or a member.
-- If someone joins as a guest and you invite them afterward by their Slack email, their next **Sign in with Slack** signs them in as the member and folds the guest into it, as **Link to member** does. This works for an admin too, but never for a Slack guest account.
+- If someone joined as a guest and signed in on the web before Slack shared their email, and you invite them by email afterward, their next **Sign in with Slack** signs them in as the member and folds the guest into it, as **Link to member** does. This works for an admin too, but never for a Slack guest account.
 - If someone you invited by email joins as a guest because their Slack email differs, select **Link to member** on their guest row to move their Slack account to their membership. Anyone can take any name in Slack, so check the Slack account and email shown on the row. If that email isn't the member's, or they use a Slack guest account, you type the member's name to confirm. Admins aren't listed; an admin sets their own Slack member ID.
 - **Remove** signs a guest out and stops them from joining again until you select **Add back**.
 - Each member's row but your own has [**Sign out everywhere**](#sign-out-a-lost-device).
