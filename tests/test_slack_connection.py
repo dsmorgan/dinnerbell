@@ -5,6 +5,7 @@ email, and /healthz's Slack state."""
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from datetime import timedelta
 from typing import Any
@@ -28,6 +29,7 @@ from dinnerbell.channels.slack.api import (
 from dinnerbell.channels.slack.connection import BoltSocket
 from dinnerbell.config import Settings
 from dinnerbell.db.models import AuditRow
+from dinnerbell.db.repositories import MemberRepository
 from dinnerbell.domain import notifications as note
 from dinnerbell.services import outbox
 from dinnerbell.services.database import Database, open_database
@@ -475,6 +477,45 @@ async def slack_members_link(db: Any, house: House, found: dict[int, str]) -> li
     from dinnerbell.services import slack_members
 
     return await slack_members.link_slack_users(db, house.household.id, found, now=house.clock())
+
+
+ADMIN_EMAIL_TYPO = "Nobody in the Slack workspace has the email in DINNERBELL_ADMIN_EMAIL"
+
+
+def typo_warnings(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [r for r in caplog.records if r.getMessage().startswith(ADMIN_EMAIL_TYPO)]
+
+
+async def test_a_mistyped_admin_email_is_warned_about_once(house: House, caplog: pytest.LogCaptureFixture) -> None:
+    """#360: the first admin's invitation is unclaimed and nobody in Slack has the email. The
+    warning names the setting, never the email (SEC-5), and comes on the first pass only."""
+    fake = FakeSlack()
+    conn = connection(house, fake, admin_email="admin@example.com")
+    assert await conn.run_once()
+    (warning,) = typo_warnings(caplog)
+    assert warning.levelno == logging.WARNING and "@" not in warning.getMessage()
+    assert await conn.run_once()
+    assert len(typo_warnings(caplog)) == 1
+
+
+@pytest.mark.parametrize("case", ["in_slack", "claimed", "slack_error", "unset"])
+async def test_no_warning_when_the_admin_email_is_fine_or_unknown(
+    house: House, caplog: pytest.LogCaptureFixture, case: str
+) -> None:
+    fake = FakeSlack()
+    if case == "in_slack":
+        fake.add_user("admin@example.com", "U01ALEX")
+    if case == "claimed":
+        async with house.sessionmaker() as db:
+            await MemberRepository(db).update(house.household.id, house["Alex"].id, house.clock(), oidc_subject="s1")
+            await db.commit()
+    if case == "slack_error":
+        fake.fail("users.lookupByEmail", Failure("ratelimited", status=429))
+    conn = connection(house, fake, **({} if case == "unset" else {"admin_email": "admin@example.com"}))
+    assert await conn.run_once()  # the checks pass whatever the lookup says
+    assert typo_warnings(caplog) == []
+    lookups = [c for c in fake.of("users.lookupByEmail") if c.args["email"] == "admin@example.com"]
+    assert len(lookups) == {"in_slack": 2, "claimed": 1, "slack_error": 2, "unset": 1}[case]  # plus the hourly match
 
 
 async def test_lookup_trouble_stops_the_round_quietly(house: House, caplog: pytest.LogCaptureFixture) -> None:
