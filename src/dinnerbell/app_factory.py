@@ -191,7 +191,9 @@ def _slack(
         schema_revision=schema_revision(),
         assistant=assistant,
         import_link=lambda draft_id, member_id: draft_import_url(settings, clock, draft_id, member_id),
-        admin_email=settings.admin_email,
+        # Only Sign in with Slack needs the admin's email in Slack: with another provider, their
+        # sign-in email may well differ from their Slack one (#360).
+        admin_email=settings.admin_email if settings.slack_sign_in else None,
     )
 
 

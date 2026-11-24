@@ -155,3 +155,37 @@ async def test_both_settings_changed_warn_once_each(
     assert len(warnings) == 2
     assert sum("DINNERBELL_TIMEZONE" in w for w in warnings) == 1
     assert sum("DINNERBELL_HOUSEHOLD_NAME" in w for w in warnings) == 1
+
+
+@pytest.mark.anyio
+async def test_a_new_admin_email_warns_about_an_earlier_unclaimed_invitation(
+    migrated: Settings, clock: FakeClock, caplog: pytest.LogCaptureFixture
+) -> None:
+    """#360: the earlier email was most likely a typo, which anyone with it could still claim.
+    The warning names the member ID, never the email (SEC-5)."""
+    await run(migrated, clock, admin_email="rilye@example.com")
+    caplog.clear()
+    await run(migrated, clock, admin_email="riley@example.com")
+    [warning] = warnings_from(caplog)
+    assert "DINNERBELL_ADMIN_EMAIL changed" in warning and "deactivate member 1" in warning
+    assert not any("@" in record.getMessage() for record in caplog.records)
+    record = next(r for r in caplog.records if r.levelno == logging.WARNING)
+    assert record.member_id == 1  # type: ignore[attr-defined]
+
+
+@pytest.mark.anyio
+async def test_a_new_admin_email_after_the_first_admin_signed_in_warns_nothing(
+    migrated: Settings, clock: FakeClock, caplog: pytest.LogCaptureFixture
+) -> None:
+    from sqlalchemy import text
+
+    await run(migrated, clock)
+    engine = create_app_engine(migrated.async_database_url)
+    try:
+        async with create_sessionmaker(engine)() as db:
+            await db.execute(text("UPDATE member SET oidc_subject = 'sub-admin'"))
+            await db.commit()
+    finally:
+        await engine.dispose()
+    await run(migrated, clock, admin_email="second@example.com")
+    assert warnings_from(caplog) == []
