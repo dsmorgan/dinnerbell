@@ -450,7 +450,7 @@ class Turn:
             str(role),
             text,
             author if isinstance(author, str) else None,
-            shown_to if isinstance(shown_to, str) else None,
+            shown_to if role == ASSISTANT and isinstance(shown_to, str) else None,
         )
 
     @property
