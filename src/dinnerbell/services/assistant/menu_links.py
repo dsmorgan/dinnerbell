@@ -59,7 +59,9 @@ PAGE_TAG = "untrusted_page"
 
 NOT_HERE = "Dinnerbell can't read links in this conversation."
 TOO_MANY_LINKS = f"Dinnerbell reads at most {MAX_LINK_FETCHES} links per message. Ask the member to send the rest next."
-CAP_TOO_LOW = "Your monthly cap is too low to read a menu link with this model."
+CAP_TOO_LOW = (
+    "The household's monthly cap is too low to read a menu link with this model. Tell the member an admin can raise it."
+)
 """When one drafting call's reservation is more than the household's whole cap: waiting for next
 month wouldn't help."""
 NO_TEXT = "That page has no text Dinnerbell can read."

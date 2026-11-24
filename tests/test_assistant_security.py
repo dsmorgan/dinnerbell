@@ -86,8 +86,8 @@ from dinnerbell.services.assistant.client import ModelCallFailed, ModelReply
 from dinnerbell.services.assistant.conversation import (
     AT_CAP,
     FAILED,
+    LINK_NEAR_CAP,
     MESSAGE_SECONDS,
-    NEAR_CAP,
     OUT_OF_TIME,
     Assistant,
     Reply,
@@ -2321,7 +2321,7 @@ async def test_a_links_drafting_call_is_reserved_under_the_cap_like_any_other(
         assert seen == [cap - after_first + reserved] and seen[0] <= cap  # reserved first, under the cap
     else:
         # The message's next call still fits, so it's too near the cap, not at it (#362).
-        assert link == ToolResult(NEAR_CAP, is_error=True)
+        assert link == ToolResult(LINK_NEAR_CAP, is_error=True)
         assert fetch.asked == [] and counts.drafting == [] and seen == []
     rows = await usage_rows(house)
     assert {r.state for r in rows} == {"settled"} and sum(r.cost_micros for r in rows) <= cap

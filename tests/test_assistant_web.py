@@ -206,11 +206,17 @@ def test_whats_left_below_one_call_says_which_messages_wait() -> None:
 
     assert (view(2, 1_600_000).left_below_one_call, view(2, 1_600_000).left_below_any_call) == (False, False)
     assert (view(2, 1_600_001).left_below_one_call, view(2, 1_600_001).left_below_any_call) == (True, False)
+    assert (view(2, 1_700_000).left_below_one_call, view(2, 1_700_000).left_below_any_call) == (True, False)
     assert (view(2, 1_700_001).left_below_one_call, view(2, 1_700_001).left_below_any_call) == (True, True)
     assert view(2, 2_500_000).left_micros == 0 and view(2, 2_500_000).left_below_any_call
     tiny = AssistantSettings(enabled=True, cap_dollars=1)
     below = AssistantAdmin(tiny, "2026-10", 900_000, (), least_call_micros=1_500_000, least_channel_call_micros=1)
-    assert below.cap_below_one_call and not below.left_below_one_call
+    assert below.cap_below_one_call and not below.left_below_one_call and not below.left_below_any_call
+    # A cap between the two minimums: private messages never fit, and channel threads wait for next month.
+    straddle = AssistantAdmin(
+        tiny, "2026-10", 900_000, (), least_call_micros=1_500_000, least_channel_call_micros=500_000
+    )
+    assert straddle.cap_below_one_call and not straddle.left_below_one_call and straddle.left_below_any_call
 
 
 @pytest.mark.parametrize("settings_overrides", [{"anthropic_api_key": "sk-ant-test-not-a-real-key"}])
@@ -226,20 +232,20 @@ def test_usage_says_why_members_get_no_answers_with_room_left(
     assert 'id="left-low"' not in page(client.get("/admin/assistant"))
     spend(migrated, clock, 1)
     shown = " ".join(page(client.get("/admin/assistant")).split())
-    left = 2_000_000 - (2_000_000 - private + 1)
+    left = private - 1
     assert (
-        "Members can't get answers on the Assistant page or in direct messages until next month or until you "
-        f"raise the cap. Each private message first sets aside the most it can cost, at least "
-        f"{format_dollars(private)} with claude-sonnet-5-5, and {dollars_down(left)} is left. Short messages in "
-        "a channel thread can still fit."
+        "The Assistant page and direct messages are paused until next month or a higher cap: each message first "
+        f"sets aside about {format_dollars(private)} with claude-sonnet-5-5, and {dollars_down(left)} is left. "
+        "Short channel-thread messages still fit."
     ) in shown
-    spend(migrated, clock, private - channel)  # a micro-dollar short of a channel thread's too
+    spend(migrated, clock, left - channel)  # exactly a channel thread's smallest message left
+    shown = " ".join(page(client.get("/admin/assistant")).split())
+    assert "Short channel-thread messages still fit." in shown and "The assistant is paused" not in shown
+    spend(migrated, clock, 1)  # a micro-dollar short of a channel thread's too
     shown = " ".join(page(client.get("/admin/assistant")).split())
     assert (
-        "Members can't get answers until next month or until you raise the cap. Each message first sets aside "
-        f"the most it can cost, at least {format_dollars(channel)} in a channel thread and "
-        f"{format_dollars(private)} on the Assistant page or in a direct message with claude-sonnet-5-5, and "
-        f"{dollars_down(channel - 1)} is left."
+        "The assistant is paused until next month or a higher cap: its smallest message sets aside about "
+        f"{format_dollars(channel)} with claude-sonnet-5-5, and {dollars_down(channel - 1)} is left."
     ) in shown
     assert 'id="cap-low"' not in shown
 

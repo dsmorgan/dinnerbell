@@ -341,7 +341,7 @@ def test_at_the_cap_the_reply_says_so(client: TestClient, provider: FakeProvider
     model.script = [answer("A costly answer.", parts=(usage(input_tokens=900_000, output_tokens=0),))]
     assert "A costly answer." in page(send(client, "Hello", **HX))  # billed past the $1 cap
     at_cap = page(send(client, "Hello again", **HX))
-    assert "reached this month's spending limit" in at_cap and "Hello again" in at_cap
+    assert "unavailable until next month, or until an admin raises the cap" in at_cap and "Hello again" in at_cap
     assert len(model.requests) == 1
 
 

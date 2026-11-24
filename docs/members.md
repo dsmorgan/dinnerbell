@@ -176,7 +176,7 @@ The assistant can draft:
 
 Each **Confirm** runs the same checks as the buttons on the other pages. A draft that no longer fits says why on its card, and nothing changes. A draft that edits something, such as your levels, the plan, a catalog item, or a meal, also stops if that changed elsewhere after it was drafted; ask again. A draft lasts 30 minutes, and only you can confirm it, once.
 
-The conversation is private: other members and the admin don't see it. Dinnerbell keeps it for the household's **Conversation hours** after your last message, so follow-ups such as "something cheaper" work. At 0 hours, each message stands alone. **Start over** clears the conversation and cancels its waiting drafts. Near the household's monthly spending limit, a long conversation may not fit when a short one would: select **Start over** and ask again, or ask an admin to raise the cap. Once nothing fits, the page says the assistant is unavailable until next month. Links in replies aren't clickable, so a page the assistant read can't slip you a link to tap.
+The conversation is private: other members and the admin don't see it. Dinnerbell keeps it for the household's **Conversation hours** after your last message, so follow-ups such as "something cheaper" work. At 0 hours, each message stands alone. **Start over** clears the conversation and cancels its waiting drafts. Near the household's monthly cap, a long conversation may not fit when a short one would: select **Start over** and ask again, or ask an admin to raise the cap. Once nothing fits, the page says the assistant is unavailable until next month. Links in replies aren't clickable, so a page the assistant read can't slip you a link to tap.
 
 What the assistant sees:
 

@@ -87,44 +87,50 @@ MESSAGE_SECONDS = 100.0
 120 seconds the web page waits (``web.routes.assistant_page.SEND_TIMEOUT_MS``)."""
 
 AT_CAP = (
-    "The assistant has reached this month's spending limit, so it's unavailable until next month. "
-    "Everything else in Dinnerbell works as usual."
-)
-CAP_BELOW_ONE_CALL = (
-    "The assistant's monthly spending limit is too low for this model to answer a request this size, so waiting "
-    "until next month won't help. Ask an admin to raise the cap on Admin > Assistant. Everything else in "
+    "The assistant is unavailable until next month, or until an admin raises the cap. Everything else in "
     "Dinnerbell works as usual."
+)
+"""When what's left this month can't cover the smallest message of the conversation's kind."""
+CAP_BELOW_ONE_CALL = (
+    "The assistant's monthly cap is too low for this model to answer a request this size, so waiting until next "
+    "month won't help. Ask an admin to raise it on Admin > Assistant. Everything else in Dinnerbell works as usual."
 )
 """When one call's reservation is more than the household's whole cap, as with a $1 cap and a
 model whose worst case is more: ``AT_CAP`` would be false, since nothing was spent."""
 NEAR_CAP = (
-    "This month's assistant spending is too close to its limit to answer this request. Try asking for less at "
-    "once, or ask an admin to raise the cap."
+    "This month's assistant spending is too close to the cap for this request. Ask for less at once, or ask an "
+    "admin to raise the cap."
 )
 """When this request's reservation won't fit in what's left this month, but the smallest message's
-would (#362): ``AT_CAP`` would be false, since a smaller request may still be answered. A tool
-result says this too, as when a menu link won't fit."""
+would (#362): ``AT_CAP`` would be false, since a smaller request may still be answered. For a
+conversation with earlier messages, ``converse`` says instead how to start a new one."""
 NEAR_CAP_WEB = (
-    "This month's assistant spending is too close to its limit to answer this request. Select Start over and ask "
-    "again, since a new conversation sends less, or ask an admin to raise the cap."
+    "This month's assistant spending is too close to the cap for this request. Select Start over and ask again, "
+    "or ask an admin to raise the cap."
 )
 """``NEAR_CAP`` on the Assistant page, for a conversation with earlier messages."""
-NEAR_CAP_SLACK = (
-    "This month's assistant spending is too close to its limit to answer this request. Ask again in a new "
-    "message, not in this thread, since a new conversation sends less, or ask an admin to raise the cap."
+NEAR_CAP_DM = (
+    "This month's assistant spending is too close to the cap for this request. Ask again in a new message, not "
+    "in this thread, or ask an admin to raise the cap."
 )
-"""``NEAR_CAP`` in a Slack thread with earlier messages: a new top-level message starts a new
+"""``NEAR_CAP`` in a Slack DM thread with earlier messages: a new top-level message starts a new
 conversation, as **Start over** does on the web."""
-PAGE_AT_CAP = (
-    "The assistant is unavailable until next month, because this month's spending is too close to its limit. "
-    "An admin can raise the cap."
+NEAR_CAP_CHANNEL = (
+    "This month's assistant spending is too close to the cap for this request. Mention Dinnerbell in a new "
+    "message, not in this thread, and name the call, or ask an admin to raise the cap."
 )
+"""``NEAR_CAP`` in a channel thread with earlier messages: a new channel message reaches
+Dinnerbell only with a mention, and loses the thread's call."""
+LINK_NEAR_CAP = (
+    "This month's assistant spending is too close to the cap to read a menu link. Tell the member an admin can "
+    "raise the cap, or suggest they add the place on the Catalog page."
+)
+"""``NEAR_CAP`` for a menu link's drafting call: a tool result for the model, since the page's
+size isn't the member's to change."""
+PAGE_AT_CAP = "The assistant is unavailable until next month, or until an admin raises the cap."
 """What the Assistant page shows above the composer when what's left this month can't cover the
 smallest private message (``at_cap_notice``), so a member who comes back sees why."""
-PAGE_CAP_TOO_LOW = (
-    "The assistant's monthly spending limit is too low for this model to answer a message here, so waiting "
-    "until next month won't help. An admin can raise the cap."
-)
+PAGE_CAP_TOO_LOW = "The monthly cap is too low for this model to answer here, even next month. An admin can raise it."
 """``PAGE_AT_CAP`` when the whole cap can't cover the smallest private message."""
 TURNED_OFF = "The assistant was just turned off."
 FAILED = "The assistant couldn't answer just now. Try again in a minute."
@@ -446,7 +452,14 @@ async def _check_room(
         month = month_key(assistant.clock(), zone)
         spent = await repo.month_total(household_id, month)
         if spent + reserved > settings.cap_micros:
-            raise _Refused(await _over_cap(db, assistant, member, spent, settings.cap_micros, private=private))
+            raise _Refused(
+                _for_link(await _over_cap(db, assistant, member, spent, settings.cap_micros, private=private))
+            )
+
+
+def _for_link(reply: str) -> str:
+    """A refusal as the tool result a menu link's drafting call gets."""
+    return LINK_NEAR_CAP if reply == NEAR_CAP else reply
 
 
 async def _over_cap(
@@ -523,7 +536,7 @@ class _LinkCalls:
                 self.db, self.assistant, self.member, self.zone, request, private=self.private, deadline=self.deadline
             )
         except _Refused as refused:
-            raise ToolRefusal(refused.reply) from None
+            raise ToolRefusal(_for_link(refused.reply)) from None
         self.over = _over_covered(reply, str(request["model"]), self.member) or overran or self.over
         return reply
 
@@ -771,7 +784,7 @@ async def converse(
     pseudonyms = session.pseudonyms  # with anyone the tools named
     if not answered and answer == NEAR_CAP and sent:
         # Earlier messages went with it, so a new conversation sends less.
-        answer = NEAR_CAP_WEB if key == web_key(member.id) else NEAR_CAP_SLACK
+        answer = NEAR_CAP_WEB if key == web_key(member.id) else NEAR_CAP_DM if private else NEAR_CAP_CHANNEL
     if answered:
         await _keep(db, assistant, member, key, private, pseudonyms, current, Turn("assistant", answer))
     log.info("assistant replied", extra={"member_id": member.id, "answered": answered, "drafts": len(session.drafts)})

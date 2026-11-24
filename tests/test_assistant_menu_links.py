@@ -22,6 +22,7 @@ from sqlalchemy import select
 
 from dinnerbell.config import Settings
 from dinnerbell.db.models import AssistantDraftRow, AssistantUsageRow, ProposalRow
+from dinnerbell.db.repositories import MemberRepository
 from dinnerbell.domain.assistant import AssistantSettings, Pseudonyms, TokenUsage, cost_micros, slack_key, web_key
 from dinnerbell.domain.assistant_drafts import MAX_LINK_ITEMS, MAX_OPEN_DRAFTS, entry_link, from_link
 from dinnerbell.domain.catalog import ItemKind, Mode
@@ -32,11 +33,13 @@ from dinnerbell.services.assistant.client import ModelReply
 from dinnerbell.services.assistant.conversation import (
     AT_CAP,
     FAILED,
-    NEAR_CAP,
+    LINK_NEAR_CAP,
     TURNED_OFF,
     Assistant,
     Reply,
     converse,
+    least_call_micros,
+    least_private_call_micros,
 )
 from dinnerbell.services.assistant.drafts import IMPORT_LINK_LIFETIME, LINK_NOT_IMPORTABLE, CatalogReady
 from dinnerbell.services.assistant.menu_links import (
@@ -789,8 +792,41 @@ async def test_before_the_fetch_the_cap_is_checked_for_a_full_page(
     spends = SpendsFirst(script=[tool_call("draft_catalog_from_link", link()), answer("At the cap.")])
     reply = await ask(house, replace(helper, client=spends))
     assert reply == Reply("At the cap.")
-    assert results(spends.requests[-1])[0]["content"] == NEAR_CAP  # a smaller request still fits (#362)
+    assert results(spends.requests[-1])[0]["content"] == LINK_NEAR_CAP  # a smaller request still fits (#362)
     assert fetch.asked == []
+
+
+@pytest.mark.parametrize("when", ["before the fetch", "after the fetch"])
+async def test_in_a_channel_thread_a_link_near_the_cap_is_measured_against_a_channel_message(
+    house: House, helper: Assistant, fetch: FakeFetch, when: str
+) -> None:
+    """#362: with room left for a channel thread's smallest message but not a private one's, a
+    link that won't fit in a channel thread is too near the cap, not at it, whether the check
+    before the fetch or the drafting call itself refuses it."""
+    async with house.sessionmaker() as db:
+        members = await MemberRepository(db).list(house.household.id)
+    channel = least_call_micros(helper.config.model, private=False, members=members)
+    private = least_private_call_micros(helper.config.model, members)
+    assert channel < private
+    left = private - 1  # room for the message's next call in the thread, but not a private message
+    spend = functools.partial(spend_to_cap, house, 5_000_000 - left - cost_micros(usage()))
+    fetch.pages[LINK] = page("x" * MAX_PAGE_BYTES)  # its drafting call sets aside more than is left
+
+    class SpendsFirst(FakeModel):
+        async def create(self, request: Any, *, time_left: float) -> Any:
+            if not self.requests and when == "before the fetch":
+                await spend()
+            return await super().create(request, time_left=time_left)
+
+    if when == "after the fetch":
+        fetch.before = spend
+    spends = SpendsFirst(script=[tool_call("draft_catalog_from_link", link()), answer("Too near the cap.")])
+    thread = slack_key("C0HOUSE", "1790000000.000300")
+    reply = await ask(house, replace(helper, client=spends), thread=thread)
+    assert reply == Reply("Too near the cap.")
+    assert results(spends.requests[-1])[0]["content"] == LINK_NEAR_CAP
+    assert fetch.asked == ([] if when == "before the fetch" else [LINK])
+    assert sum(r.cost_micros for r in await rows(house, AssistantUsageRow)) == 5_000_000 - left + cost_micros(usage())
 
 
 async def test_a_cap_below_one_drafting_call_says_so_instead_of_next_month(
