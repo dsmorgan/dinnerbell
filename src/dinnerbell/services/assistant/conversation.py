@@ -799,7 +799,8 @@ async def converse(
     )
     pseudonyms = session.pseudonyms  # with anyone the tools named
     if not answered and answer == NEAR_CAP and sent:
-        # Earlier messages went with it, so a new conversation sends less.
+        # Earlier messages went with it, so a new conversation sends less. History of only draft
+        # entries (#363) counts too: they went with it, and a new conversation drops them.
         answer = NEAR_CAP_WEB if key == web_key(member.id) else NEAR_CAP_DM if private else NEAR_CAP_CHANNEL
     if answered:
         await _keep(db, assistant, member, key, private, pseudonyms, current, Turn("assistant", answer))
