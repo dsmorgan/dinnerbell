@@ -187,6 +187,73 @@ class TestSignInDecision:
         assert isinstance(decision, Allow)
 
 
+JOINED = replace(make_member(8, Role.GUEST, subject="sub"), email=None, slack_user_id="U08JO")
+INVITED_ADMIN = make_member(6, Role.ADMIN)
+SLACK = {"required_team_id": "T1", "slack_sign_in": True}
+
+
+def from_slack(**overrides: object) -> IdentityClaims:
+    return claims(**({"email": INVITED_ADMIN.email, "slack_team_id": "T1", "slack_user_id": "U08JO"} | overrides))
+
+
+class TestInvitationWinsOverJoinedGuest:
+    """#360: someone who joined from the channel as a guest, then was invited by their Slack
+    email, signs in as the member, and the guest is folded into it."""
+
+    @pytest.mark.parametrize("invited", [INVITED_ADMIN, replace(INVITED, email=INVITED_ADMIN.email)])
+    def test_the_invitation_wins(self, invited: Member) -> None:
+        decision = decide_sign_in(from_slack(), by_subject=JOINED, by_email=invited, **SLACK)  # type: ignore[arg-type]
+        assert decision == Allow(invited, link_subject=True, fold_guest=JOINED)
+
+    @pytest.mark.parametrize(
+        ("overrides", "guest", "invited", "slack"),
+        [
+            ({"email_verified": False}, JOINED, INVITED_ADMIN, SLACK),
+            ({"email": None}, JOINED, None, SLACK),
+            ({}, JOINED, INVITED_ADMIN, {"required_team_id": "T1"}),  # another provider
+            ({}, JOINED, INVITED_ADMIN, {"required_team_id": None, "slack_sign_in": False}),
+            ({}, JOINED, replace(INVITED_ADMIN, oidc_subject="s9"), SLACK),  # already linked
+            ({}, JOINED, replace(INVITED_ADMIN, active=False), SLACK),
+            ({}, JOINED, replace(INVITED_ADMIN, slack_user_id="U09ELSE"), SLACK),
+            ({}, JOINED, replace(INVITED_ADMIN, slack_link_locked=True), SLACK),  # cleared by hand
+            ({}, replace(JOINED, slack_guest_account=True), INVITED_ADMIN, SLACK),
+            ({}, MEMBER, INVITED_ADMIN, SLACK),  # a member's subject is theirs
+        ],
+        ids=[
+            "unverified",
+            "no_email",
+            "other_provider",
+            "no_team",
+            "member_linked",
+            "member_inactive",
+            "member_has_slack",
+            "member_locked",
+            "slack_guest_account",
+            "not_a_guest",
+        ],
+    )
+    def test_the_guest_signs_in_as_before(
+        self, overrides: dict[str, object], guest: Member, invited: Member | None, slack: dict[str, object]
+    ) -> None:
+        subject = replace(guest, oidc_subject="sub")
+        decision = decide_sign_in(from_slack(**overrides), by_subject=subject, by_email=invited, **slack)  # type: ignore[arg-type]
+        assert decision == Allow(subject, link_subject=False)
+
+    def test_the_wrong_workspace_is_refused(self) -> None:
+        decision = decide_sign_in(
+            from_slack(slack_team_id="T2"),
+            by_subject=JOINED,
+            by_email=INVITED_ADMIN,
+            **SLACK,  # type: ignore[arg-type]
+        )
+        assert decision == Refuse(Refusal.WRONG_TEAM, JOINED.id)
+
+    def test_an_inactive_guest_is_refused(self) -> None:
+        gone = replace(JOINED, active=False)
+        decision = decide_sign_in(from_slack(), by_subject=gone, by_email=INVITED_ADMIN, **SLACK)  # type: ignore[arg-type]
+        assert decision == Refuse(Refusal.INACTIVE, gone.id)
+
+
 class TestSessions:
     NOW = datetime(2026, 1, 1, tzinfo=UTC)
 

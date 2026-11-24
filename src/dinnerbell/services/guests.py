@@ -494,30 +494,45 @@ async def link_to_member(
             raise LinkNeedsOverride(guest, target, f"{guest.display_name} {why}. Check both before linking.")
         if override and confirm.strip().casefold() != target.display_name.casefold():
             raise LinkNeedsOverride(guest, target, f"Type {target.display_name} exactly to link anyway.")
-        slack_id = guest.slack_user_id
         try:
-            await members.update(actor.household_id, guest.id, now, slack_user_id=None, oidc_subject=None, active=False)
-            await SessionRepository(db).delete_for_member(guest.id)
-            linked = await members.update(
-                actor.household_id, target.id, now, slack_user_id=slack_id, slack_link_locked=True
-            )
+            linked = await fold_into_member(db, guest, target, actor=actor, now=now, override=override)
         except IntegrityError:
             # Another link took this Slack account first: answer as a replay would.
             await db.rollback()
             raise MemberRuleViolation(LINK_GONE) from None
-        await _leave_open_calls(db, actor, guest, now)
-        payload = {"guest_id": guest.id, "slack_user_id": slack_id, "override": override}
-        await audit(db, actor.household_id, actor, "guest.linked_to_member", f"member:{target.id}", payload, now)
         await db.commit()
     return linked
 
 
-async def _leave_open_calls(db: AsyncSession, actor: Member, guest: Member, now: datetime) -> None:
+async def fold_into_member(
+    db: AsyncSession, guest: Member, target: Member, *, actor: Member, now: datetime, **audited: object
+) -> Member:
+    """Fold ``guest`` into ``target``, the member they really are: move the guest's Slack user to
+    the member, locked as a link set by hand (FR-42); retire the guest record, signed out and
+    out of any open call; and audit it as ``guest.linked_to_member``, with ``audited`` added to
+    the payload. The guest's history stays under the guest. Callers check that the fold is
+    allowed, hold the write lock (``write_transaction``), and commit: **Link to member**, and a
+    Slack sign-in whose verified email is the member's (#360, ``services.auth``)."""
+    members, slack_id = MemberRepository(db), guest.slack_user_id
+    await members.update(guest.household_id, guest.id, now, slack_user_id=None, oidc_subject=None, active=False)
+    await SessionRepository(db).delete_for_member(guest.id)
+    folded = target
+    if slack_id is not None:
+        folded = await members.update(
+            target.household_id, target.id, now, slack_user_id=slack_id, slack_link_locked=True
+        )
+    await _leave_open_calls(db, guest, now)
+    payload = {"guest_id": guest.id, "slack_user_id": slack_id, **audited}
+    await audit(db, target.household_id, actor, "guest.linked_to_member", f"member:{target.id}", payload, now)
+    return folded
+
+
+async def _leave_open_calls(db: AsyncSession, guest: Member, now: datetime) -> None:
     events = EventRepository(db)
     for event_id in await invited_events(db, guest):
-        event = await events.get(actor.household_id, event_id)
+        event = await events.get(guest.household_id, event_id)
         if event is not None and event.state in {EventState.COLLECTING, EventState.VOTING, EventState.DECIDED}:
-            await events.lock(actor.household_id, event_id, now)
+            await events.lock(guest.household_id, event_id, now)
             await _drop_from_call(db, event, guest.id, now)
 
 
@@ -541,7 +556,7 @@ async def remove(db: AsyncSession, actor: Member, guest_id: int, *, now: datetim
     guest = await _guest(db, actor, guest_id)
     updated = await MemberRepository(db).update(actor.household_id, guest.id, now, active=False, join_refused=True)
     await SessionRepository(db).delete_for_member(guest.id)
-    await _leave_open_calls(db, actor, guest, now)
+    await _leave_open_calls(db, guest, now)
     await audit(db, actor.household_id, actor, "guest.removed", f"member:{guest.id}", {}, now)
     await db.commit()
     return updated

@@ -10,17 +10,19 @@ from __future__ import annotations
 import hashlib
 import logging
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dinnerbell.db.engine import write_transaction
 from dinnerbell.db.repositories import AuditRepository, HouseholdRepository, MemberRepository, SessionRepository
 from dinnerbell.db.sign_in_codes import SignInCodeRepository
 from dinnerbell.domain import sessions as rules
 from dinnerbell.domain.household import Household
-from dinnerbell.domain.identity import Allow, IdentityClaims, Refuse, decide_sign_in
+from dinnerbell.domain.identity import Allow, IdentityClaims, Refuse, SignInDecision, decide_sign_in
 from dinnerbell.domain.members import InvalidMemberInput, Member, normalize_email
+from dinnerbell.services import guests
 
 log = logging.getLogger(__name__)
 TOKEN_BYTES = 32
@@ -58,13 +60,30 @@ async def sign_in(
     household = await HouseholdRepository(db).first()
     if household is None:
         raise RuntimeError("no household; bootstrap has not run")
+    decision = await _decide(db, household.id, claims, required_team_id=required_team_id, slack_sign_in=slack_sign_in)
+    if isinstance(decision, Allow) and decision.fold_guest is not None:
+        # #360: folding writes two members; a concurrent Link to member of the same guest, or
+        # this person's second sign-in, waits and then decides on what this one wrote.
+        async with write_transaction(db):
+            decision = await _decide(
+                db, household.id, claims, required_team_id=required_team_id, slack_sign_in=slack_sign_in
+            )
+            return await _finish(db, household.id, claims, decision, now, replaces_token, user_agent)
+    return await _finish(db, household.id, claims, decision, now, replaces_token, user_agent)
+
+
+async def _decide(
+    db: AsyncSession, household_id: int, claims: IdentityClaims, *, required_team_id: str | None, slack_sign_in: bool
+) -> SignInDecision:
     members = MemberRepository(db)
-    by_subject = await members.by_subject(household.id, claims.subject)
-    by_email = await _by_email(members, household.id, claims.email) if by_subject is None else None
+    by_subject = await members.by_subject(household_id, claims.subject)
+    # A guest's invitation by email can win over their guest record (#360), with Slack only.
+    wants_email = by_subject is None or (slack_sign_in and by_subject.is_guest)
+    by_email = await _by_email(members, household_id, claims.email) if wants_email else None
     by_slack = None
     if by_subject is None and slack_sign_in and claims.slack_user_id:
-        by_slack = await members.by_slack_user_id(household.id, claims.slack_user_id)
-    decision = decide_sign_in(
+        by_slack = await members.by_slack_user_id(household_id, claims.slack_user_id)
+    return decide_sign_in(
         claims,
         by_subject=by_subject,
         by_email=by_email,
@@ -72,9 +91,26 @@ async def sign_in(
         by_slack_user=by_slack,
         slack_sign_in=slack_sign_in,
     )
+
+
+async def _finish(
+    db: AsyncSession,
+    household_id: int,
+    claims: IdentityClaims,
+    decision: SignInDecision,
+    now: datetime,
+    replaces_token: str | None,
+    user_agent: str | None,
+) -> SignedIn | Refuse:
     if isinstance(decision, Refuse):
-        await _record_refusal(db, household.id, claims, decision, now)
+        await _record_refusal(db, household_id, claims, decision, now)
         return decision
+    if decision.fold_guest is not None:
+        folded = await guests.fold_into_member(
+            db, decision.fold_guest, decision.member, actor=decision.member, now=now, override=False, via="sign_in"
+        )
+        log.info("guest folded into member", extra={"member_id": folded.id, "guest_id": decision.fold_guest.id})
+        decision = replace(decision, member=folded, fold_guest=None)
     member = await _link(db, decision, claims, now)
     token = await open_session(db, member, now=now, replaces_token=replaces_token, user_agent=user_agent)
     await db.commit()

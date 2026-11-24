@@ -33,6 +33,8 @@ class Refusal(StrEnum):
 class Allow:
     member: Member
     link_subject: bool
+    fold_guest: Member | None = None
+    """A guest linked to this identity, to fold into ``member`` before linking it (#360)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,13 +59,17 @@ def decide_sign_in(
 
     ``by_subject`` is the member already linked to ``claims.subject``. ``by_email`` is the
     member whose email matches ``claims.email`` case-insensitively; the caller looks it up only
-    by the normalized email.
+    by the normalized email, and needs it when ``by_subject`` is None or a guest. An ``Allow``
+    with ``fold_guest`` asks the caller to fold that guest into the member, then link it.
     """
     if required_team_id is not None and not _same(claims.slack_team_id, required_team_id):
         return Refuse(Refusal.WRONG_TEAM, by_subject.id if by_subject else None)
     if by_subject is not None:
         if not by_subject.active:
             return Refuse(Refusal.INACTIVE, by_subject.id)
+        invited = by_email if slack_sign_in and required_team_id is not None else None
+        if invited is not None and _invitation_wins(claims, by_subject, invited):
+            return Allow(invited, link_subject=True, fold_guest=by_subject)
         return Allow(by_subject, link_subject=False)
     # An invited member who hasn't signed in yet matches by verified email first, even when a
     # guest record holds their Slack account (#38: they joined from the channel before the
@@ -89,6 +95,26 @@ def decide_sign_in(
     if not by_email.active:
         return Refuse(Refusal.INACTIVE, by_email.id)
     return Allow(by_email, link_subject=True)
+
+
+def _invitation_wins(claims: IdentityClaims, guest: Member, invited: Member) -> bool:
+    """#360: someone who joined from the channel as a guest, and was invited as a member since,
+    such as a first admin whose ``DINNERBELL_ADMIN_EMAIL`` was mistyped at first, signs in as the
+    member. Their Slack email, verified in the household's workspace, proves it, as at a first
+    sign-in. Only for an invitation an automatic Slack link may claim (as the hourly match:
+    no Slack user yet, none set or cleared by hand), and never for a Slack guest account, which
+    joining and the hourly match never link on email alone. An admin's invitation qualifies:
+    the proof is the email, not a display name, as it is for **Link to member**."""
+    return (
+        guest.is_guest
+        and not guest.slack_guest_account
+        and claims.email_verified
+        and bool(claims.email)
+        and invited.is_member
+        and not invited.is_linked
+        and invited.slack_user_id is None
+        and not invited.slack_link_locked
+    )
 
 
 def _same(claimed: str | None, required: str) -> bool:
