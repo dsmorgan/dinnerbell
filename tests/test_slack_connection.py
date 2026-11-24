@@ -518,6 +518,27 @@ async def test_no_warning_when_the_admin_email_is_fine_or_unknown(
     assert len(lookups) == {"in_slack": 2, "claimed": 1, "slack_error": 2, "unset": 1}[case]  # plus the hourly match
 
 
+@pytest.mark.parametrize(("issuer", "looked_up"), [("https://slack.com", True), ("https://accounts.google.com", False)])
+async def test_the_admin_email_is_looked_up_only_with_slack_as_the_provider(
+    tmp_path: Any, database: Database, clock: FakeClock, issuer: str, looked_up: bool
+) -> None:
+    """With Google to sign in and Slack for calls, the admin's sign-in email may well not be
+    their Slack email, and the warning's advice would lock them out (#360)."""
+    from dinnerbell.app_factory import _slack
+
+    configured = make_settings(
+        tmp_path,
+        slack_bot_token=BOT_TOKEN,
+        slack_app_token=APP_TOKEN,
+        slack_channel=CHANNEL,
+        slack_team_id=TEAM,
+        oidc_issuer=issuer,
+    )
+    conn = _slack(configured, database.sessionmaker, clock, SlackState(), FakeSlack(), FakeSocket)
+    assert conn is not None
+    assert conn.admin_email == (configured.admin_email if looked_up else None)
+
+
 async def test_lookup_trouble_stops_the_round_quietly(house: House, caplog: pytest.LogCaptureFixture) -> None:
     fake = FakeSlack()
     fake.add_user("sam@example.com", "U02SAM")

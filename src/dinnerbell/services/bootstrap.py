@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.repositories import AuditRepository, HouseholdRepository, MemberRepository
 from dinnerbell.domain.household import Household
-from dinnerbell.domain.members import Capabilities, Role, default_display_name
+from dinnerbell.domain.members import Capabilities, MemberStatus, Role, default_display_name
 from dinnerbell.domain.schedule import default_settings
 
 log = logging.getLogger(__name__)
@@ -42,6 +42,7 @@ async def bootstrap(
         _warn_on_ignored_settings(household, household_name=household_name, timezone=timezone)
 
     if await members.by_email(household.id, admin_email) is None:
+        unclaimed = [m.id for m in await members.list(household.id) if m.is_admin and m.status is MemberStatus.INVITED]
         admin = await members.add(
             household_id=household.id,
             display_name=default_display_name(admin_email),
@@ -59,6 +60,16 @@ async def bootstrap(
             now=now,
         )
         log.info("invited bootstrap admin", extra={"member_id": admin.id})
+        for earlier in unclaimed:
+            # The setting changed before the admin it invited first signed in: most likely a typo
+            # (#360), which anyone with that email could still claim. Never its email (SEC-5).
+            log.warning(
+                "DINNERBELL_ADMIN_EMAIL changed, but the admin it invited before, member %s, hasn't signed in. "
+                "If that email was mistyped, deactivate member %s on Admin > Members once you're in.",
+                earlier,
+                earlier,
+                extra={"member_id": earlier},
+            )
 
     await db.commit()
     return household
