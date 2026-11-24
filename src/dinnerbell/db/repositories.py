@@ -156,6 +156,15 @@ class MemberRepository:
         )
         return None if row is None else to_member(row)
 
+    async def guests_by_slack_email(self, household_id: int, email: str) -> tuple[Member, ...]:
+        """Every guest, active or not, whose Slack email is ``email`` (#360), oldest first."""
+        rows = await self._session.scalars(
+            select(MemberRow)
+            .where(MemberRow.household_id == household_id, MemberRow.role == "guest", MemberRow.slack_email == email)
+            .order_by(MemberRow.id)
+        )
+        return tuple(to_member(row) for row in rows)
+
     async def by_subject(self, household_id: int, subject: str) -> Member | None:
         row = await self._session.scalar(
             select(MemberRow).where(MemberRow.household_id == household_id, MemberRow.oidc_subject == subject)
