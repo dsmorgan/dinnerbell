@@ -43,7 +43,8 @@ from dinnerbell.services.assistant.conversation import (
     MAX_MODEL_CALLS,
     MESSAGE_SECONDS,
     NEAR_CAP,
-    NEAR_CAP_SLACK,
+    NEAR_CAP_CHANNEL,
+    NEAR_CAP_DM,
     NEAR_CAP_WEB,
     OUT_OF_TIME,
     REFUSED,
@@ -278,26 +279,34 @@ class TestAssistantOn:
         it's unavailable until next month. Neither refused message is kept."""
         await switch(house, helper, cap_dollars=1)
         dm = slack_key("D0SAM", "1730000000.000900")
-        model.script = [answer("Hi."), answer("Hi.")]
+        thread = slack_key("C0HOUSE", "1730000000.000960")
+        model.script = [answer("Hi."), answer("Hi."), answer("Hi.")]
         await ask(house, helper, "Sam", "Hello")
         await ask(house, helper, "Sam", "Hello", key=dm)
+        await ask(house, helper, "Sam", "Hello", key=thread, private=False)
         async with house.sessionmaker() as db:
-            least = conversation.least_private_call_micros(
-                helper.config.model, await MemberRepository(db).list(house.household.id)
-            )
+            members = await MemberRepository(db).list(house.household.id)
             spent = await AssistantRepository(db).month_total(house.household.id, "2026-10")
+        least = conversation.least_private_call_micros(helper.config.model, members)
+        channel = conversation.least_call_micros(helper.config.model, private=False, members=members)
         await _spend(house, 1_000_000 - spent - least)  # exactly the smallest private message left
         kept = [len(c.transcript) for c in await conversations(house)]
         assert await ask(house, helper, "Sam", "Something cheaper") == Reply(NEAR_CAP_WEB)
-        assert await ask(house, helper, "Sam", "Something cheaper", key=dm) == Reply(NEAR_CAP_SLACK)
-        assert "Start over" in NEAR_CAP_WEB and "Start over" not in NEAR_CAP_SLACK
-        assert "new message, not in this thread" in NEAR_CAP_SLACK
-        assert all("$" not in text for text in (NEAR_CAP, NEAR_CAP_WEB, NEAR_CAP_SLACK))
-        await _spend(house, 1)  # one micro-dollar short of the smallest private message
+        assert await ask(house, helper, "Sam", "Something cheaper", key=dm) == Reply(NEAR_CAP_DM)
+        await _spend(house, least - channel)  # exactly a channel thread's smallest message left
         assert await ask(house, helper, "Sam", "Something cheaper") == Reply(AT_CAP)
         assert await ask(house, helper, "Sam", "Something cheaper", key=dm) == Reply(AT_CAP)
-        assert len(model.requests) == 2
-        assert [len(c.transcript) for c in await conversations(house)] == kept == [2, 2]
+        in_thread = await ask(house, helper, "Sam", "Something cheaper", key=thread, private=False)
+        assert in_thread == Reply(NEAR_CAP_CHANNEL)
+        assert "Start over" in NEAR_CAP_WEB and "Start over" not in NEAR_CAP_DM + NEAR_CAP_CHANNEL
+        assert "new message, not in this thread" in NEAR_CAP_DM
+        assert "Mention Dinnerbell in a new message" in NEAR_CAP_CHANNEL and "name the call" in NEAR_CAP_CHANNEL
+        texts = (NEAR_CAP, NEAR_CAP_WEB, NEAR_CAP_DM, NEAR_CAP_CHANNEL, AT_CAP)
+        assert all("$" not in text and "limit" not in text for text in texts)
+        await _spend(house, 1)  # a micro-dollar short of a channel thread's smallest message too
+        assert await ask(house, helper, "Sam", "Something cheaper", key=thread, private=False) == Reply(AT_CAP)
+        assert len(model.requests) == 3
+        assert [len(c.transcript) for c in await conversations(house)] == kept == [2, 2, 2]
 
     async def test_a_channel_thread_is_at_the_cap_only_below_its_own_smallest_message(
         self, house: House, helper: Assistant, model: FakeModel

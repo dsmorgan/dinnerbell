@@ -78,8 +78,11 @@ class AssistantAdmin:
 
     @property
     def left_below_any_call(self) -> bool:
-        """``left_below_one_call``, for a channel thread's smallest message too: no message fits."""
-        return self.left_below_one_call and self.least_channel_call_micros > self.left_micros
+        """Whether what's left can't cover a channel thread's smallest message either, though the
+        whole cap can: no message fits until next month or a higher cap."""
+        # Not left_below_one_call: with a cap between the channel and private minimums, private
+        # messages never fit (the settings alert), but channel threads still wait only for next month.
+        return not self.cap_below_any_call and self.least_channel_call_micros > self.left_micros
 
 
 def _require(config: AssistantConfig, actor: Member) -> None:
