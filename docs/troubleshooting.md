@@ -53,7 +53,7 @@ Use the email on the person's Slack account, or on their account with your provi
 
 - If no member has that email, it invites one as an admin. Otherwise it makes that member an admin, and reactivates them if they were deactivated.
 - It clears the member's sign-in and Slack links, and signs them out everywhere, so their next sign-in with that email claims the admin, from a new account too.
-- A guest is never made the admin. If someone joined from the channel as a guest with that Slack email, their next **Sign in with Slack** folds the guest into the admin. If that guest uses a Slack guest account, the command clears the guest's sign-in link instead; once you're in, remove that guest or clear its Slack link on **Admin** > **Members**.
+- A guest is never made the admin. If someone joined from the channel as a guest with that Slack email and signed in on the web, their next **Sign in with Slack** folds the guest into the admin. If that guest uses a Slack guest account or was removed, the command clears the guest's sign-in link instead. If the guest still holds their Slack account, the command says so: once you're in, clear its Slack link on its guest row, then set your Slack member ID on your row.
 
 Then sign in. If `DINNERBELL_ADMIN_EMAIL` was mistyped, fix it too, and deactivate the mistyped admin on **Admin** > **Members**: until you do, anyone with that email can sign in as an admin.
 
