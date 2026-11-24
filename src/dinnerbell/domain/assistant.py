@@ -429,19 +429,29 @@ class Turn:
     role: str
     text: str
     author: str | None = None
+    shown_to: str | None = None
+    """For a reply in a channel thread that only one member saw (``only_to_member``), their
+    label; None for a reply everyone in the conversation saw, as every reply stored before #366
+    reads."""
 
     def to_json(self) -> dict[str, str]:
         found = {"role": self.role, "text": self.text}
-        return found | ({"author": self.author} if self.author is not None else {})
+        found |= {"author": self.author} if self.author is not None else {}
+        return found | ({"shown_to": self.shown_to} if self.shown_to is not None else {})
 
     @classmethod
     def from_json(cls, raw: object) -> Turn | None:
         if not isinstance(raw, Mapping):
             return None
-        role, text, author = raw.get("role"), raw.get("text"), raw.get("author")
+        role, text, author, shown_to = (raw.get(k) for k in ("role", "text", "author", "shown_to"))
         if role not in (USER, ASSISTANT, DRAFT) or not isinstance(text, str):
             return None
-        return cls(str(role), text, author if isinstance(author, str) else None)
+        return cls(
+            str(role),
+            text,
+            author if isinstance(author, str) else None,
+            shown_to if isinstance(shown_to, str) else None,
+        )
 
     @property
     def size(self) -> int:
@@ -489,11 +499,21 @@ def recent_turns(turns: Sequence[Turn], max_bytes: int) -> tuple[Turn, ...]:
     return tuple(kept)
 
 
+def only_to_member(*, private: bool, drafts: int) -> bool:
+    """Whether a reply goes only to the member it answers: in a channel thread (not ``private``),
+    a reply that comes with ``drafts`` goes to its member alone, as an ephemeral, and so do its
+    cards (spec 6.14). The one rule for both what Slack sends and what the conversation keeps."""
+    return not private and drafts > 0
+
+
 def turns_for(turns: Sequence[Turn], author: str | None) -> tuple[Turn, ...]:
     """What a request answering the member labeled ``author`` carries of ``turns``: every message,
-    and only that member's own draft entries. In a channel thread, whether someone else confirmed a
-    draft, such as a vote, is theirs alone."""
-    return tuple(turn for turn in turns if turn.role != DRAFT or turn.author == author)
+    only that member's own draft entries, and only the replies everyone saw or they alone did
+    (``Turn.shown_to``). In a channel thread, whether someone else confirmed a draft, such as a
+    vote, is theirs alone, and so is a reply that only they saw (#366)."""
+    return tuple(
+        turn for turn in turns if (turn.role != DRAFT or turn.author == author) and turn.shown_to in (None, author)
+    )
 
 
 DAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")

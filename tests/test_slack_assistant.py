@@ -39,7 +39,7 @@ from dinnerbell.config import Settings
 from dinnerbell.db.migrate import run_migrations
 from dinnerbell.db.models import AssistantConversationRow
 from dinnerbell.db.repositories import MemberRepository
-from dinnerbell.domain.assistant import AssistantSettings
+from dinnerbell.domain.assistant import AssistantSettings, only_to_member
 from dinnerbell.domain.members import Role
 from dinnerbell.services.assistant import admin
 from dinnerbell.services.assistant.anthropic_client import AnthropicModelClient
@@ -412,7 +412,8 @@ def record_call_ids(monkeypatch: pytest.MonkeyPatch) -> list[int | None]:
 def fake_drafts(monkeypatch: pytest.MonkeyPatch, *titles: str) -> None:
     async def drafting(*args: Any, **kwargs: Any) -> Reply:
         drafts = tuple(DraftView(n, "proposal", title, ("Confirm adds it.",)) for n, title in enumerate(titles, 1))
-        return Reply("Here's a draft for tonight.", drafts)
+        alone = only_to_member(private=kwargs["private"], drafts=len(drafts))
+        return Reply("Here's a draft for tonight.", drafts, only_to_member=alone)
 
     monkeypatch.setattr(slack_assistant, "converse", drafting)
 

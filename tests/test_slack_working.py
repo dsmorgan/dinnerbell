@@ -190,7 +190,10 @@ async def test_the_status_shows_before_the_model_answers(slack: Slack) -> None:
 
 
 async def test_the_status_clears_after_an_ephemeral_reply(slack: Slack, monkeypatch: pytest.MonkeyPatch) -> None:
-    replying(monkeypatch, Reply("Here's a draft.", (DraftView(1, "proposal", "A noodle place", ("Adds it.",)),)))
+    replying(
+        monkeypatch,
+        Reply("Here's a draft.", (DraftView(1, "proposal", "A noodle place", ("Adds it.",)),), only_to_member=True),
+    )
     root = next_ts()
     await slack.mention("Sam", f"<@{BOT_USER}> propose noodles", ts=root)
     assert methods(slack) == [SET_STATUS, "chat.postEphemeral", "chat.postEphemeral", SET_STATUS]
