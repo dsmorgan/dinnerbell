@@ -18,7 +18,7 @@ These settings are required:
 |---|---|
 | `DINNERBELL_BASE_URL` | The public URL people open, exactly as they type it: the same scheme and host, no explicit `:443`, and no path. It must use `https`, except `http://localhost` or `http://127.0.0.1` for local testing. Any mismatch makes every form fail with "Cross-origin request refused". The sign-in redirect URL is this value plus `/auth/callback`; if your hostname changes, change the redirect URL under **OAuth & Permissions** in the Slack app too. |
 | `DINNERBELL_SECRET_KEY` | Signs cookies and CSRF tokens. Dinnerbell refuses a key that is shorter than 32 characters, has fewer than 8 distinct characters, or contains placeholder text such as `REPLACE-ME`. Changing it invalidates open forms, sign-in pages, import previews, the assistant's **Review the import** links, unused sign-in codes, and every device's push notifications, but not sessions. A secret. |
-| `DINNERBELL_ADMIN_EMAIL` | The first admin. On every start, if no member has this email, Dinnerbell invites it as an admin, so changing it later adds another admin. |
+| `DINNERBELL_ADMIN_EMAIL` | The first admin. On every start, if no member has this email, Dinnerbell invites it as an admin, so changing it later adds another admin. While that admin hasn't signed in, Dinnerbell warns at start if nobody in the Slack workspace has the email. If no admin can sign in, see [Get an admin back in](troubleshooting.md#get-an-admin-back-in). |
 | `DINNERBELL_OIDC_ISSUER` | The sign-in provider, such as `https://slack.com`. It must publish `/.well-known/openid-configuration`. |
 | `DINNERBELL_OIDC_CLIENT_ID` | The provider's client ID. |
 | `DINNERBELL_OIDC_CLIENT_SECRET` | The provider's client secret. A secret. |

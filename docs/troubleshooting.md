@@ -12,7 +12,9 @@ After you fix a setting, recreate the service: `podman-compose down && podman-co
 | Sign-in says "Too many sign-in attempts" | More than 20 requests to the sign-in pages in a minute, counting every client behind your proxy together unless `DINNERBELL_TRUSTED_PROXIES` is set. | Wait a minute and sign in again. See [The sign-in rate limit](configuration.md#the-sign-in-rate-limit). |
 | Sign-in returns to a Pangolin login page or loops | Pangolin authentication is on. | Turn off **Use Platform SSO**, and leave password, PIN, email OTP, and header auth off. |
 | Every form fails with "Cross-origin request refused", or sign-in loops to the start page | `DINNERBELL_BASE_URL` differs from the URL in the browser: another host, a LAN IP, an explicit `:443`, or `http://`. | Set it to exactly the URL people type. Open Dinnerbell only at that URL. |
-| Sign-in works, but Dinnerbell says you aren't invited | The Slack email differs from the invited one, or isn't verified. | Compare the emails on **Admin** > **Members** and in Slack, and fix the member's email or `DINNERBELL_ADMIN_EMAIL`. |
+| Sign-in works, but Dinnerbell says you aren't invited | The Slack email differs from the invited one, or isn't verified. | Compare the emails on **Admin** > **Members** and in Slack, and fix the member's email. If no admin can sign in, see [Get an admin back in](#get-an-admin-back-in). |
+| The first admin signs in, but lands on a guest's page with no **Admin** | `DINNERBELL_ADMIN_EMAIL` didn't match their Slack email, so they joined from the channel as a guest. | Fix `DINNERBELL_ADMIN_EMAIL` and recreate the service. Their next **Sign in with Slack** makes them the admin. Then deactivate the mistyped admin on **Admin** > **Members**. |
+| The log says `Nobody in the Slack workspace has the email in DINNERBELL_ADMIN_EMAIL` | The first admin's email is mistyped, or isn't the one on their Slack account. | Fix `DINNERBELL_ADMIN_EMAIL` and recreate the service, or [add an admin](#get-an-admin-back-in). |
 | Sign-in refused for someone you invited | They signed in to another Slack workspace. | Ask them to sign in to your household workspace. |
 | A member taps a button and Slack says "I don't know your Slack account yet" | Their Slack account isn't linked, often because the emails differ. | Ask them to sign in to the web app once, or link them on **Admin** > **Members**. |
 | Startup error about a token prefix | The tokens are swapped. | The app token starts with `xapp-`, and the bot token with `xoxb-`. |
@@ -38,6 +40,22 @@ After you fix a setting, recreate the service: `podman-compose down && podman-co
 | Badges show as text, and the log says `badge art not available` with `missing_scope` | The Slack app lacks `files:write`. | Paste the current manifest and reinstall the app (see [Upgrade](backup-and-upgrade.md#upgrade)). |
 | Badges show as text, and the log says `slack refused badge art` | Slack refused the art. | Report the line, with its `slack_error`, on the issue tracker. |
 | Members message or mention Dinnerbell and get no reply | The assistant is off, or the Slack app still has the default manifest, which doesn't deliver those messages. | Check both conditions in [The assistant](configuration.md#the-assistant), and apply the assistant manifest ([Talk to it in Slack](configuration.md#talk-to-it-in-slack)). |
+
+## Get an admin back in
+
+If no admin can sign in, such as after a mistyped `DINNERBELL_ADMIN_EMAIL` or when the only admin lost their Slack account, make one from the host. Anyone with a shell on the host already owns the database, so this command adds no risk.
+
+```sh
+podman-compose exec dinnerbell dinnerbell admin add <email>
+```
+
+Use the email on the person's Slack account, or on their account with your provider. The command does the following, prints what it did by member ID, and writes an audit row:
+
+- If no member has that email, it invites one as an admin. Otherwise it makes that member an admin, and reactivates them if they were deactivated.
+- It clears the member's sign-in and Slack links, and signs them out everywhere, so their next sign-in with that email claims the admin, from a new account too.
+- A guest is never made the admin. If someone joined from the channel as a guest with that Slack email, their next **Sign in with Slack** folds the guest into the admin. If that guest uses a Slack guest account, the command clears the guest's sign-in link instead; once you're in, remove that guest or clear its Slack link on **Admin** > **Members**.
+
+Then sign in. If `DINNERBELL_ADMIN_EMAIL` was mistyped, fix it too, and deactivate the mistyped admin on **Admin** > **Members**: until you do, anyone with that email can sign in as an admin.
 
 ## Check /healthz
 
