@@ -7,6 +7,7 @@ requests that leave a reply out still alternate roles. The model is ``FakeModel`
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -125,6 +126,29 @@ async def test_a_reply_only_its_member_saw_goes_only_with_their_requests(
     assert messages[1]["content"] == DRAFTED and messages[3]["content"] == "Hi Sam."
 
 
+async def test_a_reply_saved_after_another_members_keeps_their_label_in_its_mark(
+    house: House, helper: Assistant
+) -> None:
+    """Kim and Sam start the same thread at once, each as Member 1 in their own request. Sam's
+    exchange is saved while Kim's waits on the model, so Kim keeps the label Sam's map gave her,
+    and the mark on her reply names that label, as her message's ``author`` does."""
+    sams = replace(helper, client=FakeModel(script=[answer("Hi Sam.")]))
+
+    class Midway(FakeModel):
+        async def create(self, request: Any, *, time_left: float, events: Any = None) -> Any:
+            if not self.requests:
+                await ask(house, sams, "Sam", "Hello", key=THREAD)
+            return await super().create(request, time_left=time_left, events=events)
+
+    kims = replace(
+        helper, client=Midway(script=[tool_call("draft_offer", OFFER | {"spare_servings": 0}), answer(DRAFTED)])
+    )
+    assert (await ask(house, kims, "Kim", "Offer Siam Garden", key=THREAD)).only_to_member
+    *_, asked, reply = await transcript(house, THREAD)
+    assert asked["text"] == "Offer Siam Garden" and reply["text"] == DRAFTED
+    assert reply["shown_to"] == asked["author"] == await label(house, "Kim") != "Member 1"
+
+
 async def test_a_reply_stored_before_the_mark_still_goes_to_everyone(
     house: House, helper: Assistant, model: FakeModel
 ) -> None:
@@ -187,6 +211,9 @@ def test_the_mark_round_trips_and_anything_else_reads_as_unmarked() -> None:
     assert Turn.from_json(marked.to_json()) == marked
     assert Turn.from_json({"role": "assistant", "text": "Hi."}) == Turn("assistant", "Hi.")
     assert Turn.from_json({"role": "assistant", "text": "Hi.", "shown_to": 2}) == Turn("assistant", "Hi.")
+    for role in ("user", DRAFT):  # only a reply can be shown to one member
+        raw = {"role": role, "text": "Hi.", "author": "Member 1", "shown_to": "Member 2"}
+        assert Turn.from_json(raw) == Turn(role, "Hi.", "Member 1")
 
 
 def test_turns_for_keeps_a_marked_reply_only_for_its_member() -> None:

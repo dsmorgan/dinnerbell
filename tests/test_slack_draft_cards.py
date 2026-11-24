@@ -811,6 +811,23 @@ async def test_the_import_links_click_is_acknowledged_and_ignored(house: House, 
 # The reply that carries the cards -----------------------------------------------------------------
 
 
+async def test_drafts_without_the_private_flag_still_go_only_to_their_member(
+    house: House, slack: Slack, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A fail-safe: should a reply come with drafts but no ``only_to_member``, its cards in a
+    channel thread still never post publicly, and the slip is logged by member ID."""
+
+    async def drafting(*args: Any, **kwargs: Any) -> Reply:
+        return Reply("Here's a draft.", (DraftView(1, "proposal", "Propose Pho Corner", ()),))
+
+    monkeypatch.setattr(slack_assistant, "converse", drafting)
+    await slack.mention("Kim", f"<@{BOT_USER}> propose", ts=next_ts())
+    assert posts(slack) == []
+    assert [e["text"].split("\n")[0] for e in ephemerals(slack)] == ["Here's a draft.", "Propose Pho Corner"]
+    [warned] = [r for r in caplog.records if r.getMessage() == "slack assistant reply had drafts but no private flag"]
+    assert warned.levelname == "WARNING" and warned.__dict__["member_id"] == house["Kim"].id
+
+
 async def test_the_mention_only_line_reaches_each_member_once_and_then_the_thread(
     house: House, slack: Slack, monkeypatch: pytest.MonkeyPatch
 ) -> None:

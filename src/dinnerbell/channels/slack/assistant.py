@@ -963,7 +963,11 @@ class SlackAssistant:
         of it, the stream ends with the rest, and only what the member hasn't seen is posted."""
         shown = reply.text
         cards = [draft_card(draft) for draft in reply.drafts]
-        private = reply.only_to_member  # drafts, and the reply on them, go only to their member
+        # Drafts, and the reply on them, go only to their member. ``converse`` decides; should a
+        # reply ever come with drafts but no flag, cards in the channel still never go public.
+        private = reply.only_to_member or (bool(cards) and not incoming.private)
+        if private and not reply.only_to_member:
+            log.warning("slack assistant reply had drafts but no private flag", extra={"member_id": member.id})
         noted = f"{key}:{incoming.user}"
         first = not incoming.private and key not in self.replied and not (private and noted in self.noted)
         if stream is not None:  # a DM's: no note, and its cards are ordinary messages
