@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """What a conversation records when its member confirms or cancels a draft (#363, spec 6.14,
 **Drafts**), from the web or Slack: an entry such as "Confirmed on Tuesday, November 24: Start a
-lunch call for today. The lunch call for today is started.", so the page shows it after a reload and the next request
-tells the model.
+lunch call for today. The lunch call for today is started.", so the page shows it after a reload
+and the next request tells the model.
 
 The entry is in pseudonym form, as the rest of the conversation is: a person the draft or its
 result names goes in as the conversation's label, and a held value as not shown. The page puts
