@@ -20,7 +20,7 @@ from dinnerbell.db.repositories import MemberRepository
 from dinnerbell.domain.identity import IdentityClaims
 from dinnerbell.domain.members import InvalidMemberInput
 from dinnerbell.services import admin_add
-from dinnerbell.services.auth import SignedIn, sign_in
+from dinnerbell.services.auth import SignedIn, open_session, sign_in
 from dinnerbell.services.database import Database, open_database
 from dinnerbell.services.household import NoHousehold
 from tests.support.calls import House, furnish, make_house
@@ -210,12 +210,20 @@ async def test_a_slack_guest_account_never_folds(house: House, signed_in: bool) 
     """A Slack guest account is never folded on email alone, so a sign-in link would keep
     winning: the command clears it, and the email claims the admin."""
     guest_id = await joined_guest(house, "riley@example.com", slack_guest_account=True, signed_in=signed_in)
+    if signed_in:
+        async with house.sessionmaker() as db:
+            guest_member = await MemberRepository(db).get(house.household.id, guest_id)
+            assert guest_member is not None
+            await open_session(db, guest_member, now=house.clock(), replaces_token=None, user_agent=None)
+            await db.commit()
+        assert await sessions(house, guest_id) == 1
     result = await add(house, "riley@example.com")
     unlinked = "a Slack guest account" if signed_in else None
     assert result.guests == (admin_add.GuestNote(guest_id, unlinked=unlinked, holds_slack=True),)
     assert holds(guest_id) in result.lines() and "folds" not in " ".join(result.lines())
     guest = await row(house, guest_id)
     assert (guest.oidc_subject, guest.active, guest.slack_user_id) == (None, True, "U01RILEY")
+    assert await sessions(house, guest_id) == 0
     signed_in_now = await slack_sign_in(house, "sub-riley", "riley@example.com", "U01RILEY")
     assert signed_in_now.member.id == result.member_id and signed_in_now.member.is_admin
     (audit,) = await audits(house)

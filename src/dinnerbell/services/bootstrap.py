@@ -64,7 +64,7 @@ async def bootstrap(
             # The setting changed before the admin it invited first signed in: most likely a typo
             # (#360), which anyone with that email could still claim. Never its email (SEC-5).
             log.warning(
-                "DINNERBELL_ADMIN_EMAIL changed, but the admin it invited before, member %s, hasn't signed in. "
+                "DINNERBELL_ADMIN_EMAIL changed while an earlier admin invitation, member %s, is unclaimed. "
                 "If that email was mistyped, deactivate member %s on Admin > Members once you're in.",
                 earlier,
                 earlier,
