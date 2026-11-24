@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """What a conversation records when its member confirms or cancels a draft (#363, spec 6.14,
-**Drafts**), from the web or Slack: an entry such as "Confirmed: Start today's lunch call. The
-lunch call for today is started.", so the page shows it after a reload and the next request
+**Drafts**), from the web or Slack: an entry such as "Confirmed on Tuesday, November 24: Start a
+lunch call for today. The lunch call for today is started.", so the page shows it after a reload and the next request
 tells the model.
 
 The entry is in pseudonym form, as the rest of the conversation is: a person the draft or its
@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dinnerbell.db.assistant import AssistantRepository
 from dinnerbell.db.engine import write_transaction
 from dinnerbell.db.meals import household_settings
+from dinnerbell.db.repositories import HouseholdRepository
 from dinnerbell.domain.assistant import (
     DRAFT,
     MAX_STORED_BYTES,
@@ -33,6 +34,7 @@ from dinnerbell.domain.assistant_catalog import NOT_SHOWN
 from dinnerbell.domain.assistant_coordinating import with_held, with_people
 from dinnerbell.domain.assistant_drafts import Draft
 from dinnerbell.domain.members import Member
+from dinnerbell.services.variety import household_today
 
 
 async def record_use(
@@ -62,7 +64,11 @@ async def record_use(
         def told(text: str) -> str:
             return with_held(with_people(text, label), lambda _: NOT_SHOWN)
 
-        text = used_draft_text(told(draft.title), confirmed=confirmed, outcome=told(outcome))
+        household = await HouseholdRepository(db).get(household_id)
+        if household is None:  # pragma: no cover - members cascade with their household
+            return False
+        day = household_today(household, now)
+        text = used_draft_text(told(draft.title), confirmed=confirmed, day=day, outcome=told(outcome))
         entry = Turn(DRAFT, text, pseudonyms.label(member.id))
         kept = Conversation(
             key=stored.key,

@@ -501,13 +501,24 @@ async def confirm_draft(
     if not await available(db, config, member):
         raise DraftUnavailable(TURNED_OFF)
     result = await _confirm(db, config, tool_actor(member), draft, now)
-    outcome = await _told(db, member, result, now)
-    await draft_log.record_use(db, member, draft, confirmed=True, outcome=outcome, now=now)
+    await _record(db, member, draft, result, now)
     return result
 
 
-CATALOG_CONFIRMED = "The import preview is open. Nothing is added until you import the items there."
-"""What the conversation records of a catalog draft's Confirm, which only opens the preview."""
+CATALOG_CONFIRMED = "Nothing is added until the items are imported from the preview."
+"""What the conversation records of a catalog draft's Confirm, which only opens the preview, or,
+in Slack, links it."""
+
+
+async def _record(db: AsyncSession, member: Member, draft: Draft, result: Confirmed | None, now: datetime) -> None:
+    """Add the draft's entry to its conversation (``draft_log``): ``result`` is Confirm's, or None
+    for Cancel. The draft is used already, so a failure here is logged, never raised: an error
+    for something that happened would invite the member to do it again."""
+    try:
+        outcome = "" if result is None else await _told(db, member, result, now)
+        await draft_log.record_use(db, member, draft, confirmed=result is not None, outcome=outcome, now=now)
+    except Exception:
+        log.exception("assistant draft entry not kept", extra={"member_id": member.id, "draft_id": draft.id})
 
 
 async def _told(db: AsyncSession, member: Member, result: Confirmed, now: datetime) -> str:
@@ -664,7 +675,7 @@ async def cancel_draft(db: AsyncSession, clock: Clock, member: Member, draft_id:
         await _use(db, draft, member, now, confirmed=False)
         await db.commit()
     log.info("assistant draft cancelled", extra={"member_id": member.id, "draft_id": draft.id})
-    await draft_log.record_use(db, member, draft, confirmed=False, now=now)
+    await _record(db, member, draft, None, now)
 
 
 async def ready_for_import(
