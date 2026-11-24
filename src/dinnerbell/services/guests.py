@@ -505,12 +505,19 @@ async def link_to_member(
 
 
 async def fold_into_member(
-    db: AsyncSession, guest: Member, target: Member, *, actor: Member, now: datetime, **audited: object
+    db: AsyncSession,
+    guest: Member,
+    target: Member,
+    *,
+    actor: Member,
+    override: bool,
+    via: str | None = None,
+    now: datetime,
 ) -> Member:
     """Fold ``guest`` into ``target``, the member they really are: move the guest's Slack user to
     the member, locked as a link set by hand (FR-42); retire the guest record, signed out and
-    out of any open call; and audit it as ``guest.linked_to_member``, with ``audited`` added to
-    the payload. The guest's history stays under the guest. Callers check that the fold is
+    out of any open call; and audit it as ``guest.linked_to_member``, with ``override`` and, when
+    given, ``via``. The guest's history stays under the guest. Callers check that the fold is
     allowed, hold the write lock (``write_transaction``), and commit: **Link to member**, and a
     Slack sign-in whose verified email is the member's (#360, ``services.auth``)."""
     members, slack_id = MemberRepository(db), guest.slack_user_id
@@ -522,7 +529,9 @@ async def fold_into_member(
             target.household_id, target.id, now, slack_user_id=slack_id, slack_link_locked=True
         )
     await _leave_open_calls(db, guest, now)
-    payload = {"guest_id": guest.id, "slack_user_id": slack_id, **audited}
+    payload: dict[str, object] = {"guest_id": guest.id, "slack_user_id": slack_id, "override": override}
+    if via is not None:
+        payload["via"] = via
     await audit(db, target.household_id, actor, "guest.linked_to_member", f"member:{target.id}", payload, now)
     return folded
 
