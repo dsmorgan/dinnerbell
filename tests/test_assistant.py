@@ -300,7 +300,8 @@ class TestAssistantOn:
         assert in_thread == Reply(NEAR_CAP_CHANNEL)
         assert "Start over" in NEAR_CAP_WEB and "Start over" not in NEAR_CAP_DM + NEAR_CAP_CHANNEL
         assert "new message, not in this thread" in NEAR_CAP_DM
-        assert "Mention Dinnerbell in a new message" in NEAR_CAP_CHANNEL and "name the call" in NEAR_CAP_CHANNEL
+        assert "Mention Dinnerbell in a new message" in NEAR_CAP_CHANNEL
+        assert "name the call if it's about one" in NEAR_CAP_CHANNEL
         texts = (NEAR_CAP, NEAR_CAP_WEB, NEAR_CAP_DM, NEAR_CAP_CHANNEL, AT_CAP)
         assert all("$" not in text and "limit" not in text for text in texts)
         await _spend(house, 1)  # a micro-dollar short of a channel thread's smallest message too

@@ -117,7 +117,7 @@ NEAR_CAP_DM = (
 conversation, as **Start over** does on the web."""
 NEAR_CAP_CHANNEL = (
     "This month's assistant spending is too close to the cap for this request. Mention Dinnerbell in a new "
-    "message, not in this thread, and name the call, or ask an admin to raise the cap."
+    "message, not in this thread, and name the call if it's about one, or ask an admin to raise the cap."
 )
 """``NEAR_CAP`` in a channel thread with earlier messages: a new channel message reaches
 Dinnerbell only with a mention, and loses the thread's call."""

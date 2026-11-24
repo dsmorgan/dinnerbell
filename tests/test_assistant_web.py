@@ -212,6 +212,11 @@ def test_whats_left_below_one_call_says_which_messages_wait() -> None:
     tiny = AssistantSettings(enabled=True, cap_dollars=1)
     below = AssistantAdmin(tiny, "2026-10", 900_000, (), least_call_micros=1_500_000, least_channel_call_micros=1)
     assert below.cap_below_one_call and not below.left_below_one_call and not below.left_below_any_call
+    # The whole cap below a channel message too: only the settings alert speaks, never "next month".
+    none = AssistantAdmin(
+        tiny, "2026-10", 900_000, (), least_call_micros=1_500_000, least_channel_call_micros=1_200_000
+    )
+    assert none.cap_below_any_call and not none.left_below_one_call and not none.left_below_any_call
     # A cap between the two minimums: private messages never fit, and channel threads wait for next month.
     straddle = AssistantAdmin(
         tiny, "2026-10", 900_000, (), least_call_micros=1_500_000, least_channel_call_micros=500_000
