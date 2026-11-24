@@ -325,6 +325,42 @@ async def test_confirm_in_a_channel_thread_stays_ephemeral(house: House, model: 
     assert await pho_corner(house, event_id) is not None
 
 
+async def stored_turns(house: House, key: str) -> list[dict[str, Any]]:
+    async with house.sessionmaker() as db:
+        row = await db.scalar(select(AssistantConversationRow).where(AssistantConversationRow.key == key))
+    assert row is not None
+    return list(row.transcript)
+
+
+async def test_a_reply_sent_as_an_ephemeral_is_kept_as_its_members(
+    house: House, model: FakeModel, slack: Slack
+) -> None:
+    """#366: the reply on Kim's draft goes to her alone in the channel thread, and the
+    conversation marks it hers; Lee's reply in the same thread posts for everyone, unmarked."""
+    await to_voting(house)
+    drafting(model, "draft_proposal", PROPOSE)
+    root = next_ts()
+    await slack.mention("Kim", f"<@{BOT_USER}> draft it, please", ts=root)
+    assert posts(slack) == [] and len(ephemerals(slack)) == 2
+    key = slack_key(CHANNEL, root)
+    [*_, reply] = await stored_turns(house, key)
+    assert reply == {"role": "assistant", "text": "Here's a draft.", "shown_to": "Member 1"}
+    slack.fake.clear()
+    model.script = [answer("Hello, Lee.")]
+    await slack.mention("Lee", f"<@{BOT_USER}> hi", ts=next_ts(), thread_ts=root)
+    assert ephemerals(slack) == [] and posts(slack)[0]["text"].startswith("Hello, Lee.")
+    assert "Here's a draft." not in str(model.requests[-1]["messages"])
+    [*_, reply] = await stored_turns(house, key)
+    assert reply == {"role": "assistant", "text": "Hello, Lee."}
+
+
+async def test_a_dm_reply_with_drafts_is_kept_unmarked(house: House, model: FakeModel, slack: Slack) -> None:
+    await dm_card(slack, model, "Lee", "draft_offer", OFFER)
+    async with house.sessionmaker() as db:
+        [row] = list(await db.scalars(select(AssistantConversationRow)))
+    assert row.private and row.transcript[-1] == {"role": "assistant", "text": "Here's a draft."}
+
+
 async def test_a_call_action_in_a_channel_thread_confirms_only_for_its_member(
     house: House, model: FakeModel, slack: Slack
 ) -> None:
@@ -779,7 +815,7 @@ async def test_the_mention_only_line_reaches_each_member_once_and_then_the_threa
     house: House, slack: Slack, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async def drafting(*args: Any, **kwargs: Any) -> Reply:
-        return Reply("Here's a draft.", (DraftView(1, "proposal", "Propose Pho Corner", ()),))
+        return Reply("Here's a draft.", (DraftView(1, "proposal", "Propose Pho Corner", ()),), only_to_member=True)
 
     monkeypatch.setattr(slack_assistant, "converse", drafting)
     root = next_ts()
@@ -816,7 +852,8 @@ async def test_a_card_slack_refuses_is_logged_and_the_rest_still_go(
     house: House, slack: Slack, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async def drafting(*args: Any, **kwargs: Any) -> Reply:
-        return Reply("Two drafts.", (DraftView(1, "proposal", "One", ()), DraftView(2, "offer", "Two", ())))
+        drafted = (DraftView(1, "proposal", "One", ()), DraftView(2, "offer", "Two", ()))
+        return Reply("Two drafts.", drafted, only_to_member=True)
 
     monkeypatch.setattr(slack_assistant, "converse", drafting)
     refused = (Failure("msg_too_long"), Failure("msg_too_long"), Failure("invalid_blocks"))

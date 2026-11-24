@@ -54,6 +54,7 @@ from dinnerbell.domain.assistant import (
     check_key,
     known_model,
     month_key,
+    only_to_member,
     recent_turns,
     reservation_micros,
     total_cost_micros,
@@ -190,6 +191,9 @@ class Reply:
 
     text: str
     drafts: tuple[DraftView, ...] = ()
+    only_to_member: bool = False
+    """Whether the reply goes only to the member answered, in a shared thread: Slack sends it as
+    an ephemeral, and the conversation keeps it as theirs (``domain.assistant.only_to_member``)."""
 
 
 class _Refused(Exception):
@@ -219,9 +223,20 @@ def _user_message(turn: Turn, answering: str | None, *, current: bool, used: Seq
     return {"role": "user", "content": f"{before}{header}\n\n{turn.text}"}
 
 
+def _add_user(messages: list[dict[str, Any]], message: dict[str, Any]) -> None:
+    """Append a member's ``message``, joined to the one before when that's a member's too, as
+    when ``turns_for`` left out the reply between them (#366), so roles still alternate."""
+    if messages and messages[-1]["role"] == "user":
+        messages[-1] = {"role": "user", "content": f"{messages[-1]['content']}\n\n{message['content']}"}
+    else:
+        messages.append(message)
+
+
 def _messages(history: Sequence[Turn], current: Turn) -> list[dict[str, Any]]:
     """The request's messages: ``history``, then ``current``. Each draft entry goes at the start
-    of the member's message after it, so the model reads it before what came next."""
+    of the member's message after it, so the model reads it before what came next. Two members'
+    messages with no reply between, in a channel thread whose reply went only to its member, go
+    as one."""
     messages: list[dict[str, Any]] = []
     used: list[Turn] = []
     for turn in history:
@@ -230,9 +245,10 @@ def _messages(history: Sequence[Turn], current: Turn) -> list[dict[str, Any]]:
         elif turn.role == "assistant":
             messages.append({"role": "assistant", "content": turn.text})
         else:
-            messages.append(_user_message(turn, current.author, current=False, used=used))
+            _add_user(messages, _user_message(turn, current.author, current=False, used=used))
             used = []
-    return [*messages, _user_message(current, current.author, current=True, used=used)]
+    _add_user(messages, _user_message(current, current.author, current=True, used=used))
+    return messages
 
 
 def build_request(
@@ -566,13 +582,16 @@ async def _keep(
     sent: Pseudonyms,
     asked: Turn,
     answered: Turn,
+    *,
+    only_to_asker: bool = False,
 ) -> None:
     """Add one exchange to the stored conversation. It reads the conversation and the settings
     again under the write lock: a conversation that changed hands keeps nothing, a switch turned
     off keeps nothing, Conversation hours are the current ones, and an exchange saved by another
     message in the same thread meanwhile is kept, with this one after it. A member that one
     labeled first keeps that label, and anyone new gets the next number; the exchange's labels
-    are rewritten to match."""
+    are rewritten to match. With ``only_to_asker``, the reply is kept as the member's alone
+    (``Turn.shown_to``), under their label as it is after that."""
     household_id = member.household_id
     repo = AssistantRepository(db)
     async with write_transaction(db):
@@ -594,8 +613,11 @@ async def _keep(
             latest = None
         pseudonyms = sent.onto(latest.pseudonyms if latest else Pseudonyms())
         # The member's own words keep their labels' meaning, as mentions put them there.
-        asked = Turn(asked.role, sent.relabel(asked.text, pseudonyms, unknown=None), pseudonyms.label(member.id))
-        answered = Turn(answered.role, sent.relabel(answered.text, pseudonyms))
+        label = pseudonyms.label(member.id)
+        asked = Turn(asked.role, sent.relabel(asked.text, pseudonyms, unknown=None), label)
+        answered = Turn(
+            answered.role, sent.relabel(answered.text, pseudonyms), shown_to=label if only_to_asker else None
+        )
         history = latest.turns if latest else ()
         kept = Conversation(
             key=key,
@@ -802,10 +824,13 @@ async def converse(
         # Earlier messages went with it, so a new conversation sends less. History of only draft
         # entries (#363) counts too: they went with it, and a new conversation drops them.
         answer = NEAR_CAP_WEB if key == web_key(member.id) else NEAR_CAP_DM if private else NEAR_CAP_CHANNEL
+    alone = only_to_member(private=private, drafts=len(session.drafts))
     if answered:
-        await _keep(db, assistant, member, key, private, pseudonyms, current, Turn("assistant", answer))
+        await _keep(
+            db, assistant, member, key, private, pseudonyms, current, Turn("assistant", answer), only_to_asker=alone
+        )
     log.info("assistant replied", extra={"member_id": member.id, "answered": answered, "drafts": len(session.drafts)})
-    return Reply(pseudonyms.restore_names(answer, names), tuple(session.drafts))
+    return Reply(pseudonyms.restore_names(answer, names), tuple(session.drafts), only_to_member=alone)
 
 
 async def at_cap_notice(db: AsyncSession, config: AssistantConfig, member: Member, now: datetime) -> str | None:
