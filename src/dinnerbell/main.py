@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The ``dinnerbell`` command: ``serve``, ``migrate``, ``backup``, ``init``, ``config``, ``catalog``,
-``slack``, ``reset-history``, and, on a test instance only, ``scrub-test`` and ``discard-call``."""
+``slack``, ``reset-history``, ``admin``, and, on a test instance only, ``scrub-test`` and ``discard-call``."""
 
 from __future__ import annotations
 
@@ -129,6 +129,16 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="skip the typed confirmation, after checking what it will delete; needed without a terminal",
     )
+    admin = commands.add_parser("admin", help="emergency admin tools, for when no admin can sign in")
+    admin_commands = admin.add_subparsers(dest="admin_command", required=True, metavar="COMMAND")
+    add_admin = admin_commands.add_parser(
+        "add",
+        help="make the member with EMAIL an admin that their next sign-in claims",
+        description="Make the member with EMAIL an active admin: invite them if there's none, promote or "
+        "reactivate them, and clear their sign-in and Slack links, so their next sign-in with EMAIL claims it. "
+        "Prints what it did by member ID, and writes an audit row. Run it in the running container.",
+    )
+    add_admin.add_argument("email", metavar="EMAIL", help="the email they sign in with")
     catalog_cli.add_parser(commands)
     slack = commands.add_parser("slack", help="Slack tools that need no workspace")
     slack_commands = slack.add_subparsers(dest="slack_command", required=True, metavar="COMMAND")
@@ -500,6 +510,34 @@ def _reset_history(settings: Settings, backup: Path) -> int:
     return 0
 
 
+def _admin_add(settings: Settings, email: str) -> int:
+    """``admin add``: make the member with ``email`` an admin that their next sign-in claims (#360)."""
+    from dinnerbell.domain.members import InvalidMemberInput
+    from dinnerbell.services.admin_add import add_admin
+    from dinnerbell.services.clock import utc_now
+    from dinnerbell.services.database import open_database
+    from dinnerbell.services.household import NoHousehold
+
+    async def run() -> list[str]:
+        database = open_database(settings.async_database_url)
+        try:
+            async with database.sessionmaker() as db:
+                return (await add_admin(db, email, now=utc_now())).lines()
+        finally:
+            await database.close()
+
+    try:
+        lines = asyncio.run(run())
+    except InvalidMemberInput as exc:
+        print(f"{exc} Nothing changed.", file=sys.stderr)
+        return 2
+    except NoHousehold:
+        print("The database has no household yet. Start Dinnerbell once, then run this again.", file=sys.stderr)
+        return 1
+    print("\n".join(lines))
+    return 0
+
+
 def _serve(settings: Settings, host: str, port: int) -> None:
     import uvicorn
 
@@ -577,6 +615,9 @@ def _command(args: argparse.Namespace, settings: Settings) -> int:
         return _backup_now(settings)
     if args.command == "scrub-test" and not _confirm_scrub(settings, args.yes):
         return 1
+    if args.command == "admin" and not settings.database_path.is_file():
+        print(f"No database at {settings.database_path}. Nothing changed.", file=sys.stderr)
+        return 1  # before migrating, which would create an empty one
     backup: Path | None = None
     if args.command == "reset-history":
         # Before migrating: the backup is of the database as the operator found it.
@@ -595,6 +636,8 @@ def _command(args: argparse.Namespace, settings: Settings) -> int:
         return _discard_call(settings, args.event_id, args.yes)
     if args.command == "reset-history" and backup is not None:
         return _reset_history(settings, backup)
+    if args.command == "admin":
+        return _admin_add(settings, args.email)
     return 0
 
 
