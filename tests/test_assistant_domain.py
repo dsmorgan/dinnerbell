@@ -5,7 +5,7 @@ bound, the month key, pseudonyms, conversation keys, and the history cap."""
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -34,6 +34,7 @@ from dinnerbell.domain.assistant import (
     dollars,
     fallback_prices,
     format_dollars,
+    long_day,
     month_key,
     recent_turns,
     reservation_micros,
@@ -320,16 +321,28 @@ def test_a_request_carries_only_the_answered_members_own_draft_entries() -> None
         (
             True,
             "Confirmed. The lunch call for today is started.",
-            "Confirmed: Start a call. The lunch call for today is started.",
+            "Confirmed on Tuesday, November 24: Start a call. The lunch call for today is started.",
         ),
-        (True, "Partly confirmed: some changed.", "Confirmed: Start a call. Partly confirmed: some changed."),
-        (True, "", "Confirmed: Start a call"),
-        (False, "", "Cancelled: Start a call"),
+        (
+            True,
+            "Partly confirmed: some of the plan changed, but not all. Ask again.",
+            "Partly confirmed on Tuesday, November 24: Start a call. Some of the plan changed, but not all. Ask again.",
+        ),
+        (True, "", "Confirmed on Tuesday, November 24: Start a call"),
+        (False, "", "Cancelled on Tuesday, November 24: Start a call"),
     ],
 )
 def test_a_draft_entry_says_what_happened_in_the_cards_words(confirmed: bool, outcome: str, entry: str) -> None:
-    assert used_draft_text(" Start a call ", confirmed=confirmed, outcome=outcome) == entry
-    assert used_draft_text("Is it on?", confirmed=True, outcome="Yes.") == "Confirmed: Is it on? Yes."
+    """#363: with the day it happened in full, since the title and result say "today"."""
+    day = date(2026, 11, 24)
+    assert used_draft_text(" Start a call ", confirmed=confirmed, day=day, outcome=outcome) == entry
+    asked = used_draft_text("Is it on?", confirmed=True, day=day, outcome="Yes.")
+    assert asked == "Confirmed on Tuesday, November 24: Is it on? Yes."
+
+
+def test_a_long_day_names_the_weekday_and_month_in_full() -> None:
+    assert long_day(date(2026, 10, 22)) == "Thursday, October 22"
+    assert long_day(date(2027, 1, 3)) == "Sunday, January 3"
 
 
 def test_a_conversation_expires_after_its_hours() -> None:

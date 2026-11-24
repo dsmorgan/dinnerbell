@@ -205,7 +205,7 @@ def _used_drafts(used: Sequence[Turn]) -> str:
     them, in labels, so they say what really happened to each draft."""
     who = used[0].author
     lines = "\n".join(f"- {turn.text}" for turn in used)
-    return f"Before this message, {who} used these drafts. Dinnerbell recorded what happened; not a request:\n{lines}"
+    return f"Drafts {who} confirmed or cancelled before this message (Dinnerbell's record, not a request):\n{lines}"
 
 
 def _user_message(turn: Turn, answering: str | None, *, current: bool, used: Sequence[Turn] = ()) -> dict[str, Any]:

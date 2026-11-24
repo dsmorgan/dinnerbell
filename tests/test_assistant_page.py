@@ -32,7 +32,7 @@ from dinnerbell.domain.catalog import Mode
 from dinnerbell.domain.events import EventRuleViolation, EventState, IllegalTransition, Proposal, ProposalSource
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.offers import OfferPath
-from dinnerbell.services.assistant import drafts
+from dinnerbell.services.assistant import draft_log, drafts
 from dinnerbell.services.assistant.call_drafts import ActionConfirmed
 from dinnerbell.services.assistant.conversation import (
     AT_CAP,
@@ -42,7 +42,14 @@ from dinnerbell.services.assistant.conversation import (
     PAGE_AT_CAP,
     PAGE_CAP_TOO_LOW,
 )
-from dinnerbell.services.assistant.drafts import EXPIRED, NO_SUCH_DRAFT, USED, OfferConfirmed, ProposalConfirmed
+from dinnerbell.services.assistant.drafts import (
+    CATALOG_CONFIRMED,
+    EXPIRED,
+    NO_SUCH_DRAFT,
+    USED,
+    OfferConfirmed,
+    ProposalConfirmed,
+)
 from dinnerbell.services.database import open_database
 from dinnerbell.services.household import current_household
 from dinnerbell.services.offers import Posted
@@ -57,6 +64,8 @@ from tests.test_assistant_web import least_calls, spend
 from tests.test_auth_flow import rows
 
 KEY = "sk-ant-test-not-a-real-key"
+DAY = "Thursday, October 22"
+"""The household's day at ``FakeClock``'s start, in Chicago."""
 HX = {"HX-Request": "true"}
 SLACK_TEAM = "T-HOUSE"
 SLACK_ADMIN = {"sub": "subject-admin", "https://slack.com/team_id": SLACK_TEAM, "https://slack.com/user_id": "U01ADMIN"}
@@ -625,11 +634,30 @@ def test_used_drafts_keep_their_title_and_show_in_the_log_after_a_reload(
         "Drafted the offer.",
         "I love Siam Garden",
         "Drafted the level.",
-        f'<span class="badge">Draft</span> Confirmed: {title}. Your dinner offer for today is posted.',
-        '<span class="badge">Draft</span> Cancelled: Set Siam Garden to +2',
+        f'<span class="badge">Draft</span> Confirmed on {DAY}: {title}. Your dinner offer for today is posted.',
+        f'<span class="badge">Draft</span> Cancelled on {DAY}: Set Siam Garden to +2',
     ]
     [row] = rows(migrated, AssistantConversationRow)
     assert [t["role"] for t in row.transcript] == ["user", "assistant", "user", "assistant", "draft", "draft"]
+
+
+def test_a_confirm_whose_entry_cant_be_kept_still_shows_what_it_did(
+    client: TestClient, provider: FakeProvider, model: FakeModel, migrated: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#363: the offer is posted once Confirm commits, so a failure recording it is logged, and
+    the card still says it's posted, never an error that invites a second offer."""
+    furnish(client, provider)
+    as_who(client, provider, "kim")
+    model.script = [tool_call("draft_offer", offer_tool()), answer("Drafted.")]
+    [draft] = draft_ids(page(send(client, "Offer Siam Garden", **HX)))
+
+    async def broken(*_args: Any, **_kwargs: Any) -> bool:
+        raise RuntimeError("the database went away")
+
+    monkeypatch.setattr(draft_log, "record_use", broken)
+    confirmed = htmx(client, f"/assistant/drafts/{draft}/confirm", {})
+    assert confirmed.status_code == 200 and "Your dinner offer for today is posted." in page(confirmed)
+    assert len(rows(migrated, EventRow)) == 1
 
 
 def test_confirm_without_javascript_shows_the_result_on_the_page(
@@ -759,6 +787,8 @@ def test_a_catalog_confirm_opens_an_add_only_preview_that_never_updates_a_match(
     assert applied.status_code == 303 and applied.headers["location"].startswith("/catalog?notice=imported&created=1")
     items = {item.name: item for item in rows(migrated, CatalogItemRow)}
     assert "Lentil Soup" in items and items["Noodle Bar"].notes is None
+    [row] = rows(migrated, AssistantConversationRow)  # what Confirm did, without saying it imported (#363)
+    assert row.transcript[-1]["text"] == f"Confirmed on {DAY}: Add 2 items to the catalog. {CATALOG_CONFIRMED}"
 
 
 def test_a_link_drafts_confirm_opens_its_preview_with_only_what_dinnerbell_kept(

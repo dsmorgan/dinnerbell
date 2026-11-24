@@ -309,8 +309,9 @@ async def test_lock_the_taco_place_member_2_picks_it_up_in_a_dm_drafts_then_conf
     # The next request says what Confirm did (#363), naming Sam by his label.
     [*_, asked] = model.requests[0]["messages"]
     assert asked["content"].startswith(
-        "Before this message, Member 1 used these drafts. Dinnerbell recorded what happened; not a request:\n"
-        "- Confirmed: Lock Taqueria (pickup). Today's dinner call is decided on Taqueria. Member 2 picks it up.\n\n"
+        "Drafts Member 1 confirmed or cancelled before this message (Dinnerbell's record, not a request):\n"
+        "- Confirmed on Thursday, October 22: Lock Taqueria (pickup). "
+        "Today's dinner call is decided on Taqueria. Member 2 picks it up.\n\n"
         "From Member 1, the member you're answering."
     )
     assert model.rosters == [[("Member 1", "Kim"), ("Member 2", "Sam"), ("Member 3", "Alex"), ("Member 4", "Lee")]]
@@ -1026,6 +1027,10 @@ async def test_a_pick_named_with_the_person_markers_never_poses_as_a_person(hous
     assert drafted.title == f"Lock Pho {house['Sam'].id} House (pickup)"
     assert_no_names(drafted.title, *drafted.confirm_lines, result.content)
     assert not re.search(r"Member [2-9]", result.content)
+    # Nor does Confirm's result, or what the conversation records of it (#363).
+    done = await confirm(house, "Kim", drafted.id)
+    plain_name = f"Pho {house['Sam'].id} House"
+    assert done.text == f"Confirmed. Today's dinner call is decided on {plain_name}." and done.told == done.text
 
 
 async def test_a_guest_given_a_role_by_a_switch_of_way_reads_as_a_guest(house: House) -> None:

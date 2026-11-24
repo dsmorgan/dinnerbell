@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, tzinfo
+from datetime import date, datetime, tzinfo
 from typing import Any
 
 from dinnerbell.domain.members import Member
@@ -496,13 +496,43 @@ def turns_for(turns: Sequence[Turn], author: str | None) -> tuple[Turn, ...]:
     return tuple(turn for turn in turns if turn.role != DRAFT or turn.author == author)
 
 
-def used_draft_text(title: str, *, confirmed: bool, outcome: str = "") -> str:
+DAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+MONTH_NAMES = (
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+)
+PARTLY = "Partly confirmed:"
+
+
+def long_day(day: date) -> str:
+    """``day`` in full, such as "Tuesday, November 24": English names, whatever the locale."""
+    return f"{DAY_NAMES[day.weekday()]}, {MONTH_NAMES[day.month - 1]} {day.day}"
+
+
+def used_draft_text(title: str, *, confirmed: bool, day: date, outcome: str = "") -> str:
     """The entry a conversation records when its member uses a draft (#363), in the words the card
-    shows: "Confirmed: Start today's lunch call. The lunch call for today is started." or
-    "Cancelled: Start today's lunch call". ``outcome`` is Confirm's result; its leading
-    "Confirmed." is dropped, since the entry starts with it."""
-    entry = f"{'Confirmed' if confirmed else 'Cancelled'}: {title.strip()}"
-    rest = outcome.strip().removeprefix("Confirmed.").strip()
+    shows, with the household's ``day`` it happened, since the title and result say "today":
+    "Confirmed on Tuesday, November 24: Start a lunch call for today. The lunch call for today is
+    started." or "Cancelled on Tuesday, November 24: Start a lunch call for today". ``outcome``
+    is Confirm's result. Its leading "Confirmed." is dropped, since the entry starts with it, and
+    a "Partly confirmed:" result starts the entry so instead."""
+    rest = outcome.strip()
+    verb = "Confirmed" if confirmed else "Cancelled"
+    if rest.startswith(PARTLY):
+        verb, rest = "Partly confirmed", rest.removeprefix(PARTLY).strip()
+        rest = rest[:1].upper() + rest[1:]
+    rest = rest.removeprefix("Confirmed.").strip()
+    entry = f"{verb} on {long_day(day)}: {title.strip()}"
     if not rest:
         return entry
     return f"{entry}{' ' if entry.endswith(('.', '!', '?')) else '. '}{rest}"

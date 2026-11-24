@@ -43,7 +43,7 @@ from dinnerbell.domain.preferences import Stance, TargetType
 from dinnerbell.domain.schedule import PROPOSAL_COUNT_KEY, TEMPERATURE_KEY
 from dinnerbell.services import calls, meals
 from dinnerbell.services import catalog as catalog_service
-from dinnerbell.services.assistant import admin, catalog_edits, drafts
+from dinnerbell.services.assistant import admin, catalog_edits, draft_log, drafts
 from dinnerbell.services.assistant.conversation import Assistant, Reply
 from dinnerbell.services.assistant.drafts import EXPIRED, NO_SUCH_DRAFT, USED, DraftView
 from dinnerbell.services.assistant.runtime import AssistantConfig
@@ -589,13 +589,30 @@ async def test_confirm_and_cancel_on_dm_cards_are_recorded_in_the_conversation(
     event_id = await to_voting(house)
     card = await dm_card(slack, model, "Kim", "draft_proposal", PROPOSE)
     await tap_dm(slack, "Kim", ids.DRAFT_CONFIRM, card)
-    proposed = "Confirmed: Propose Pho Corner (pickup). Your proposal is on the call."
+    proposed = "Confirmed on Thursday, October 22: Propose Pho Corner (pickup). Your proposal is on the call."
     assert await entries(house) == [{"role": "draft", "text": proposed, "author": "Member 1"}]
     assert await pho_corner(house, event_id) is not None
     offer = await dm_card(slack, model, "Lee", "draft_offer", OFFER)
     await tap_dm(slack, "Lee", ids.DRAFT_CANCEL, offer)
-    cancelled = "Cancelled: Offer to order Siam Garden, dinner tomorrow at 12:15 PM"
+    cancelled = "Cancelled on Thursday, October 22: Offer to order Siam Garden, dinner tomorrow at 12:15 PM"
     assert (await entries(house))[-1] == {"role": "draft", "text": cancelled, "author": "Member 1"}
+
+
+async def test_a_tap_whose_entry_cant_be_kept_still_shows_what_it_did(
+    house: House, model: FakeModel, slack: Slack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#363: the proposal is in once Confirm commits, so a failure recording it is logged, and the
+    card says it's proposed, never "try again"."""
+    event_id = await to_voting(house)
+    card = await dm_card(slack, model, "Kim", "draft_proposal", PROPOSE)
+
+    async def broken(*_args: Any, **_kwargs: Any) -> bool:
+        raise RuntimeError("the database went away")
+
+    monkeypatch.setattr(draft_log, "record_use", broken)
+    await tap_dm(slack, "Kim", ids.DRAFT_CONFIRM, card)
+    assert updated(slack)[-1]["text"] == PROPOSED
+    assert await pho_corner(house, event_id) is not None and await entries(house) == []
 
 
 async def test_a_refused_tap_records_nothing(house: House, model: FakeModel, slack: Slack) -> None:
@@ -746,6 +763,8 @@ async def test_a_catalog_confirm_links_the_add_only_import_from_the_base_url(
     async with house.sessionmaker() as db:
         names = {item.name for item in (await catalog_service.catalog(db, house["Sam"])).items}
     assert "Siam Garden" in names and "Noodle Bar" not in names  # nothing is saved until the import
+    added = f"Confirmed on Thursday, October 22: Add 2 items to the catalog. {drafts.CATALOG_CONFIRMED}"
+    assert (await entries(house))[-1]["text"] == added  # Slack shows no preview, so the entry says none is open
 
 
 async def test_the_import_links_click_is_acknowledged_and_ignored(house: House, slack: Slack) -> None:
