@@ -464,7 +464,7 @@ def test_at_hours_zero_nothing_is_kept_and_only_the_latest_exchange_shows(
 
 
 def test_at_hours_zero_waiting_drafts_stay_on_the_page(
-    client: TestClient, provider: FakeProvider, model: FakeModel
+    client: TestClient, provider: FakeProvider, model: FakeModel, migrated: Settings
 ) -> None:
     furnish(client, provider, conversation_hours="0")
     as_who(client, provider, "kim")
@@ -472,7 +472,11 @@ def test_at_hours_zero_waiting_drafts_stay_on_the_page(
     send(client, "I'll pick up Siam Garden", **HX)
     later = page(send(client, "Thanks", **HX))  # replaces the log, so it carries the waiting card
     assert len(draft_ids(later)) == 1 and "Anything else?" in later
-    assert len(draft_ids(page(client.get("/assistant")))) == 1
+    [draft] = draft_ids(page(client.get("/assistant")))
+    # Confirm says what it did on the card, and nothing is kept (#363).
+    assert "Your dinner offer for today is posted." in page(htmx(client, f"/assistant/drafts/{draft}/confirm", {}))
+    assert "turn-draft" not in page(client.get("/assistant"))
+    assert rows(migrated, AssistantConversationRow) == []
 
 
 # Draft cards -----------------------------------------------------------------------------------
@@ -593,6 +597,39 @@ def test_cancel_works_with_and_without_htmx(
     assert rows(migrated, EventRow) == []
     again = submit(client, f"/assistant/drafts/{draft}/cancel")
     assert again.status_code == 409 and USED in page(again)
+
+
+def test_used_drafts_keep_their_title_and_show_in_the_log_after_a_reload(
+    client: TestClient, provider: FakeProvider, model: FakeModel, migrated: Settings
+) -> None:
+    """#363: Confirm and Cancel each keep the card's title with the result, and after a reload
+    the log shows what happened to each draft where it happened, styled apart from messages."""
+    furnish(client, provider)
+    as_who(client, provider, "kim")
+    level = {"what": "", "name": "Siam Garden", "level": "2"}
+    model.script = [tool_call("draft_offer", offer_tool()), answer("Drafted the offer.")]
+    [offer] = draft_ids(page(send(client, "Offer Siam Garden", **HX)))
+    model.script = [tool_call("draft_preference", level), answer("Drafted the level.")]
+    [stance] = draft_ids(page(send(client, "I love Siam Garden", **HX)))
+    confirmed = page(htmx(client, f"/assistant/drafts/{offer}/confirm", {}))
+    title = "Offer to pick up Siam Garden, dinner today at 6:30 PM"
+    assert f'<h3 id="draft-{offer}-title" class="draft-title">{title}</h3>' in confirmed
+    assert f'aria-labelledby="draft-{offer}-title"' in confirmed and "Confirm</button>" not in confirmed
+    cancelled = page(htmx(client, f"/assistant/drafts/{stance}/cancel", {}))
+    assert "Set Siam Garden to +2</h3>" in cancelled and "Cancelled. Nothing changed." in cancelled
+    reloaded = page(client.get("/assistant"))
+    assert draft_ids(reloaded) == []
+    log = re.findall(r'class="turn-text[^"]*">(?:<p>)?(.*?)</p>|class="turn-draft small">(.*?)</p>', reloaded, re.S)
+    assert [a or b for a, b in log] == [
+        "Offer Siam Garden",
+        "Drafted the offer.",
+        "I love Siam Garden",
+        "Drafted the level.",
+        f'<span class="badge">Draft</span> Confirmed: {title}. Your dinner offer for today is posted.',
+        '<span class="badge">Draft</span> Cancelled: Set Siam Garden to +2',
+    ]
+    [row] = rows(migrated, AssistantConversationRow)
+    assert [t["role"] for t in row.transcript] == ["user", "assistant", "user", "assistant", "draft", "draft"]
 
 
 def test_confirm_without_javascript_shows_the_result_on_the_page(

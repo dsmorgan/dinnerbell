@@ -1,9 +1,14 @@
 {#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
 {#- Expects: d, a DraftView still waiting, or None once it's used; outcome (optional) with text,
-    ok, and link, after Confirm or Cancel; draft_id when d is None. A catalog draft's Confirm
+    ok, and link, after Confirm or Cancel; draft_id when d is None; used (optional), the DraftView
+    as it was before Confirm or Cancel used it, for its title (#363). A catalog draft's Confirm
     loads the add-only import preview as a whole page, so it never posts through HTMX. -#}
 {%- set id = d.id if d else draft_id %}
-<article class="card draft{% if not d %} draft-done{% endif %}" id="draft-{{ id }}"{% if d %} aria-labelledby="draft-{{ id }}-title"{% else %} aria-label="Draft"{% endif %}>
+{%- set titled = d or used %}
+<article class="card draft{% if not d %} draft-done{% endif %}" id="draft-{{ id }}"{% if titled %} aria-labelledby="draft-{{ id }}-title"{% else %} aria-label="Draft"{% endif %}>
+  {%- if not d and used %}
+  <h3 id="draft-{{ id }}-title" class="draft-title">{{ used.title }}</h3>
+  {%- endif %}
   {%- if outcome %}
   <p class="alert {{ 'ok' if outcome.ok else 'error' }}" role="{{ 'status' if outcome.ok else 'alert' }}">{{ outcome.text }}{% if outcome.link %} <a href="{{ outcome.link[0] }}">{{ outcome.link[1] }}</a>{% endif %}</p>
   {%- endif %}

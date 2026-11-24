@@ -33,7 +33,7 @@ from dinnerbell.channels.slack.interactions import ASSISTANT_OFF, JOIN_OFFER, OU
 from dinnerbell.config import Settings
 from dinnerbell.db.assistant import AssistantRepository
 from dinnerbell.db.meals import household_settings
-from dinnerbell.db.models import AssistantDraftRow, ProposalRow
+from dinnerbell.db.models import AssistantConversationRow, AssistantDraftRow, ProposalRow
 from dinnerbell.db.repositories import HouseholdRepository
 from dinnerbell.domain.assistant import AssistantSettings, slack_key
 from dinnerbell.domain.catalog import Mode
@@ -572,6 +572,40 @@ async def test_a_stale_draft_gets_the_services_own_error_and_stays_waiting(
     assert updated(slack)[-1]["text"] == str(refused.value)
     [row] = await draft_rows(house)
     assert row.used_at is None and await pho_corner(house, event_id) is None
+
+
+async def entries(house: House) -> list[dict[str, Any]]:
+    """The draft entries every stored conversation recorded (#363)."""
+    async with house.sessionmaker() as db:
+        found = await db.scalars(select(AssistantConversationRow).order_by(AssistantConversationRow.id))
+        return [t for row in found for t in row.transcript if t["role"] == "draft"]
+
+
+async def test_confirm_and_cancel_on_dm_cards_are_recorded_in_the_conversation(
+    house: House, model: FakeModel, slack: Slack
+) -> None:
+    """#363: a tap records what happened in the DM's conversation, so the next message there
+    tells the model."""
+    event_id = await to_voting(house)
+    card = await dm_card(slack, model, "Kim", "draft_proposal", PROPOSE)
+    await tap_dm(slack, "Kim", ids.DRAFT_CONFIRM, card)
+    proposed = "Confirmed: Propose Pho Corner (pickup). Your proposal is on the call."
+    assert await entries(house) == [{"role": "draft", "text": proposed, "author": "Member 1"}]
+    assert await pho_corner(house, event_id) is not None
+    offer = await dm_card(slack, model, "Lee", "draft_offer", OFFER)
+    await tap_dm(slack, "Lee", ids.DRAFT_CANCEL, offer)
+    cancelled = "Cancelled: Offer to order Siam Garden, dinner tomorrow at 12:15 PM"
+    assert (await entries(house))[-1] == {"role": "draft", "text": cancelled, "author": "Member 1"}
+
+
+async def test_a_refused_tap_records_nothing(house: House, model: FakeModel, slack: Slack) -> None:
+    event_id = await to_voting(house)
+    card = await dm_card(slack, model, "Kim", "draft_proposal", PROPOSE)
+    async with house.sessionmaker() as db:
+        await calls.cancel_call(db, house["Alex"], event_id, now=house.clock())
+    await tap_dm(slack, "Kim", ids.DRAFT_CONFIRM, card)
+    [row] = await draft_rows(house)
+    assert row.used_at is None and await entries(house) == []
 
 
 async def test_an_expired_draft_says_so(house: House, model: FakeModel, slack: Slack) -> None:

@@ -35,7 +35,7 @@ from dinnerbell.db.events import EventRepository
 from dinnerbell.db.meals import household_settings
 from dinnerbell.db.repositories import HouseholdRepository, MemberRepository
 from dinnerbell.domain.assistant_catalog import NOT_SHOWN, held_value
-from dinnerbell.domain.assistant_coordinating import with_held, with_people
+from dinnerbell.domain.assistant_coordinating import plain, with_held, with_people
 from dinnerbell.domain.assistant_drafts import (
     CALL_ACTIONS,
     CATALOG_AND_MEALS,
@@ -44,6 +44,7 @@ from dinnerbell.domain.assistant_drafts import (
     MAX_OPEN_DRAFTS,
     NAMES_PEOPLE,
     OWN_DATA,
+    PROPOSAL_CONFIRMED,
     CleanCatalog,
     Draft,
     DraftKind,
@@ -54,6 +55,7 @@ from dinnerbell.domain.assistant_drafts import (
     clean_catalog,
     day_words,
     expires_at,
+    offer_confirmed_text,
     offer_lines,
     offer_outcome,
     proposal_lines,
@@ -80,7 +82,7 @@ from dinnerbell.domain.offers import OfferPath, check_capacity, offer_time
 from dinnerbell.domain.schedule import slot_schedule
 from dinnerbell.services import calls, lifecycle, offers, picks
 from dinnerbell.services import catalog as catalog_service
-from dinnerbell.services.assistant import call_drafts, catalog_edits, coordinating, own_drafts
+from dinnerbell.services.assistant import call_drafts, catalog_edits, coordinating, draft_log, own_drafts
 from dinnerbell.services.assistant.acting import ToolRefusal, tool_actor
 from dinnerbell.services.assistant.call_drafts import ActionConfirmed, DraftSpec
 from dinnerbell.services.assistant.candidates import Labeler, as_proposer, find_candidates
@@ -489,13 +491,42 @@ async def confirm_draft(
     as ``tool_actor(member)``, in one transaction. A refusal from the service comes through
     unchanged and leaves the draft unused. Raises NotFound for a draft that isn't the member's,
     and ``DraftUnavailable`` for one used or expired, or while the assistant isn't available:
-    the key and Admin's switch must both be set (``runtime.available``)."""
+    the key and Admin's switch must both be set (``runtime.available``).
+
+    Once it's confirmed, the draft's conversation records it with the result (#363,
+    ``draft_log``), so the page and the model's next request know; a refusal records nothing."""
     now = clock()
     draft = await _mine(db, member, draft_id)
     _check_usable(draft, now)
     if not await available(db, config, member):
         raise DraftUnavailable(TURNED_OFF)
-    actor = tool_actor(member)
+    result = await _confirm(db, config, tool_actor(member), draft, now)
+    outcome = await _told(db, member, result, now)
+    await draft_log.record_use(db, member, draft, confirmed=True, outcome=outcome, now=now)
+    return result
+
+
+CATALOG_CONFIRMED = "The import preview is open. Nothing is added until you import the items there."
+"""What the conversation records of a catalog draft's Confirm, which only opens the preview."""
+
+
+async def _told(db: AsyncSession, member: Member, result: Confirmed, now: datetime) -> str:
+    """Confirm's result as the conversation records it: the card's words, with each person as
+    ``person`` of their member ID (``ActionConfirmed.told``), never a name."""
+    if isinstance(result, ProposalConfirmed):
+        return PROPOSAL_CONFIRMED
+    if isinstance(result, OfferConfirmed):
+        posted = result.posted
+        today, _ = await _today(db, member.household_id, now)
+        when = day_words(posted.day, today)
+        return offer_confirmed_text(posted.path, item=plain(posted.item_name), slot=posted.slot, when=when)
+    if isinstance(result, ActionConfirmed):
+        return result.told if result.told is not None else plain(result.text)
+    return CATALOG_CONFIRMED
+
+
+async def _confirm(db: AsyncSession, config: AssistantConfig, actor: Member, draft: Draft, now: datetime) -> Confirmed:
+    """Run the draft's Confirm as ``actor``, ``tool_actor`` of its member."""
     if draft.kind is DraftKind.PROPOSAL:
         return await _confirm_proposal(db, actor, draft, now)
     if draft.kind is DraftKind.OFFER:
@@ -625,7 +656,7 @@ async def _confirm_catalog(db: AsyncSession, actor: Member, draft: Draft, now: d
 async def cancel_draft(db: AsyncSession, clock: Clock, member: Member, draft_id: int) -> None:
     """**Cancel** on ``member``'s draft: it can't be confirmed afterward. Works with the
     assistant turned off too. Raises as ``confirm_draft`` does for a draft that isn't theirs, or
-    is used or expired."""
+    is used or expired. Its conversation records it, as Confirm's does."""
     now = clock()
     draft = await _mine(db, member, draft_id)
     _check_usable(draft, now)
@@ -633,6 +664,7 @@ async def cancel_draft(db: AsyncSession, clock: Clock, member: Member, draft_id:
         await _use(db, draft, member, now, confirmed=False)
         await db.commit()
     log.info("assistant draft cancelled", extra={"member_id": member.id, "draft_id": draft.id})
+    await draft_log.record_use(db, member, draft, confirmed=False, now=now)
 
 
 async def ready_for_import(

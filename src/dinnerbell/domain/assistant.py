@@ -411,10 +411,20 @@ def check_key(key: str, *, private: bool, member_id: int) -> None:
     raise InvalidConversationKey("not a conversation key")
 
 
+USER, ASSISTANT, DRAFT = "user", "assistant", "draft"
+"""A stored turn's roles: a member's message, the assistant's reply, and what happened to a draft
+its member confirmed or cancelled (#363, ``used_draft_text``)."""
+
+MAX_HISTORY_BYTES = 24_000
+"""The most conversation text a request carries; the oldest turns are dropped first."""
+MAX_STORED_BYTES = 4 * MAX_HISTORY_BYTES
+
+
 @dataclass(frozen=True, slots=True)
 class Turn:
-    """One message in a stored conversation, in pseudonym form. ``author`` is the label of the
-    member who wrote a user turn, and None for the assistant's."""
+    """One entry in a stored conversation, in pseudonym form: a member's message (``USER``), the
+    assistant's reply (``ASSISTANT``), or a draft its member used (``DRAFT``). ``author`` is the
+    label of the member who wrote a message or used a draft, and None for the assistant's."""
 
     role: str
     text: str
@@ -429,7 +439,7 @@ class Turn:
         if not isinstance(raw, Mapping):
             return None
         role, text, author = raw.get("role"), raw.get("text"), raw.get("author")
-        if role not in ("user", "assistant") or not isinstance(text, str):
+        if role not in (USER, ASSISTANT, DRAFT) or not isinstance(text, str):
             return None
         return cls(str(role), text, author if isinstance(author, str) else None)
 
@@ -464,7 +474,8 @@ class Conversation:
 
 def recent_turns(turns: Sequence[Turn], max_bytes: int) -> tuple[Turn, ...]:
     """The newest of ``turns`` that fit in ``max_bytes``, dropping the oldest first. The kept
-    history starts with a user turn, as a request must."""
+    history never starts with the assistant's reply, since a request starts with a member's
+    message; a draft entry goes into the message after it (``conversation._messages``)."""
     kept: list[Turn] = []
     used = 0
     for turn in reversed(turns):
@@ -473,6 +484,25 @@ def recent_turns(turns: Sequence[Turn], max_bytes: int) -> tuple[Turn, ...]:
         kept.append(turn)
         used += turn.size
     kept.reverse()
-    while kept and kept[0].role != "user":
+    while kept and kept[0].role == ASSISTANT:
         kept.pop(0)
     return tuple(kept)
+
+
+def turns_for(turns: Sequence[Turn], author: str | None) -> tuple[Turn, ...]:
+    """What a request answering the member labeled ``author`` carries of ``turns``: every message,
+    and only that member's own draft entries. In a channel thread, whether someone else confirmed a
+    draft, such as a vote, is theirs alone."""
+    return tuple(turn for turn in turns if turn.role != DRAFT or turn.author == author)
+
+
+def used_draft_text(title: str, *, confirmed: bool, outcome: str = "") -> str:
+    """The entry a conversation records when its member uses a draft (#363), in the words the card
+    shows: "Confirmed: Start today's lunch call. The lunch call for today is started." or
+    "Cancelled: Start today's lunch call". ``outcome`` is Confirm's result; its leading
+    "Confirmed." is dropped, since the entry starts with it."""
+    entry = f"{'Confirmed' if confirmed else 'Cancelled'}: {title.strip()}"
+    rest = outcome.strip().removeprefix("Confirmed.").strip()
+    if not rest:
+        return entry
+    return f"{entry}{' ' if entry.endswith(('.', '!', '?')) else '. '}{rest}"

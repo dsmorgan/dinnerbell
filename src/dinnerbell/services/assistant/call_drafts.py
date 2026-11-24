@@ -118,6 +118,9 @@ class ActionConfirmed:
     text: str
     offer: bool = False
     link: tuple[str, str] | None = None
+    told: str | None = None
+    """``text`` with each person it names as ``person`` of their member ID, when it names anyone:
+    what the conversation records (#363), with the conversation's labels, never a name."""
 
 
 def _call_words(event: Event, today: date) -> tuple[str, str]:

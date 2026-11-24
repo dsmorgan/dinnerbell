@@ -290,7 +290,7 @@ async def test_lock_the_taco_place_member_2_picks_it_up_in_a_dm_drafts_then_conf
 
     before = len(await house.outbox())
     done = await confirm(house, "Kim", card.id)
-    assert done == ActionConfirmed(event_id, "Confirmed. Today's dinner call is decided on Taqueria. Sam picks it up.")
+    assert done.text == "Confirmed. Today's dinner call is decided on Taqueria. Sam picks it up."
     event = await house.event(event_id)
     assert event.state is EventState.DECIDED and event.decided_item_id == house.items["Taqueria"].id
     assert event.roles_due_at is None
@@ -306,6 +306,13 @@ async def test_lock_the_taco_place_member_2_picks_it_up_in_a_dm_drafts_then_conf
     async with house.sessionmaker() as db:
         await converse(db, helper, kim, DM, private=True, text="thanks")
     assert_no_names(model.sent)  # names go only in the roster (#277), which holds the same labels
+    # The next request says what Confirm did (#363), naming Sam by his label.
+    [*_, asked] = model.requests[0]["messages"]
+    assert asked["content"].startswith(
+        "Before this message, Member 1 used these drafts. Dinnerbell recorded what happened; not a request:\n"
+        "- Confirmed: Lock Taqueria (pickup). Today's dinner call is decided on Taqueria. Member 2 picks it up.\n\n"
+        "From Member 1, the member you're answering."
+    )
     assert model.rosters == [[("Member 1", "Kim"), ("Member 2", "Sam"), ("Member 3", "Alex"), ("Member 4", "Lee")]]
 
 
@@ -353,9 +360,9 @@ async def test_a_typed_name_on_the_web_drafts_the_card_a_mention_in_a_dm_does(
     [on_web], [in_dm] = web.drafts, dm.drafts
     assert (on_web.kind, on_web.title, on_web.confirm_lines) == (in_dm.kind, in_dm.title, in_dm.confirm_lines)
     assert on_web.title == "Hand off coordinating today's dinner to Bartholomew"
-    assert await confirm(house, "Kim", on_web.id) == ActionConfirmed(
-        event_id, "Confirmed. Bartholomew coordinates today's dinner now."
-    )
+    handed = await confirm(house, "Kim", on_web.id)
+    assert (handed.event_id, handed.text) == (event_id, "Confirmed. Bartholomew coordinates today's dinner now.")
+    assert "Bartholomew" not in handed.told  # what the conversation records, by label (#363)
 
 
 async def test_the_same_request_in_a_channel_thread_is_refused_with_a_pointer_to_the_dm(
@@ -478,7 +485,7 @@ async def test_breaking_a_tie_chooses_a_tied_pick_and_refuses_one_that_isnt(hous
     draft = draft_id(await tool(house, "draft_decide", lock("Siam Garden", tie=True)))
     assert (await row(house, draft)).title == "Break the tie with Siam Garden (pickup)"
     done = await confirm(house, "Kim", draft)
-    assert done == ActionConfirmed(event_id, "Confirmed. Today's dinner call is decided on Siam Garden.")
+    assert (done.event_id, done.text) == (event_id, "Confirmed. Today's dinner call is decided on Siam Garden.")
     event = await house.event(event_id)
     assert event.decided_item_id == house.items["Siam Garden"].id and event.tie_by == house["Kim"].id
 
@@ -599,9 +606,8 @@ async def test_hand_off_mark_done_and_call_off_run_their_use_cases(house: House)
     assert '"Rain, sorry"' in " ".join((await row(house, off)).lines)
     handing = draft_id(await tool(house, "draft_hand_off", DINNER | {"to": "Member 3"}))
     assert (await card(house, handing)).title == "Hand off coordinating today's dinner to Sam"
-    assert await confirm(house, "Kim", handing) == ActionConfirmed(
-        event_id, "Confirmed. Sam coordinates today's dinner now."
-    )
+    handed = await confirm(house, "Kim", handing)
+    assert (handed.event_id, handed.text) == (event_id, "Confirmed. Sam coordinates today's dinner now.")
     assert (await house.event(event_id)).coordinator_id == house["Sam"].id
     assert await confirm(house, "Kim", done) == ActionConfirmed(event_id, "Confirmed. Today's dinner is done.")
     assert (await house.event(event_id)).state is EventState.DONE

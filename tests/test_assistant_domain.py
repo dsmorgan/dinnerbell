@@ -12,6 +12,7 @@ import pytest
 
 from dinnerbell.domain import assistant
 from dinnerbell.domain.assistant import (
+    DRAFT,
     MODELS,
     OVERHEAD_TOKENS,
     PRICE_TABLE,
@@ -38,7 +39,9 @@ from dinnerbell.domain.assistant import (
     reservation_micros,
     settings_to_json,
     slack_key,
+    turns_for,
     turns_from_json,
+    used_draft_text,
     web_key,
 )
 from dinnerbell.domain.members import Capabilities, Member, Role
@@ -288,6 +291,45 @@ def test_history_drops_the_oldest_turns_first_and_starts_with_a_user() -> None:
     assert recent_turns(turns, 1_000) == tuple(turns)
     assert recent_turns(turns, 37) == (turns[2],)  # the assistant turn fits, but can't come first
     assert recent_turns(turns, 5) == ()
+
+
+def test_a_draft_entry_round_trips_and_old_rows_still_read() -> None:
+    """#363: a draft entry is a turn of its own, and a row stored before it reads as it did."""
+    entry = Turn(DRAFT, "Cancelled: Offer Taco Spot", "Member 1")
+    assert turns_from_json([entry.to_json()]) == (entry,)
+    old = [{"role": "user", "text": "Tacos?", "author": "Member 1"}, {"role": "assistant", "text": "Taco Spot."}]
+    assert turns_from_json(old) == (Turn("user", "Tacos?", "Member 1"), Turn("assistant", "Taco Spot."))
+
+
+def test_history_can_start_with_a_draft_entry_but_never_a_reply() -> None:
+    entry = Turn(DRAFT, "e" * 10, "Member 1")
+    turns = [Turn("user", "a" * 10, "Member 1"), Turn("assistant", "b" * 10), entry, Turn("user", "c" * 10, "Member 1")]
+    assert recent_turns(turns, 36) == (entry, turns[3])
+    assert recent_turns(turns, 46) == (entry, turns[3])  # the reply fits too, but can't come first
+
+
+def test_a_request_carries_only_the_answered_members_own_draft_entries() -> None:
+    mine, theirs = Turn(DRAFT, "Confirmed: Vote", "Member 1"), Turn(DRAFT, "Confirmed: Vote", "Member 2")
+    message = Turn("user", "Hi", "Member 2")
+    assert turns_for([mine, message, theirs], "Member 1") == (mine, message)
+
+
+@pytest.mark.parametrize(
+    ("confirmed", "outcome", "entry"),
+    [
+        (
+            True,
+            "Confirmed. The lunch call for today is started.",
+            "Confirmed: Start a call. The lunch call for today is started.",
+        ),
+        (True, "Partly confirmed: some changed.", "Confirmed: Start a call. Partly confirmed: some changed."),
+        (True, "", "Confirmed: Start a call"),
+        (False, "", "Cancelled: Start a call"),
+    ],
+)
+def test_a_draft_entry_says_what_happened_in_the_cards_words(confirmed: bool, outcome: str, entry: str) -> None:
+    assert used_draft_text(" Start a call ", confirmed=confirmed, outcome=outcome) == entry
+    assert used_draft_text("Is it on?", confirmed=True, outcome="Yes.") == "Confirmed: Is it on? Yes."
 
 
 def test_a_conversation_expires_after_its_hours() -> None:

@@ -1,5 +1,8 @@
 {#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
-{#- Expects: t, a Shown (mine, text). The member's text is plain. A reply shows a small, safe subset of Markdown (web/reply_markdown.py): escaped first, never linked, never HTML (ADR 0009, #284). -#}
+{#- Expects: t, a Shown (mine, text, draft). The member's text is plain, and so is a draft entry: what happened to a draft they confirmed or cancelled (#363). A reply shows a small, safe subset of Markdown (web/reply_markdown.py): escaped first, never linked, never HTML (ADR 0009, #284). -#}
+{%- if t.draft %}
+<p class="turn-draft small"><span class="badge">Draft</span> {{ t.text }}</p>
+{%- else %}
 <div class="turn {{ 'turn-mine' if t.mine else 'turn-reply' }}">
   <p class="turn-who small">{{ "You" if t.mine else "Assistant" }}</p>
   {%- if t.mine %}
@@ -8,3 +11,4 @@
   <div class="turn-text turn-markdown">{{ t.text | reply_markdown }}</div>
   {%- endif %}
 </div>
+{%- endif %}
