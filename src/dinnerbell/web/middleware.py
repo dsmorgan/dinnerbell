@@ -131,7 +131,9 @@ class SecurityHeadersMiddleware:
                 for name, value in SECURITY_HEADERS.items():
                     headers.setdefault(name, value)
                 if not cacheable:
-                    headers["Cache-Control"] = "no-store"
+                    # A route may add to no-store, as the Assistant's stream adds no-transform.
+                    if "no-store" not in headers.get("Cache-Control", ""):
+                        headers["Cache-Control"] = "no-store"
                 elif message["status"] < 400:
                     # A miss under /static renders the normal error page, which keeps its policy.
                     headers["Content-Security-Policy"] = STATIC_CONTENT_SECURITY_POLICY

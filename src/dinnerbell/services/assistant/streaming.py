@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""A reply shown while the model writes it (#266, spec 6.14): Slack streams it into the thread.
+"""A reply shown while the model writes it (spec 6.14): Slack streams it into a DM's thread (#266),
+and the web's Assistant page into its log (#370, ``web.assistant_stream``).
 
 ``converse`` gives each model call a ``CallText``, which hears the call's text through the
 client's ``ModelEvents`` and passes it on to a ``ReplyStream`` in whole lines, with members'

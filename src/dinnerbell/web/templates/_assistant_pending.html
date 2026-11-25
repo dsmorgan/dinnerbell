@@ -1,0 +1,7 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{#- Expects: t, the member's message as a Shown. The start of a reply shown as it's written (#370): app.js adds this to the conversation's log, fills the placeholder with the reply's text as it comes, and replaces the placeholder with the finished reply. A screen reader skips the placeholder and hears the finished reply once. -#}
+{% include "_assistant_turn.html" %}
+<div class="turn turn-reply turn-streaming" data-stream-reply hidden aria-hidden="true">
+  <p class="turn-who small">Assistant</p>
+  <div class="turn-text turn-markdown" data-stream-text></div>
+</div>

@@ -767,9 +767,9 @@ async def converse(
     message is read, and each request carries the roster (``roster_of``), so the model can match
     a name the member typed, such as "Theo", to a member's label (#277).
 
-    ``stream``, for Slack, gets the reply's text as the model writes it (``streaming``). The
-    reply and what's kept are the same either way. Members are read once, before the first
-    call, so the roster, the shown text, and the reply put back the same names."""
+    ``stream``, for a Slack DM or the web page, gets the reply's text as the model writes it
+    (``streaming``). The reply and what's kept are the same either way. Members are read once,
+    before the first call, so the roster, the shown text, and the reply put back the same names."""
     deadline = assistant.clock() + timedelta(seconds=MESSAGE_SECONDS)
     if not await available(db, assistant.config, member):
         return None

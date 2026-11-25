@@ -404,11 +404,14 @@ a.chip:active { border-color: currentColor; }
 
 /* Pending (#153): the form whose save is in flight, never a whole card being refreshed. After
    150 ms, so a fast save doesn't flicker, its buttons, or a preference row's levels, dim and show a
-   progress cursor. form.submitting is a full-page form on its way (app.js). */
+   progress cursor. form.submitting is a full-page form on its way, and form.streaming the Assistant's
+   message while its reply streams (app.js). */
 form.htmx-request button, form.submitting button, form.htmx-request .segments { animation: pending 0s 150ms forwards; }
+form.streaming button { animation: pending 0s 150ms forwards; }
 form.htmx-request .segment span { animation: pending-cursor 0s 150ms forwards; }
 @media (prefers-reduced-motion: no-preference) {
   form.htmx-request button, form.submitting button, form.htmx-request .segments { animation-duration: 120ms; }
+  form.streaming button { animation-duration: 120ms; }
 }
 @keyframes pending { to { opacity: 0.6; cursor: progress; } }
 @keyframes pending-cursor { to { cursor: progress; } }
@@ -945,9 +948,13 @@ fieldset.card > .button.block { margin-bottom: 0; }
 
 .assistant-form .button-row { align-items: center; margin-bottom: 0; }
 .assistant-form .button-row p { margin: 0; }
-/* Shown only while HTMX sends the message: HTMX marks the form with htmx-request. */
+/* Shown only while the message is on its way: HTMX marks the form with htmx-request, and app.js
+   marks it with streaming while it reads the reply as it's written (#370), and with writing while
+   the reply's text shows, which says enough on its own. */
 .assistant-thinking { display: none; }
-.assistant-form.htmx-request .assistant-thinking { display: block; }
+.assistant-form.htmx-request .assistant-thinking, .assistant-form.streaming .assistant-thinking { display: block; }
+.assistant-form.streaming.writing .assistant-thinking { display: none; }
+.turn[hidden] { display: none; }
 
 /* Get the app (spec 6.15): the installed app shows .in-app, a browser shows .in-browser. */
 .in-app { display: none; }

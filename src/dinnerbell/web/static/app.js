@@ -294,6 +294,241 @@
     field.focus();
   });
 
+  // The Assistant page's reply as the model writes it (#370). A form marked data-stream-timeout
+  // posts with fetch instead of HTMX, asking for text/event-stream, where the browser can read a
+  // response as it arrives; elsewhere HTMX sends it as before, and without script the browser
+  // does. The server sends events (web/assistant_stream.py): start (the message and a hidden
+  // placeholder for the reply), text (the reply so far), discard (that text wasn't the reply),
+  // done (the reply and its cards, which replace the placeholder), and error. Lines starting
+  // with ":" only keep the connection open. The placeholder is aria-hidden, so the log announces
+  // the finished reply once. The thinking indicator shows until text does, and again after a
+  // discard. As with HTMX, a failure removes the exchange, keeps the text in the box, and shows
+  // the banner; the box empties only once the reply is done, if it still holds what was sent.
+  var STREAM_TIMEOUT = "data-stream-timeout";
+  var canStream = Boolean(
+    window.htmx &&
+      window.fetch &&
+      window.AbortController &&
+      window.TextDecoder &&
+      window.URLSearchParams &&
+      window.Response &&
+      "body" in window.Response.prototype
+  );
+
+  function parseEvent(block) {
+    var name = "message";
+    var data = "";
+    var lines = block.split("\n");
+    for (var i = 0; i < lines.length; i += 1) {
+      if (lines[i].indexOf("event:") === 0) {
+        name = lines[i].slice(6).trim();
+      } else if (lines[i].indexOf("data:") === 0) {
+        data += lines[i].slice(5);
+      }
+    }
+    if (!data) {
+      return null;
+    }
+    try {
+      return { name: name, data: JSON.parse(data) };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // Swap in the server's own rendered templates through HTMX, as its responses are: the same
+  // parser, no script tags, and hx- attributes processed, so a card's Confirm and Cancel work.
+  function put(target, html, style) {
+    window.htmx.swap(target, html, { swapStyle: style, swapDelay: 0, settleDelay: 0, ignoreTitle: true });
+  }
+
+  function streamSend(form) {
+    var log = document.querySelector(form.getAttribute("hx-target") || "#assistant-log");
+    var field = form.querySelector(TEXT_FIELD);
+    var sent = field ? field.value : "";
+    var button = form.querySelector("button[type=submit]");
+    var controller = new AbortController();
+    var timedOut = false;
+    var timer = window.setTimeout(function () {
+      timedOut = true;
+      controller.abort();
+    }, Number(form.getAttribute(STREAM_TIMEOUT)) || 120000);
+    var replace = false;
+    var reply = null;
+    var settled = false;
+
+    form.classList.add("streaming");
+    if (button) {
+      button.disabled = true;
+    }
+    if (log) {
+      log.setAttribute("aria-busy", "true");
+    }
+
+    function end() {
+      settled = true;
+      window.clearTimeout(timer);
+      form.classList.remove("streaming", "writing");
+      if (button) {
+        button.disabled = false;
+      }
+      if (log) {
+        log.removeAttribute("aria-busy");
+      }
+    }
+
+    function fail(text) {
+      if (settled) {
+        return;
+      }
+      end();
+      // The exchange it added: the member's message and the placeholder after it.
+      if (reply) {
+        var mine = reply.previousElementSibling;
+        if (mine && mine.classList.contains("turn-mine")) {
+          mine.remove();
+        }
+        reply.remove();
+      }
+      unsaved[(log && log.id) || "page"] = true;
+      setBanner(text);
+    }
+
+    function succeed() {
+      if (settled) {
+        return;
+      }
+      end();
+      delete unsaved[(log && log.id) || "page"];
+      if (Object.keys(unsaved).length === 0) {
+        setBanner("");
+      }
+      if (field && field.value === sent) {
+        field.value = "";
+        field.focus();
+      }
+    }
+
+    function started(data) {
+      replace = Boolean(data.replace);
+      if (replace) {
+        // Conversation hours 0: the exchange replaces the turns shown; waiting cards stay until
+        // done brings them back.
+        var old = Array.prototype.slice.call(log.children);
+        for (var i = 0; i < old.length; i += 1) {
+          if (!old[i].matches("article.draft:not(.draft-done)")) {
+            old[i].remove();
+          }
+        }
+        put(log, data.html, "afterbegin");
+      } else {
+        put(log, data.html, "beforeend");
+      }
+      var placeholders = log.querySelectorAll("[data-stream-reply]");
+      reply = placeholders[placeholders.length - 1] || null;
+    }
+
+    function shown(html) {
+      var text = reply && reply.querySelector("[data-stream-text]");
+      if (!text) {
+        return;
+      }
+      text.textContent = "";
+      put(text, html, "beforeend");
+      reply.hidden = !html;
+      form.classList.toggle("writing", Boolean(html));
+    }
+
+    function done(data) {
+      if (replace) {
+        var cards = log.querySelectorAll("article.draft");
+        for (var i = 0; i < cards.length; i += 1) {
+          cards[i].remove();
+        }
+      }
+      if (reply && reply.isConnected) {
+        put(reply, data.html, "outerHTML");
+      } else {
+        put(log, data.html, "beforeend");
+      }
+      reply = null;
+      succeed();
+    }
+
+    function handle(item) {
+      if (!item || settled) {
+        return;
+      }
+      if (item.name === "start") {
+        started(item.data);
+      } else if (item.name === "text") {
+        shown(item.data.html);
+      } else if (item.name === "discard") {
+        shown("");
+      } else if (item.name === "done") {
+        done(item.data);
+      } else if (item.name === "error") {
+        fail(item.data.status >= 500 ? SERVER : RELOAD);
+      }
+    }
+
+    function read(reader, decoder, buffer) {
+      return reader.read().then(function (chunk) {
+        buffer += decoder.decode(chunk.value || new Uint8Array(), { stream: !chunk.done });
+        var cut = buffer.indexOf("\n\n");
+        while (cut >= 0) {
+          handle(parseEvent(buffer.slice(0, cut)));
+          buffer = buffer.slice(cut + 2);
+          cut = buffer.indexOf("\n\n");
+        }
+        if (chunk.done) {
+          // The connection ended before the reply did: it may still be stored.
+          fail(SLOW);
+          return null;
+        }
+        return read(reader, decoder, buffer);
+      });
+    }
+
+    window
+      .fetch(form.getAttribute("hx-post") || form.action, {
+        method: "POST",
+        body: new URLSearchParams(new FormData(form)),
+        headers: { Accept: "text/event-stream" },
+        credentials: "same-origin",
+        redirect: "manual",
+        signal: controller.signal,
+      })
+      .then(function (response) {
+        var type = response.headers.get("Content-Type") || "";
+        if (response.status === 204) {
+          succeed();
+          return null;
+        }
+        // A redirect (a session that ended) and any refusal: reload, as with HTMX. A 5xx might
+        // work the second time.
+        if (!response.ok || type.indexOf("text/event-stream") !== 0 || !response.body) {
+          fail(response.status >= 500 ? SERVER : RELOAD);
+          return null;
+        }
+        return read(response.body.getReader(), new TextDecoder(), "");
+      })
+      .catch(function () {
+        fail(timedOut || reply ? SLOW : OFFLINE);
+      });
+  }
+
+  document.addEventListener("htmx:confirm", function (event) {
+    var form = event.detail && event.detail.elt;
+    if (!canStream || !(form instanceof HTMLFormElement) || !form.hasAttribute(STREAM_TIMEOUT)) {
+      return;
+    }
+    event.preventDefault(); // HTMX doesn't send it
+    if (!form.classList.contains("streaming")) {
+      streamSend(form);
+    }
+  });
+
   // A text box marked data-enter-sends, such as the Assistant page's message box, sends its form
   // on Enter, as its submit button does (requestSubmit, so HTMX and the form's checks apply).
   // Shift+Enter starts a new line, and Enter with Ctrl, Cmd, or Alt does what it always did.
