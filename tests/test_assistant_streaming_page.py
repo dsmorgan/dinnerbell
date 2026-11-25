@@ -897,6 +897,25 @@ def test_the_end_never_waits_for_the_throttle(monkeypatch: pytest.MonkeyPatch) -
     assert "the rest" not in shown(found)[-1] and found[-1] == ("done", {"html": "<p>finished</p>"})
 
 
+def test_after_a_discard_the_next_calls_first_text_never_waits(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The throttle after a large ``text`` event is for the next one of its call: once that
+    call's text is discarded, the next call's first text goes at once."""
+    monkeypatch.setattr(assistant_stream, "TEXT_SECONDS", 3600.0)
+
+    async def script(stream: WebStream, step: Any) -> None:
+        stream.more("```\n" + "a line of code\n" * 1000)
+        await step()  # text, after which the next would wait an hour
+        stream.tool_round()
+        await step()  # discard
+        stream.call_started(0)
+        stream.more("the second call")
+        await step()  # at once, or the test times out
+
+    found = drive(script)
+    assert names(found) == ["start", "text", "discard", "text", "done"]
+    assert "the second call" in shown(found)[-1]
+
+
 def test_a_big_text_event_holds_the_next_one_back_longer() -> None:
     assert next_text_at(10.0, "x" * 10) == 10.0 + TEXT_SECONDS
     big = "x" * assistant_stream.TEXT_BYTES_PER_SECOND

@@ -156,6 +156,18 @@ def test_an_entity_the_model_wrote_stays_text() -> None:
         ("a **", "<p>a **</p>"),
         ("Rating: *****", "".join(reply_blocks("Rating: *****"))),
         ("**bold** and ~~", "<p><strong>bold</strong> and ~~</p>"),
+        # A span of markers alone that the line has already doesn't stop a closer.
+        ("Press `*` to **multiply", "<p>Press <code>*</code> to <strong>multiply</strong></p>"),
+        ("Use `_` and *italic words", "<p>Use <code>_</code> and <em>italic words</em></p>"),
+        ("a ***** b **c", "<p>a <strong>*</strong> b <strong>c</strong></p>"),
+        # A line that ends in a closed span still gets a closer for what's open before it.
+        ("~~Tonight we have *pasta*", "<p><del>Tonight we have <em>pasta</em></del></p>"),
+        ("*Tonight we have **pasta**", "<p><em>Tonight we have <strong>pasta</strong></em></p>"),
+        ("**Tonight we have *pasta*", "".join(reply_blocks("**Tonight we have *pasta***"))),
+        ("**a \\*", "<p><strong>a &#42;</strong></p>"),  # a backslashed marker is text
+        # Bold never spans code, finished or not.
+        ("**Note: use `uv`", "".join(reply_blocks("**Note: use `uv`"))),
+        ("**bold** and **", "<p><strong>bold</strong> and **</p>"),
         # A code block shows as code, open or not, and gets nothing appended.
         ("```\nx = `a", "<pre><code>x = `a</code></pre>"),
     ],
