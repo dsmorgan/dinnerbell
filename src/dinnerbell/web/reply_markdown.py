@@ -99,8 +99,8 @@ def _closed(line: str) -> str:
     """``line``, the last of a reply still being written, with the closer from ``_CLOSERS`` that
     leaves the fewest markers showing as typed outside code, if any leaves fewer. A closer must
     keep the line the kind of block it is, and make no span of markers alone that the line
-    doesn't have already, so a line that ends in markers shown as typed, such as "a **", gets
-    none: a closer could only pair them with each other. Each try styles the line once, so only
+    doesn't have already. A line that ends in markers shown as typed, such as "a **", gets none
+    and shows as typed until its next word comes. Each try styles the line once, so only
     closers whose characters the line has are tried, and the first that leaves none wins."""
     if len(line) > MAX_STYLED or not line:
         return line
