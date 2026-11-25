@@ -176,9 +176,9 @@ On this page and in a direct message with Dinnerbell, these changes to your own 
 - A level on **Preferences** that doesn't lift a veto, and a dietary need you add.
 - Feedback that changes feedback you gave, unless it thanks the cook or leaves them a note.
 
-**Undo** works for 30 minutes, once, and only for you. It needs no model call, so it works even when the assistant is near its monthly cap. If you changed the same thing since, such as your answer on the call's page, **Undo** changes nothing and says so; change it yourself there. Your first answer to a call has no **Undo**, because Dinnerbell can't un-answer you; answer again to change it. You can also ask the assistant to undo something, such as "undo that vote."
+**Undo** works for 30 minutes, once, and only for you. It needs no model call, so it works even when the assistant is near its monthly cap. If you changed the same thing since, such as your answer on the call's page, **Undo** changes nothing and says so; change it yourself there. Your first answer to a call has no **Undo**, because Dinnerbell can't un-answer you; answer again to change it. You can also ask the assistant to undo something, such as "undo that vote." If you coordinate the call and the assistant makes you a maybe, you still stop coordinating if you're a maybe when answers close, as on the call's page.
 
-Joining late, an out that ends your coordinating, lifting a veto, taking off a dietary need, a level on an item your own ratings move, your first feedback on a meal, and a thank-you to the cook stay drafts. So does everything else below, and everything in a channel thread. One message does at most 5 things at once; the rest come as drafts.
+Joining late, an out that ends your coordinating, an answer that leaves everyone answered (so the call's answers close early and Dinnerbell tells the household), lifting a veto, taking off a dietary need, a level on an item your own ratings move, your first feedback on a meal, and a thank-you to the cook stay drafts. So does everything else below, and everything in a channel thread. One message does at most 5 things at once; the rest come as drafts.
 
 ### What the assistant can draft
 
