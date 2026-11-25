@@ -57,7 +57,7 @@ To keep the secrets out of `.env`, see [Keep secrets in files](setup.md#keep-sec
 
 ## The assistant
 
-The optional assistant answers members' questions in plain language and drafts changes for them to confirm ([ADR 0009](adr/0009-optional-assistant.md)). It works only when both of these are set:
+The optional assistant answers members' questions in plain language and drafts changes for them to confirm; in private, it makes some changes to a member's own stance at once, with **Undo** ([ADR 0009](adr/0009-optional-assistant.md)). It works only when both of these are set:
 
 - `DINNERBELL_ANTHROPIC_API_KEY`. Anthropic bills that key's account for what the assistant uses.
 - **Turn on the assistant** on **Admin** > **Assistant**. The tab shows only with the key.

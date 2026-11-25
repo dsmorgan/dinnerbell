@@ -165,18 +165,34 @@ When the household's [assistant](configuration.md#the-assistant) is on, each mem
 1. Select **Assistant**.
 2. In **Message**, ask in plain words, such as "something we haven't had in a month" or "tacos at 7, I'll cook," and select **Send**, or press Enter. Shift+Enter starts a new line.
 3. When the assistant drafts something, a card shows what **Confirm** will do. Select **Confirm** to do it, or **Cancel** to drop it. Nothing changes until you confirm.
+4. When the assistant does something at once, a **Done** card shows what changed. Select **Undo** to put it back.
+
+### What the assistant does at once
+
+On this page and in a direct message with Dinnerbell, these changes to your own stance happen at once, without **Confirm**:
+
+- Your answer, a vote, a role, a suggestion, or an answer for a guest you invited.
+- Your away days and **I can usually**.
+- A level on **Preferences** that doesn't lift a veto, and a dietary need you add.
+- Feedback that changes feedback you gave, unless it thanks the cook or leaves them a note.
+
+**Undo** works for 30 minutes, once, and only for you. It needs no model call, so it works even when the assistant is near its monthly cap. If you changed the same thing since, such as your answer on the call's page, **Undo** changes nothing and says so; change it yourself there. Your first answer to a call has no **Undo**, because Dinnerbell can't un-answer you; answer again to change it. You can also ask the assistant to undo something, such as "undo that vote."
+
+Joining late, an out that ends your coordinating, lifting a veto, taking off a dietary need, a level on an item your own ratings move, your first feedback on a meal, and a thank-you to the cook stay drafts. So does everything else below, and everything in a channel thread. One message does at most 5 things at once; the rest come as drafts.
+
+### What the assistant can draft
 
 The assistant can draft:
 
 - **Catalog and offers:** a proposal, an offer of a catalog item, or new catalog items. New items open the import preview, which only adds; select **Apply** there.
-- **Your part in a call:** answer, join late, vote or take back a vote, suggest a catalog item, take or give up a role, take back your offer, invite a guest or answer for one you invited, or start a call. Ask for several at once, such as "I'm in, put me down for pickup, and vote for the noodle place", and you get a card for each.
+- **Your part in a call:** answer, join late, vote or take back a vote, suggest a catalog item, take or give up a role, take back your offer, invite a guest or answer for one you invited, or start a call. Ask for several at once, such as "I'm in, put me down for pickup, and vote for the noodle place", and you get a card for each. In private, most of these happen at once (above).
 - **Your own data, in private only** (this page or a direct message with Dinnerbell, never a channel thread): your levels on **Preferences**, such as "Veto mushrooms"; feedback on a meal you ate; your away days; your dietary needs, from the household's dietary tags (for a new one, add it as a dietary tag on an item in **Catalog** first); and **I can usually**. You can also ask about your own, such as "What do I veto?" Feedback replaces what you gave on that meal before, and the card says what it replaces.
 - **A call you [coordinate](coordinating.md#coordinate-through-the-assistant), in private only:** lock a pick, break a tie, or shuffle the picks while voting; once it's decided, change the plan as **Adjust** does; hand off coordinating; mark the meal done once it's meal time; or call the call off, with a reason. If you started an ad-hoc call, you can call it off until it's decided. Name people as you'd say them, such as "Sam picks it up"; when a name could be two people, the assistant asks which one you mean. An admin who isn't the coordinator uses the call's page instead.
 - **The catalog and meal log, anywhere, a channel thread included:** edit a catalog item, take one off the catalog or put it back; log a meal you had without a call, such as "We had Taqueria for lunch yesterday"; and edit or delete a meal you logged. An edit's card shows each change from old to new. You can change only meals you logged, even as an admin; an admin changes anyone's on **History**.
 
 Each **Confirm** runs the same checks as the buttons on the other pages. A draft that no longer fits says why on its card, and nothing changes. A draft that edits something, such as your levels, the plan, a catalog item, or a meal, also stops if that changed elsewhere after it was drafted; ask again. A draft lasts 30 minutes, and only you can confirm it, once.
 
-The conversation is private: other members and the admin don't see it. Dinnerbell keeps it for the household's **Conversation hours** after your last message, so follow-ups such as "something cheaper" work. At 0 hours, each message stands alone. **Start over** clears the conversation and cancels its waiting drafts. Near the household's monthly cap, a long conversation may not fit when a short one would: select **Start over** and ask again, or ask an admin to raise the cap. Once nothing fits, the page says the assistant is unavailable until next month. Links in replies aren't clickable, so a page the assistant read can't slip you a link to tap.
+The conversation is private: other members and the admin don't see it. Dinnerbell keeps it for the household's **Conversation hours** after your last message, so follow-ups such as "something cheaper" work. At 0 hours, each message stands alone. **Start over** clears the conversation, cancels its waiting drafts, and removes its **Done** cards; what the assistant did stays done. Near the household's monthly cap, a long conversation may not fit when a short one would: select **Start over** and ask again, or ask an admin to raise the cap. Once nothing fits, the page says the assistant is unavailable until next month. Links in replies aren't clickable, so a page the assistant read can't slip you a link to tap.
 
 What the assistant sees:
 

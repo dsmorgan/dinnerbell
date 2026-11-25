@@ -31,6 +31,8 @@ The first build has #17's tools: find candidates (a new read-only use case over 
 
 **Every change is a draft the member confirms.** A draft says what **Confirm** will do, such as join late or replace tonight's scheduled call, and only its member sees and confirms it. **Confirm** calls the same service as the form, with the same checks, so a proposal passes every filter again (ADR 0005). Catalog drafts only add, through the import preview.
 
+Amended 2026-11-25 ([#374](https://github.com/dsmorgan/dinnerbell/issues/374), owner's decisions): in a private conversation, a change that moves only the member's own stance and tells nobody new acts at once, with **Undo** for 30 minutes. That's an answer, a vote, a role, a suggestion, an answer for their guest, away days, **I can usually**, a level that doesn't lift a veto, an added dietary need, and feedback that changes theirs without thanking the cook. Joining late, an out that ends coordinating, loosening a veto or a need, anything others see or are told, and everything in a channel thread keep **Confirm**. A message acts at once at most 5 times. There's no switch.
+
 **Active members only.** Guests can't propose, vote, or offer. A message from anyone else gets no reply and is neither stored nor sent.
 
 **Minimal data.** Dinnerbell sends the conversation, the call's basics, and what tools return. Members appear as "Member 1", "Member 2", and so on, fixed for each conversation, and tools take only these labels. Dinnerbell puts names back for display, and the roster (amended below) pairs each label with a name. No preferences, vetoes, ratings, notes, emails, Slack IDs, or stored guest details leave the house, except the member's own, in a private conversation, when they ask. Candidates come in name order, without hints, "favorite" sentences, or what the filters removed.
@@ -41,12 +43,13 @@ Amended 2026-11-15 (owner's decisions): for #277, each request sends the roster,
 
 **A monthly cost cap.** Each household has a cap in US dollars, $5 a month by default, set in Admin. Dinnerbell reserves each model call's worst case first, so spending never passes it; Admin shows usage per member. At the cap, the assistant is unavailable until next month, and everything else works.
 
-**Fetched pages and catalog text are data, never instructions.** A menu link is fetched only over HTTPS from a public address. A drafting call with no tools reads the page. Injection can't widen what the assistant can do: tools act as the member, and every change waits for their **Confirm**.
+**Fetched pages and catalog text are data, never instructions.** A menu link is fetched only over HTTPS from a public address. A drafting call with no tools reads the page. Injection can't widen what the assistant can do: tools act as the member, and every change waits for their **Confirm**, or, for their own stance in private, shows them a record with **Undo**.
 
 ## Reasoning
 
 - **Guarantees stay in code.** Services check everything on **Confirm**, so a prompt can't add a vetoed place.
 - **Confirm makes mistakes cheap:** a misread request costs a tap on **Cancel**.
+- **Undo, not Confirm, for the member's own stance** (#374): **Confirm** cost a tap on the commonest asks, such as "I'm in" or a vote, each of which the member can undo or answer again. An injection can still flip such a stance, but the record shows it and **Undo** puts it back. Nothing that posts, messages someone, or can't be taken back acts at once, and a housemate's words in a channel thread never reach a tool that does.
 - **Member parity, minus admin.** One rule, the member's own permissions without admin, covers every future tool, so adding one needs no new ADR. Admin changes affect the whole household, so they stay on Admin's pages.
 - **Shared threads can't widen anyone's permissions:** each message carries only its author's, and only a draft's member can confirm it. Coordinating and personal data stay private, so a housemate can't steer a coordinator's request and nobody's stance appears in public.
 - **Display names, no preferences** but the member's own, privately. The model needs the menu, and enough of the people to know who "Dave" is. Candidates only while voting, when the filters are fixed, keep FR-29: asking before and after a housemate answers reveals nothing.
