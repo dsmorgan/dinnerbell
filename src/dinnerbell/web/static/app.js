@@ -309,7 +309,7 @@
   // the box as done would, and says the reply is on its way, so it isn't sent twice. At
   // Conversation hours 0 nothing is kept to come back to, so the text stays, and the notice says so.
   var STREAM_TIMEOUT = "data-stream-timeout";
-  var DROPPED = "The connection dropped, but your reply is still on its way. Reload the page to see it.";
+  var DROPPED = "The connection dropped, but the reply is still on its way. Reload the page to see it.";
   var DROPPED_UNKEPT =
     "The connection dropped before the reply arrived, and this conversation keeps nothing. Send it again to see the reply.";
   var canStream = Boolean(
@@ -546,10 +546,12 @@
       })
       .catch(function (error) {
         window.console.error(error);
-        if (began && !timedOut) {
+        // After start the server has the message, and its answer ends before this timer, so a
+        // timeout then is a frozen stream, such as a locked phone's: the reply may be stored.
+        if (began) {
           dropped();
         } else {
-          fail(timedOut || began ? SLOW : OFFLINE);
+          fail(timedOut ? SLOW : OFFLINE);
         }
       });
   }
