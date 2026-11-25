@@ -821,20 +821,73 @@ async def step_inputs(db: AsyncSession, event: Event) -> StepInputs:
     return StepInputs(cutoff, responses, active, coverage(responses, members), guests)
 
 
-async def closes_early_with(db: AsyncSession, event: Event, changed: Response, now: datetime) -> bool:
-    """Whether a collecting call would close its answers early once ``changed`` is saved now
-    (FR-56, ``early_close_at``): every member has answered, so the scheduler closes them, at
-    once or after the quiet spell, and posts what that posts. For the assistant acting at once
-    (#374), which tells nobody new: an answer that leaves the call so isn't done at once, even
-    when another answer had it so already, since what's posted would then include this one. In
-    the caller's write transaction, so the answers can't change meanwhile."""
+async def closes_early_with(
+    db: AsyncSession,
+    event: Event,
+    changed: Response | None,
+    now: datetime,
+    *,
+    removed: int | None = None,
+    member: Member | None = None,
+) -> bool:
+    """Whether a collecting call would close its answers early once ``changed`` is saved now, or
+    the answer of ``removed`` deleted, with ``member`` as they'd be, such as with other **I can
+    usually** (FR-56, ``early_close_at``): every member has answered, and anyone in is covered,
+    so the scheduler closes them, at once or after the quiet spell, and posts what that posts.
+    For the assistant acting at once (#374), which tells nobody new: a change that leaves the
+    call so isn't done at once, even when another answer had it so already, since what's posted
+    would then include this one. In the caller's write transaction, so nothing can change
+    meanwhile."""
     if event.is_offer or event.state is not EventState.COLLECTING:
         return False
     i = await step_inputs(db, event)
     members = {m.id: m for m in await MemberRepository(db).list(event.household_id)}
-    saved = replace(changed, updated_at=now, responded_at=changed.responded_at or now)
-    after = [r for r in i.responses if r.member_id != changed.member_id] + [saved]
+    if member is not None:
+        members[member.id] = member
+    gone = {removed, changed.member_id if changed is not None else None}
+    after = [r for r in i.responses if r.member_id not in gone]
+    if changed is not None:
+        after.append(replace(changed, updated_at=now, responded_at=changed.responded_at or now))
     return early_close_at(event, after, i.active_member_ids, coverage(after, members), i.guest_ids) is not None
+
+
+async def own_change_closes_early(db: AsyncSession, before: Member, after: Member, now: datetime) -> bool:
+    """Whether changing ``before`` to ``after``, their away days or **I can usually**, would let
+    any call taking answers close them early (``closes_early_with``): the away window answers
+    calls Out, or gives back the ones it answered, as ``away._answer`` does, and **I can
+    usually** counts toward who can order (``coverage``). For the assistant acting at once (#374),
+    in the caller's write transaction."""
+    events = EventRepository(db)
+    for event_id in await events.open_ids(before.household_id):
+        event = await events.get(before.household_id, event_id)
+        if event is None or event.is_offer or event.state is not EventState.COLLECTING:
+            continue
+        responses = await ResponseRepository(db).for_event(before.household_id, event_id)
+        mine = next((r for r in responses if r.member_id == before.id), None)
+        changed, removed = _away_answer(event, after, mine, now)
+        moved = changed is not None or removed is not None or after.capabilities != before.capabilities
+        if moved and await closes_early_with(db, event, changed, now, removed=removed, member=after):
+            return True
+    return False
+
+
+def _away_answer(
+    event: Event, member: Member, mine: Response | None, now: datetime
+) -> tuple[Response | None, int | None]:
+    """What ``away._answer`` would do to ``member``'s answer to ``event`` with their window as it
+    is on ``member``: the answer it saves, or the member whose answer it deletes."""
+    if not member.is_member:
+        return None, None
+    if member.away is not None and member.away_on(event.day):
+        back = member.away.back
+        if mine is None:
+            return Response(member_id=member.id, status=Status.OUT, responded_at=now, away_until=back), None
+        if mine.away_until is not None and mine.away_until != back:
+            return replace(mine, away_until=back), None
+        return None, None
+    if mine is not None and mine.away_until is not None:
+        return None, member.id
+    return None, None
 
 
 async def due(db: AsyncSession, event: Event, now: datetime) -> Step | None:

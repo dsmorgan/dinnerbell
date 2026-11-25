@@ -726,3 +726,68 @@ async def test_a_coordinators_maybe_says_it_can_still_end_coordinating(house: Ho
     await tool(house, "draft_answer", DINNER | {"answer": "maybe"})
     [record] = await rows(house)
     assert record.direct and direct.MAYBE_COORDINATING in record.lines
+
+
+async def test_undo_never_puts_back_an_away_out_that_no_window_owns(house: House) -> None:
+    """Sam's window answered him Out; he answers in at once, then clears his away days on
+    Preferences. Putting the window's out back now would leave an out no window owns, which
+    "I'm back" could never clear, so Undo is refused as changed since, and he stays in."""
+    event_id = await collecting(house)
+    day = (await house.event(event_id)).day
+    await act(house, away.set_my_away, house["Sam"], day, day + timedelta(days=2))
+    await tool(house, "draft_answer", DINNER | {"answer": "in"})
+    [record] = await rows(house)
+    await act(house, away.clear_my_away, await house.refresh("Sam"))
+    with pytest.raises(EventRuleViolation, match="changed since the assistant did it"):
+        await undo(house, "Sam", record.id)
+    assert await answer_of(house, event_id, house["Sam"].id) == (Status.IN, frozenset())
+
+
+async def test_undo_never_erases_a_level_sam_set_again_himself(house: House) -> None:
+    """Sam sets Siam Garden to +1 at once, then sets +1 again on Preferences: that level is his
+    own now, edit time and all, so Undo is refused as changed since."""
+    await tool(house, "draft_preference", {"what": "", "name": "Siam Garden", "level": "1"})
+    [record] = await rows(house)
+    house.clock.advance(timedelta(minutes=1))
+    siam = house.items["Siam Garden"].id
+    await act(house, preferences.set_my_preference, house["Sam"], TargetType.ITEM, siam, Stance(score=1))
+    with pytest.raises(EventRuleViolation, match="changed since the assistant did it"):
+        await undo(house, "Sam", record.id)
+    assert await level(house, "Sam", "Siam Garden") == Stance(score=1)
+    async with house.sessionmaker() as db:
+        assert await preferences.my_item_edit(db, house["Sam"], siam) == house.clock()
+
+
+async def test_away_days_that_would_close_a_call_draft(house: House) -> None:
+    """Everyone else is out of tonight's call and Sam hasn't answered: away days covering today
+    would answer him out and leave nobody in, so the call would be abandoned and posted."""
+    event_id = await collecting(house)
+    for name in ("Alex", "Kim", "Lee"):
+        await act(house, calls.respond, house[name], event_id, Status.OUT)
+    kinds = await house.kinds()
+    day = (await house.event(event_id)).day
+    window = {"first": day.isoformat(), "last": (day + timedelta(days=1)).isoformat(), "clear": False}
+    result = await tool(house, "draft_away", window)
+    assert result.content.startswith("Draft ") and result.content.endswith(direct.CLOSES_A_CALL)
+    await house.tick()
+    assert (await house.event(event_id)).state is EventState.COLLECTING and await house.kinds() == kinds
+    later = {"first": (day + timedelta(days=3)).isoformat(), "last": (day + timedelta(days=4)).isoformat()}
+    assert (await tool(house, "draft_away", later | {"clear": False})).content.startswith("Done at once")
+
+
+async def test_ordering_that_would_cover_a_call_drafts(house: House) -> None:
+    """Sam and Kim are in with nobody to order, and the quiet spell has passed: turning on Order
+    would cover the call, so voting would open and be posted. Cooking counts nowhere, so it acts."""
+    event_id = await collecting(house, "Sam", "Kim")
+    for name in ("Alex", "Lee"):
+        await act(house, calls.respond, house[name], event_id, Status.OUT)
+    house.clock.advance(timedelta(minutes=15))
+    await house.tick()
+    kinds = await house.kinds()
+    result = await tool(house, "draft_can_usually", {"cook": "", "pick_up": "", "order": "on"})
+    assert result.content.startswith("Draft ") and result.content.endswith(direct.CLOSES_A_CALL)
+    await house.tick()
+    assert (await house.event(event_id)).state is EventState.COLLECTING and await house.kinds() == kinds
+    assert (await tool(house, "draft_can_usually", {"cook": "on", "pick_up": "", "order": ""})).content.startswith(
+        "Done at once"
+    )

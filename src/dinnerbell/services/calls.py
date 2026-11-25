@@ -280,6 +280,7 @@ UNDO_ENDS_COORDINATING = (
 UNDO_CLOSES_EARLY = (
     "Putting that back would close the call's answers early, so Undo changed nothing. Change it on the call's page."
 )
+UNDO_AWAY_MOVED = "Your away days changed since, so Undo changed nothing. Change your answer on the call's page."
 NO_SUCH_GUEST = "No such guest on this call."
 
 
@@ -303,7 +304,9 @@ async def restore_answer(
     does. Under the lock, ``expect`` gets the call as it is now and raises when it isn't what the
     action left. A change of answer or suggestions needs answers open, as ``respond`` and
     ``save_details`` do; a change of offers alone, a late joiner's included, needs what
-    ``offer_role`` does. Refused rather than end the actor's coordinating, or complete the answers
+    ``offer_role`` does. An out the member's away window wrote comes back only while that window
+    still covers the call, as the away sync would leave it; otherwise it's refused as changed
+    since (``stale_draft``). Refused rather than end the actor's coordinating, or complete the answers
     so they close early (``closes_early_with``), since either tells the household. Updates the
     call's messages, as either would."""
     member_id = earlier.member_id
@@ -326,6 +329,13 @@ async def restore_answer(
             check_can_respond(event, who, invited=invited)
         else:
             check_can_offer_role(event, who, current, invited=invited)
+        owner = ctx.members.get(member_id)
+        if earlier.away_until is not None and earlier.status is Status.OUT:
+            # An out the away window wrote is the window's: only while the window, as it is now,
+            # still covers the call's day and ends there would the away sync leave it so.
+            window = owner.away if owner is not None else None
+            if window is None or not window.covers(event.day) or window.back != earlier.away_until:
+                raise EventRuleViolation(UNDO_AWAY_MOVED, code="stale_draft")
         if drops_coordinating(event, earlier):
             raise EventRuleViolation(UNDO_ENDS_COORDINATING, code="undo_coordinating")
         if await cc.closes_early_with(db, event, earlier, now):
