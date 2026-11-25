@@ -304,7 +304,14 @@
   // the finished reply once. The thinking indicator shows until text does, and again after a
   // discard. As with HTMX, a failure removes the exchange, keeps the text in the box, and shows
   // the banner; the box empties only once the reply is done, if it still holds what was sent.
+  // Once start has arrived, though, the server has the message and answers it to the end, so a
+  // connection that drops then (an iPhone locked or switched away) keeps the message, empties
+  // the box as done would, and says the reply is on its way, so it isn't sent twice. At
+  // Conversation hours 0 nothing is kept to come back to, so the text stays, and the notice says so.
   var STREAM_TIMEOUT = "data-stream-timeout";
+  var DROPPED = "The connection dropped, but your reply is still on its way. Reload the page to see it.";
+  var DROPPED_UNKEPT =
+    "The connection dropped before the reply arrived, and this conversation keeps nothing. Send it again to see the reply.";
   var canStream = Boolean(
     window.htmx &&
       window.fetch &&
@@ -355,6 +362,7 @@
     }, Number(form.getAttribute(STREAM_TIMEOUT)) || 120000);
     var replace = false;
     var reply = null;
+    var began = false; // start arrived: the server has the message
     var settled = false;
 
     form.classList.add("streaming");
@@ -394,6 +402,24 @@
       setBanner(text);
     }
 
+    // The connection ended after start, before done: the reply is still being written.
+    function dropped() {
+      if (settled) {
+        return;
+      }
+      end();
+      if (reply) {
+        reply.remove(); // the placeholder; the member's message stays
+        reply = null;
+      }
+      // At Conversation hours 0 nothing is kept, so the text stays for sending again.
+      if (!replace && field && field.value === sent) {
+        field.value = "";
+      }
+      unsaved[(log && log.id) || "page"] = true;
+      setBanner(replace ? DROPPED_UNKEPT : DROPPED);
+    }
+
     function succeed() {
       if (settled) {
         return;
@@ -410,6 +436,7 @@
     }
 
     function started(data) {
+      began = true;
       replace = Boolean(data.replace);
       if (replace) {
         // Conversation hours 0: the exchange replaces the turns shown; waiting cards stay until
@@ -483,7 +510,11 @@
         }
         if (chunk.done) {
           // The connection ended before the reply did: it may still be stored.
-          fail(SLOW);
+          if (began) {
+            dropped();
+          } else {
+            fail(SLOW);
+          }
           return null;
         }
         return read(reader, decoder, buffer);
@@ -513,8 +544,13 @@
         }
         return read(response.body.getReader(), new TextDecoder(), "");
       })
-      .catch(function () {
-        fail(timedOut || reply ? SLOW : OFFLINE);
+      .catch(function (error) {
+        window.console.error(error);
+        if (began && !timedOut) {
+          dropped();
+        } else {
+          fail(timedOut || began ? SLOW : OFFLINE);
+        }
       });
   }
 
