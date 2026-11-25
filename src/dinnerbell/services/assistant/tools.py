@@ -22,6 +22,11 @@ the meal log (#254, ``catalog_edits``) work in any conversation: draft an edit o
 or taking one off the catalog or putting it back; look up the meals the member logged; and draft
 logging a meal, or editing or deleting one they logged. A draft changes nothing until its member
 confirms it (``drafts.confirm_draft``).
+
+In a private conversation, a draft that ``acts_directly`` allows acts at once instead (#374,
+``direct``): an answer, a vote, a role, a suggestion, an answer for a guest, and the member's own
+data that tightens or tells nobody. The tool returns that it's done, and the member gets a record
+with **Undo**. A message acts at once ``MAX_DIRECT_ACTIONS`` times at most; after that, drafts.
 """
 
 from __future__ import annotations
@@ -39,7 +44,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dinnerbell.config import is_test_instance
 from dinnerbell.db.repositories import HouseholdRepository
 from dinnerbell.domain.assistant import Pseudonyms, web_key
-from dinnerbell.domain.assistant_drafts import NAMES_PEOPLE, Narrowing
+from dinnerbell.domain.assistant_drafts import MAX_DIRECT_ACTIONS, NAMES_PEOPLE, Draft, Narrowing, acts_directly
 from dinnerbell.domain.catalog import (
     MODE_ORDER,
     CatalogRuleViolation,
@@ -56,7 +61,7 @@ from dinnerbell.domain.members import InvalidMemberInput, Member
 from dinnerbell.domain.offers import DEFAULT_CAPACITY
 from dinnerbell.domain.preferences import LEVELS, InvalidPreference, Stance
 from dinnerbell.services import catalog as catalog_service
-from dinnerbell.services.assistant import call_drafts, catalog_edits, coordinating, drafts, own_drafts
+from dinnerbell.services.assistant import call_drafts, catalog_edits, coordinating, direct, drafts, own_drafts
 from dinnerbell.services.assistant.acting import ToolRefusal, tool_actor
 from dinnerbell.services.assistant.call_drafts import DraftSpec
 from dinnerbell.services.assistant.candidates import CallRef, call_basics, find_candidates, resolve_call
@@ -88,12 +93,15 @@ _TIME = re.compile(r"\d{1,2}:\d{2}")
 class ToolSession:
     """What one message's tools share: the conversation's key, its call (the thread's call, for
     a Slack thread rooted under a Dinnerbell post), its pseudonyms, which tools add to as they
-    name members, and the drafts made so far, for the reply."""
+    name members, and the drafts made so far, and the records of what acted at once (#374), for
+    the reply."""
 
     key: str
     pseudonyms: Pseudonyms = field(default_factory=Pseudonyms)
     call_id: int | None = None
     drafts: list[DraftView] = field(default_factory=list)
+    records: list[Draft] = field(default_factory=list)
+    """What this message did at once (#374), oldest first: at most ``MAX_DIRECT_ACTIONS``."""
     links: LinkCalls | None = None
     """The fetch and the drafting call for menu links, from ``converse``. None outside a
     message, where ``draft_catalog_from_link`` refuses."""
@@ -699,7 +707,18 @@ LOOK_UP_CALL = Tool(
 
 
 async def _keep_action(ctx: ToolContext, spec: DraftSpec) -> str:
-    return await _keep(ctx, await drafts.store_action(ctx.db, ctx.actor, ctx.session.key, spec, now=ctx.now))
+    """Do ``spec`` at once, in a private conversation when ``acts_directly`` allows and the
+    message hasn't acted ``MAX_DIRECT_ACTIONS`` times (#374); otherwise store it as a draft."""
+    over = False
+    if ctx.private and acts_directly(spec.kind, spec.payload):
+        if len(ctx.session.records) < MAX_DIRECT_ACTIONS:
+            record = await direct.act(ctx.db, ctx.actor, ctx.session.key, spec, now=ctx.now)
+            ctx.session.records.append(record)
+            ctx.session.drafts.append(direct.view(record, ctx.now))
+            return direct.summary(record, ctx.session.label(ctx.actor.id))
+        over = True
+    told = await _keep(ctx, await drafts.store_action(ctx.db, ctx.actor, ctx.session.key, spec, now=ctx.now))
+    return f"{told} {direct.OVER_THE_LIMIT.format(most=MAX_DIRECT_ACTIONS)}" if over else told
 
 
 async def draft_answer_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
@@ -710,12 +729,22 @@ async def draft_answer_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
     return await _keep_action(ctx, await call_drafts.answer(ctx.db, ctx.actor, event, status, today=today, now=ctx.now))
 
 
+def at_once(drafts_instead: str = "") -> str:
+    """How a call action's tool describes acting at once (#374), with what still drafts."""
+    instead = f", except {drafts_instead}, which is a draft" if drafts_instead else ""
+    return (
+        f" In a private conversation, Dinnerbell does it at once and shows the member a record with Undo{instead}; "
+        "in a shared thread, it's a draft with Confirm and Cancel, and nothing changes until they confirm. The "
+        "result says which."
+    )
+
+
 DRAFT_ANSWER = Tool(
     name="draft_answer",
     description=(
-        "Draft the member's answer to a call: in, out, or maybe, while answers are open. While the call is voting, "
-        "in means joining late; out and maybe aren't possible then. Dinnerbell shows the member the draft with "
-        "Confirm and Cancel, and nothing changes until they confirm. Returns the draft's ID and what Confirm does."
+        "Answer a call for the member: in, out, or maybe, while answers are open. While the call is voting, in "
+        "means joining late; out and maybe aren't possible then."
+        + at_once("joining late, or an out that ends their coordinating")
     ),
     input_schema={
         "type": "object",
@@ -753,10 +782,9 @@ async def draft_vote_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
 DRAFT_VOTE = Tool(
     name="draft_vote",
     description=(
-        "Draft the member's vote for one of a voting call's picks, or taking their vote back. Send the pick's "
+        "Vote for one of a voting call's picks for the member, or take their vote back. Send the pick's "
         "number from look_up_call, or 0 with a name and mode the member gave. Someone who isn't in joins late "
-        "first; the draft says so. "
-        "Dinnerbell shows the member the draft with Confirm and Cancel, and nothing changes until they confirm."
+        "first, as a draft." + at_once("joining late first")
     ),
     input_schema={
         "type": "object",
@@ -791,9 +819,8 @@ async def draft_suggestion_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str
 DRAFT_SUGGESTION = Tool(
     name="draft_suggestion",
     description=(
-        "Draft a suggestion for a call while answers are open: a catalog item the member would like, by its name "
-        "exactly as look_up_catalog_items returned it. A member suggests up to 3. Dinnerbell shows the member the "
-        "draft with Confirm and Cancel, and nothing changes until they confirm."
+        "Suggest a catalog item the member would like for a call, while answers are open, by its name "
+        "exactly as look_up_catalog_items returned it. A member suggests up to 3." + at_once()
     ),
     input_schema={
         "type": "object",
@@ -819,10 +846,9 @@ async def draft_role_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
 DRAFT_ROLE = Tool(
     name="draft_role",
     description=(
-        'Draft the member taking a role on a call, such as "put me down for pickup", or giving one up: cook, '
+        'Put the member down for a role on a call, such as "put me down for pickup", or take them off one: cook, '
         "pickup, or order. Taking one counts them in. While the call is voting, someone who isn't in joins late "
-        "first; the draft says so. Dinnerbell shows the member the draft with Confirm and Cancel, and nothing "
-        "changes until they confirm."
+        "first, as a draft." + at_once("joining late first")
     ),
     input_schema={
         "type": "object",
@@ -953,10 +979,9 @@ async def draft_guest_answer_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> s
 DRAFT_GUEST_ANSWER = Tool(
     name="draft_guest_answer",
     description=(
-        "Draft an answer for a guest the member invited who isn't on Slack: in or out, or a role (cook, pickup, "
+        "Answer for a guest the member invited who isn't on Slack: in or out, or a role (cook, pickup, "
         "or order) taken or given up for them. Use the guest's name as the member wrote it. Only the member who "
-        "invited a guest answers for them. Dinnerbell shows the member the draft with Confirm and Cancel, and "
-        "nothing changes until they confirm."
+        "invited a guest answers for them." + at_once()
     ),
     input_schema={
         "type": "object",
@@ -1026,6 +1051,15 @@ RATING_NAMES = ["", *(r.value for r in Rating)]
 ISSUE_NAMES = [i.value for i in PlaceIssue]
 OWN = "The member's own only, and only when they ask. "
 CONFIRMS = " Nothing changes until the member confirms the draft."
+AT_ONCE = " Dinnerbell does it at once and shows the member a record with Undo. The result says what changed."
+
+
+def at_once_unless(drafts_instead: str) -> str:
+    """How an own-data tool describes acting at once (#374), with what still drafts."""
+    return (
+        f" Dinnerbell does it at once and shows the member a record with Undo, except {drafts_instead}, which is a "
+        "draft the member confirms. The result says which."
+    )
 
 
 def _private(ctx: ToolContext) -> None:
@@ -1089,8 +1123,9 @@ async def draft_preference_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str
 DRAFT_PREFERENCE = Tool(
     name="draft_preference",
     description=(
-        OWN + 'Draft one of the member\'s levels on Preferences, such as "veto mushrooms": on a tag or catalog item, '
-        "by its name as look_up_my_preferences or look_up_catalog_items returned it." + CONFIRMS
+        OWN + 'Set one of the member\'s levels on Preferences, such as "veto mushrooms": on a tag or catalog item, '
+        "by its name as look_up_my_preferences or look_up_catalog_items returned it."
+        + at_once_unless("lifting a veto, or a level on an item their own ratings move")
     ),
     input_schema={
         "type": "object",
@@ -1161,8 +1196,9 @@ async def draft_feedback_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
 DRAFT_FEEDBACK = Tool(
     name="draft_feedback",
     description=(
-        OWN + "Draft the member's feedback on a meal from look_up_my_feedback, every part optional. It replaces "
-        "theirs, so keep what they didn't change from yours; all empty takes it back." + CONFIRMS
+        OWN + "Give the member's feedback on a meal from look_up_my_feedback, every part optional. It replaces "
+        "theirs, so keep what they didn't change from yours; all empty takes it back."
+        + at_once_unless("their first feedback on a meal, and feedback that thanks the cook or replaces a thank-you")
     ),
     input_schema={
         "type": "object",
@@ -1212,8 +1248,8 @@ async def draft_away_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
 DRAFT_AWAY = Tool(
     name="draft_away",
     description=(
-        OWN + "Draft the member's away days, first and last day included, replacing theirs; calls then answer them "
-        'Out. Or clear them, as "I\'m back" does.' + CONFIRMS
+        OWN + "Set the member's away days, first and last day included, replacing theirs; calls then answer them "
+        'Out. Or clear them, as "I\'m back" does.' + AT_ONCE
     ),
     input_schema={
         "type": "object",
@@ -1246,9 +1282,9 @@ async def draft_dietary_needs_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> 
 DRAFT_DIETARY_NEEDS = Tool(
     name="draft_dietary_needs",
     description=(
-        OWN + "Draft adding dietary needs to the member's, or taking some off, by the names of the household's "
+        OWN + "Add dietary needs to the member's, or take some off, by the names of the household's "
         "dietary tags, as look_up_my_preferences returns them in dietary_tags. Every meal they're in or maybe for "
-        "then fits their needs. A name that isn't a dietary tag can't be a need." + CONFIRMS
+        "then fits their needs. A name that isn't a dietary tag can't be a need." + at_once_unless("taking one off")
     ),
     input_schema={
         "type": "object",
@@ -1280,8 +1316,8 @@ CAN_USUALLY_PROPERTY = {"type": "string", "enum": list(CAN_USUALLY_CHANGES), "de
 DRAFT_CAN_USUALLY = Tool(
     name="draft_can_usually",
     description=(
-        OWN + 'Draft the member\'s "I can usually" on Preferences: whether they usually cook, pick up, and order. '
-        "Answering In on a call turns on those offers for it." + CONFIRMS
+        OWN + 'Set the member\'s "I can usually" on Preferences: whether they usually cook, pick up, and order. '
+        "Answering In on a call turns on those offers for it." + AT_ONCE
     ),
     input_schema={
         "type": "object",

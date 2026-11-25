@@ -165,7 +165,10 @@ channel thread, or a message in the member's DM. Its value is a ``draft_value``.
 that the draft is the tapper's, so the value is only a candidate."""
 DRAFT_CANCEL = "draft_cancel"
 """**Cancel** on a draft card. Its value is a ``draft_value``."""
-DRAFT_ACTIONS = frozenset({DRAFT_CONFIRM, DRAFT_CANCEL})
+DRAFT_UNDO = "draft_undo"
+"""**Undo** on the record of something the assistant did at once (#374), a message in the member's
+DM. Its value is a ``draft_value`` of the record. The service checks that it's the tapper's."""
+DRAFT_ACTIONS = frozenset({DRAFT_CONFIRM, DRAFT_CANCEL, DRAFT_UNDO})
 DRAFT_IMPORT_LINK = "link_draft_import"
 """**Review the import**, the URL button a catalog draft's Confirm leaves on its card."""
 LINK_PREFIX = "link_"

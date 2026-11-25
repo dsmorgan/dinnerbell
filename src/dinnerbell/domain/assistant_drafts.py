@@ -9,6 +9,10 @@ feedback on a meal, away days, dietary needs, or **I can usually** (#278); or, i
 conversation, a catalog edit or a change to the meal log (#254). It says what **Confirm** will do, in lines worked
 out here with the same rules the services apply, and lasts ``DRAFT_MINUTES``. Only its member confirms it, at most once.
 
+Some drafts act at once instead, in a private conversation only (#374, ``acts_directly``): each
+changes only the member's own stance and tells nobody new. Dinnerbell stores the action as a
+draft its action used, ``direct``, with what **Undo** puts back, for ``UNDO_MINUTES``.
+
 Candidates are what ranking's hard filters let through for a voting call. Their reasons come
 from a snapshot with no preferences, no hints, and pseudonyms in place of names
 (``reasons_snapshot``), so no reason can say who likes what (FR-29).
@@ -50,6 +54,10 @@ DRAFT_MINUTES = 30
 """How long a draft waits for **Confirm** (spec 6.14, **Drafts**)."""
 MAX_OPEN_DRAFTS = 10
 """Drafts one member may have waiting at once, so a runaway conversation can't pile them up."""
+UNDO_MINUTES = 30
+"""How long a direct action's **Undo** works (#374), as long as a draft waits for **Confirm**."""
+MAX_DIRECT_ACTIONS = 5
+"""The most direct actions one message runs (#374); any more become drafts."""
 
 DOING = {Mode.COOK: "cook it", Mode.PICKUP: "pick it up", Mode.DELIVERY: "order it"}
 """What whoever takes a mode's role does, as the offer service words it."""
@@ -126,6 +134,64 @@ CATALOG_AND_MEALS = frozenset(
 """Catalog edits and the meal log (#254), in any conversation: each confirms through the use case
 the Catalog item form or History's forms call."""
 
+DIRECT_KINDS = frozenset(
+    {
+        DraftKind.ANSWER,
+        DraftKind.VOTE,
+        DraftKind.SUGGESTION,
+        DraftKind.ROLE,
+        DraftKind.GUEST_ANSWER,
+        DraftKind.PREFERENCE,
+        DraftKind.FEEDBACK,
+        DraftKind.AWAY,
+        DraftKind.NEEDS,
+        DraftKind.CAN_USUALLY,
+    }
+)
+"""Kinds that can act at once in a private conversation (#374), as ``acts_directly`` says."""
+
+
+def acts_directly(kind: DraftKind, payload: Mapping[str, Any]) -> bool:
+    """Whether a draft of ``kind`` acts at once in a private conversation, the web page or a DM
+    (#374): each one changes only the member's own stance, tells nobody new, and can be undone or
+    answered again. These stay drafts:
+
+    - joining late, which can't be taken back, and an Out that ends the member's coordinating,
+      which tells the household;
+    - lifting a veto, or taking off a dietary need, which loosens a guarantee (ADR 0005), and a
+      level on an item the member's own ratings move, since a level stops them for good (FR-55);
+    - feedback that thanks the cook or leaves them a note, which the cook sees, or replaces one
+      that did, and the member's first feedback on a meal, which counts toward badges."""
+    if kind not in DIRECT_KINDS:
+        return False
+    if kind in (DraftKind.ANSWER, DraftKind.VOTE, DraftKind.ROLE):
+        return not payload.get("join_late") and not payload.get("coordinating")
+    if kind is DraftKind.PREFERENCE:
+        lifts = payload.get("before") == "veto" and payload.get("level") != "veto"
+        return not lifts and not payload.get("ratings_move")
+    if kind is DraftKind.NEEDS:
+        return not payload.get("loosens")
+    if kind is DraftKind.FEEDBACK:
+        replaced = payload.get("replaced")
+        cook = bool(payload.get("cook_thanks") or payload.get("cook_note"))
+        if isinstance(replaced, Mapping):
+            cook = cook or bool(replaced.get("cook_thanks") or replaced.get("cook_note"))
+        return bool(payload.get("counted")) and not cook
+    return True
+
+
+def done_text(result: str) -> str:
+    """What a direct action did, from its Confirm's result (``Confirmed. You're in…``): the
+    result without its leading "Confirmed.", for its record card."""
+    return result.strip().removeprefix("Confirmed.").strip()
+
+
+def undone_text(result: str) -> str:
+    """What **Undo** did, from the result of the use case it ran, which starts "Confirmed."."""
+    rest = done_text(result)
+    return f"Undone. {rest}" if rest else "Undone."
+
+
 NAMES_PEOPLE = COORDINATING | {DraftKind.ITEM_EDIT, DraftKind.MEAL_LOG, DraftKind.MEAL_EDIT, DraftKind.MEAL_DELETE}
 """Kinds whose stored title and lines mark people by member ID (``assistant_coordinating.person``):
 the card names them, and the model reads their labels."""
@@ -139,7 +205,8 @@ class Draft:
     - offer: ``item_id``, ``mode``, ``slot``, ``day``, ``at`` (``HH:MM``), ``capacity``,
       ``outcome``
     - catalog: ``content`` (the cleaned catalog file) and ``dropped`` (names left out)
-    - answer: ``status``, and ``join_late`` for an In while voting
+    - answer: ``status``, ``join_late`` for an In while voting, and ``coordinating``, whether an
+      Out ends the member's coordinating
     - vote: ``proposal_id``, ``vote`` (False takes it back), and ``join_late``
     - suggestion: ``item_id``
     - role: ``role``, ``offered`` (False gives it up), and ``join_late``
@@ -148,13 +215,15 @@ class Draft:
       Confirm picks the saved guest by that name, or a new one
     - guest_answer: ``guest_id``, ``name``, and ``status`` or ``role`` with ``offered``
     - call: ``slot`` and ``day``; ``event_id`` is the called-off call it starts again, if any
-    - preference: ``target_type``, ``target_id``, ``name``, ``level``, and ``before``, the
-      level it changes
+    - preference: ``target_type``, ``target_id``, ``name``, ``level``, ``before``, the level it
+      changes, and ``ratings_move``, whether the member's ratings move the item
     - feedback: ``meal_id``, ``item_id``, the answers (``rating``, ``issues``, ``issue_note``,
-      ``cook_thanks``, ``cook_note``), and ``before``, when the member's feedback it replaces
-      was saved, or None
+      ``cook_thanks``, ``cook_note``), ``before``, when the member's feedback it replaces was
+      saved, or None, ``replaced``, those answers, and ``counted``, whether the member's feedback
+      on the meal counted toward badges already
     - away: ``first`` and ``last``, or ``clear``, and ``before``, the window it changes, or None
-    - needs: ``needs`` (dietary tag IDs, what they become) and ``before``, the IDs they change
+    - needs: ``needs`` (dietary tag IDs, what they become), ``before``, the IDs they change, and
+      ``loosens``, whether it takes one off
     - can_usually: ``after`` and ``before``, **I can usually** as ``cook``, ``pick_up``, and
       ``order`` flags
     - decide: ``proposal_id``, ``name``, ``mode``, ``tie`` (break the tie rather than lock), and
@@ -172,7 +241,9 @@ class Draft:
       ``item_id``, and ``people``
     - meal_delete: ``meal_id`` and ``shown``
 
-    ``event_id`` and ``run`` are the call the draft was made against, where there is one."""
+    ``event_id`` and ``run`` are the call the draft was made against, where there is one. A
+    direct action's record (#374) adds ``undo``: what **Undo** puts back, with ``after``, what the
+    action left, or None when nothing can be put back."""
 
     id: int
     household_id: int
@@ -190,9 +261,24 @@ class Draft:
     """When a Confirm or a Cancel used it."""
     confirmed_at: datetime | None = None
     """When a Confirm used it; None for a draft cancelled, or still waiting."""
+    direct: bool = False
+    """A direct action's record (#374): its action used it at once. ``payload["undo"]`` holds
+    what **Undo** puts back, or None when nothing can, such as for a first answer."""
+    undone_at: datetime | None = None
+    """When **Undo** used a direct action's record."""
 
     def expired(self, now: datetime) -> bool:
         return now >= self.expires_at
+
+    @property
+    def undoable(self) -> bool:
+        """A direct action that stored an **Undo**, used or not."""
+        return self.direct and self.confirmed_at is not None and self.payload.get("undo") is not None
+
+    def undo_open(self, now: datetime) -> bool:
+        """Whether **Undo** can still run: a direct action with one, not undone, within
+        ``UNDO_MINUTES`` of it."""
+        return self.undoable and self.undone_at is None and now < self.created_at + timedelta(minutes=UNDO_MINUTES)
 
 
 def expires_at(now: datetime) -> datetime:

@@ -935,6 +935,10 @@ fieldset.card > .button.block { margin-bottom: 0; }
 
 .draft { margin: 0; border-left: 4px solid var(--accent); }
 .draft-done { border-left-color: var(--line); }
+/* Something the assistant did at once (#374), with Undo while it works. */
+.draft-record { border-left-color: var(--ok); }
+.draft-record.draft-done { border-left-color: var(--line); }
+.draft-record .draft-lines:last-child { margin-bottom: 0; }
 .draft .alert { margin-bottom: 0.6rem; }
 .draft-done .alert { margin: 0; }
 /* A result's link takes the alert's color, which keeps 4.5:1 on its tint in both themes. */

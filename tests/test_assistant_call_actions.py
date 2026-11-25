@@ -45,6 +45,7 @@ from dinnerbell.services.assistant.tools import ToolResult, ToolSession
 from dinnerbell.services.database import Database, open_database
 from dinnerbell.services.errors import Forbidden, NotFound
 from dinnerbell.services.offers import OfferInput
+from tests.support.assistant import drafting
 from tests.support.calls import DONE_AT, OPENS, RESPOND_BY, House, dinner_id, furnish, make_house, nobody_coordinates
 from tests.support.clock import FakeClock
 from tests.support.fake_model import FakeModel, answer, tool_call
@@ -125,8 +126,10 @@ def fresh(member: Member, instance_label: str = "") -> ToolSession:
 async def tool(
     house: House, name: str, args: dict[str, Any], *, who: str = "Lee", private: bool = True, instance_label: str = ""
 ) -> ToolResult:
+    """The tool, as a message that acted at once all it may (#374): every call action drafts, as
+    in a channel thread. ``test_assistant_direct`` covers acting at once."""
     member = house[who]
-    session = fresh(member, instance_label)
+    session = drafting(fresh(member, instance_label))
     async with house.sessionmaker() as db:
         return await tools.run_tool(
             name, args, db=db, member=member, private=private, now=house.clock(), session=session

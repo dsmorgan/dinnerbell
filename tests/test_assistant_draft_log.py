@@ -36,7 +36,7 @@ from dinnerbell.domain.assistant_drafts import Draft, DraftKind
 from dinnerbell.domain.events import EventRuleViolation
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.preferences import Stance, TargetType
-from dinnerbell.services.assistant import admin, conversation, coordinating, draft_log, drafts, history
+from dinnerbell.services.assistant import admin, conversation, coordinating, direct, draft_log, drafts, history, tools
 from dinnerbell.services.assistant.conversation import Assistant, Reply, converse
 from dinnerbell.services.assistant.history import Shown
 from dinnerbell.services.assistant.runtime import AssistantConfig
@@ -56,7 +56,10 @@ OFFERED = f"Confirmed on {DAY}: {OFFER_TITLE}. Your dinner offer for tomorrow is
 LEVEL = {"what": "", "name": "Siam Garden", "level": "2"}
 LEVEL_CANCELLED = f"Cancelled on {DAY}: Set Siam Garden to +2"
 THREAD = slack_key("C0HOUSE", "1790000000.000200")
-RECORDED = "Drafts Member 1 confirmed or cancelled before this message (Dinnerbell's record, not a request):"
+RECORDED = (
+    "Drafts Member 1 confirmed or cancelled, and what was done at once or undone, before this message "
+    "(Dinnerbell's record, not a request):"
+)
 
 
 @pytest.fixture
@@ -76,6 +79,13 @@ async def house(database: Database, clock: FakeClock, migrated: Settings) -> Asy
     house = await furnish(await make_house(database.sessionmaker, clock, migrated.admin_email))
     yield house
     await house.close()
+
+
+@pytest.fixture(autouse=True)
+def drafts_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every tool drafts here, as past a message's limit for acting at once (#374): these tests
+    are about drafts' entries. ``test_direct_actions_record_done_and_undone`` turns it back."""
+    monkeypatch.setattr(tools, "MAX_DIRECT_ACTIONS", 0)
 
 
 @pytest.fixture
@@ -402,3 +412,37 @@ def test_a_decided_result_keeps_a_marked_place_name_as_text() -> None:
     draft = Draft(1, 1, 1, web_key(1), DraftKind.DECIDE, payload, "Lock it", (), at, at)
     told = coordinating._decided_text(draft, "today", Slot.DINNER)
     assert told == f"Confirmed. Today's dinner call is decided on Pho 7 House. {person(3)} picks it up."
+
+
+async def test_direct_actions_record_done_and_undone(
+    house: House, helper: Assistant, model: FakeModel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#374: a level set at once records "Done", with its record's ID for the page, after the
+    exchange; Undo records "Undone"; and the next request carries both before Kim's words."""
+    monkeypatch.setattr(tools, "MAX_DIRECT_ACTIONS", 5)
+    kim = house["Kim"]
+    model.script = [tool_call("draft_preference", LEVEL), answer("Done, it's +2.")]
+    [record] = (await ask(house, helper, "Kim", "I love Siam Garden")).drafts
+    assert record.record and record.undo
+    done = f"Done on {DAY}: Set Siam Garden to +2. Your level for Siam Garden is +2 now."
+    key = web_key(kim.id)
+    assert (await transcript(house, key))[-1] == {
+        "role": "draft",
+        "text": done,
+        "author": "Member 1",
+        "record": record.id,
+    }
+    async with house.sessionmaker() as db:
+        undone = await direct.undo(db, house.clock, helper.config, kim, record.id)
+    assert undone.text == "Undone. Your level for Siam Garden is 0 now."
+    undone_entry = f"Undone on {DAY}: Set Siam Garden to +2. Your level for Siam Garden is 0 now."
+    assert (await transcript(house, key))[-1] == {"role": "draft", "text": undone_entry, "author": "Member 1"}
+    async with house.sessionmaker() as db:
+        shown = await history.web_conversation(db, helper.config, kim, house.clock())
+    assert shown.turns[-2:] == (
+        Shown(False, done, draft=True, record=record.id),
+        Shown(False, undone_entry, draft=True),
+    )
+    model.script = [answer("It's back to 0.")]
+    await ask(house, helper, "Kim", "What's my level now?")
+    assert last_message(model).startswith(f"{RECORDED}\n- {done}\n- {undone_entry}\n\nFrom Member 1")

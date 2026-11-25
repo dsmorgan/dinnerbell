@@ -100,7 +100,7 @@ from dinnerbell.domain.events import (
     with_status,
     with_usual_offers,
 )
-from dinnerbell.domain.guests import GuestAction, answer_action
+from dinnerbell.domain.guests import GuestAction, answer_action, can_answer_for
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Member
 from dinnerbell.domain.notifications import CALL_OFF_SUPERSEDES, SUPERSEDED_BY_CALL_OFF
@@ -110,7 +110,7 @@ from dinnerbell.services import call_context as cc
 from dinnerbell.services import guests as guest_rules
 from dinnerbell.services.call_context import CallContext, load, locked_event, publish
 from dinnerbell.services.common import audit, is_unique_violation, require_admin
-from dinnerbell.services.errors import NotFound
+from dinnerbell.services.errors import Forbidden, NotFound
 from dinnerbell.services.preferences import group_preferences
 from dinnerbell.services.variety import household_today
 
@@ -272,6 +272,63 @@ async def offer_role(
         await ResponseRepository(db).save(actor.household_id, event.id, new, now)
         await _roster_changed(db, event, now)
         activity.action(db, "offer_role", event, actor, role=role.value, offered=offered)
+
+
+UNDO_ENDS_COORDINATING = (
+    "You coordinate this call now, so Undo can't answer you out. Change your answer on the call's page."
+)
+NO_SUCH_GUEST = "No such guest on this call."
+
+
+async def restore_answer(
+    db: AsyncSession,
+    actor: Member,
+    event_id: int,
+    *,
+    member_id: int,
+    status: Status,
+    offers: frozenset[RoleOffer],
+    run: int | None = None,
+    now: datetime,
+    expect: Callable[[Response | None], None],
+) -> None:
+    """**Undo** of an answer, a role, or an answer for a guest that the assistant made at once
+    (#374): set ``member_id``'s answer and role offers back to ``status`` and ``offers``, in one
+    transaction, as answering and tapping the role buttons would. ``member_id`` is the actor's,
+    or a guest's they answer for (``can_answer_for``). Under the lock, ``expect`` gets the answer
+    as it is now and raises when it isn't what the action left. A change of answer needs answers
+    open, as ``respond`` does; a change of offers alone, a late joiner's included, needs what
+    ``offer_role`` does. Refused rather than end the actor's coordinating, which tells the
+    household, and updates the call's messages, as either would."""
+    async with locked_event(db, actor.household_id, event_id, now) as event:
+        check_run(event, run)
+        ctx = await load(db, event)
+        current = ctx.response_of(member_id)
+        expect(current)
+        if member_id == actor.id:
+            await guest_rules.gate(db, event, actor, answer_action(status))
+            who, invited = actor, await _invited(db, event, actor)
+        else:
+            guest = ctx.members.get(member_id)
+            if guest is None or member_id not in ctx.invitations:
+                raise NotFound(NO_SUCH_GUEST)
+            if not can_answer_for(guest, actor, ctx.invitations[member_id]):
+                raise Forbidden("Only whoever invited them answers for a guest without Slack.")
+            who, invited = guest, True
+        moved = current is None or current.status is not status
+        if moved:
+            check_can_respond(event, who, invited=invited)
+        else:
+            check_can_offer_role(event, who, current, invited=invited)
+        base = with_status(current, member_id, status, now) if moved else current
+        if base is None:  # pragma: no cover - with_status always answers
+            raise NotFound(NO_SUCH_MEMBER)
+        new = replace(base, offers=frozenset() if status is Status.OUT else offers, usual_offers_done=True)
+        if drops_coordinating(event, new):
+            raise EventRuleViolation(UNDO_ENDS_COORDINATING, code="undo_coordinating")
+        await ResponseRepository(db).save(actor.household_id, event.id, new, now)
+        await _roster_changed(db, event, now)
+        activity.action(db, "undo_answer", event, actor, answer=status.value, guest=member_id != actor.id)
 
 
 async def toggle_role(db: AsyncSession, actor: Member, event_id: int, role: RoleOffer, *, now: datetime) -> bool:

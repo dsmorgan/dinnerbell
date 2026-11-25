@@ -158,17 +158,19 @@ async def answer(
     if mine is not None and mine.status is status and mine.away_until is None:
         raise ToolRefusal(NOTHING_TO_DO)
     base = with_status(mine, actor.id, status, now)
+    coordinating = drops_coordinating(event, base)
     lines = answer_lines(
         status,
         slot=event.slot,
         when=when,
         usual_offers=with_usual_offers(base, actor).offers != base.offers,
         withdraws_roles=status is Status.OUT and mine is not None and bool(mine.offers),
-        coordinating=drops_coordinating(event, base),
+        coordinating=coordinating,
     )
     word = {Status.IN: "In", Status.OUT: "Out", Status.MAYBE: "Maybe"}[status]
     title = f"Answer {word} for {when}'s {slot} call"
-    return DraftSpec(DraftKind.ANSWER, {"status": status.value, "join_late": False}, title, lines, event)
+    payload = {"status": status.value, "join_late": False, "coordinating": coordinating}
+    return DraftSpec(DraftKind.ANSWER, payload, title, lines, event)
 
 
 # Votes -------------------------------------------------------------------------------------------

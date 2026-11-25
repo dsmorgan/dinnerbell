@@ -39,6 +39,8 @@ class Shown:
     mine: bool
     text: str
     draft: bool = False
+    record: int | None = None
+    """For a direct action's entry (#374), its record's ID: the page shows its card here."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,12 +84,13 @@ async def web_conversation(db: AsyncSession, config: AssistantConfig, member: Me
 def _shown(turn: Turn, restore: Callable[[str, Mapping[int, str]], str], names: Mapping[int, str]) -> Shown:
     if turn.role == USER:
         return Shown(True, turn.text)
-    return Shown(False, restore(turn.text, names), draft=turn.role == DRAFT)
+    return Shown(False, restore(turn.text, names), draft=turn.role == DRAFT, record=turn.record)
 
 
 async def start_over(db: AsyncSession, config: AssistantConfig, member: Member, now: datetime) -> int:
-    """**Start over**: delete ``member``'s web conversation, and cancel the drafts still waiting
-    in it, so the page starts empty. Returns how many drafts it cancelled."""
+    """**Start over**: delete ``member``'s web conversation, cancel the drafts still waiting in
+    it, and delete the records of what the assistant did at once (#374), so the page starts
+    empty. What it did stays done. Returns how many drafts it cancelled."""
     await _require(db, config, member)
     key = web_key(member.id)
     repo = AssistantRepository(db)
@@ -95,6 +98,7 @@ async def start_over(db: AsyncSession, config: AssistantConfig, member: Member, 
         cancelled = 0
         for draft in await repo.drafts_waiting(member.household_id, member.id, key, now):
             cancelled += await repo.use_draft(member.household_id, draft.id, member.id, now)
+        await repo.delete_records(member.household_id, member.id, key)
         await repo.delete_conversation(member.household_id, key)
         await db.commit()
     log.info("assistant conversation started over", extra={"member_id": member.id, "drafts_cancelled": cancelled})

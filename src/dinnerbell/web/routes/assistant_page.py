@@ -8,7 +8,8 @@ as on every member page.
 
 Each form works without JavaScript. With HTMX, sending a message appends the exchange to the
 conversation (or replaces it, at Conversation hours 0, when nothing is kept), and Confirm or
-Cancel swaps the draft's card for its result. Where the browser can read a response as it
+Cancel swaps the draft's card for its result, as **Undo** does a direct action's record (#374).
+Where the browser can read a response as it
 arrives, ``app.js`` asks for the reply as it's written instead (``web.assistant_stream``, #370).
 A catalog draft's Confirm always loads the add-only import preview as a whole page. A reply shows
 a small, safe subset of Markdown (``web.reply_markdown``, #284): escaped first, never linked,
@@ -19,17 +20,20 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Form, Request
+from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response, StreamingResponse
 
 from dinnerbell.domain.assistant import web_key
 from dinnerbell.domain.assistant_drafts import PROPOSAL_CONFIRMED, day_words, offer_confirmed_text
 from dinnerbell.domain.events import EventRuleViolation, IllegalTransition, InvalidResponse, friendly
+from dinnerbell.domain.members import Member
 from dinnerbell.domain.offers import OfferPath
 from dinnerbell.services import activity
-from dinnerbell.services.assistant import drafts
+from dinnerbell.services.assistant import direct, drafts
 from dinnerbell.services.assistant import history as web_history
 from dinnerbell.services.assistant.call_drafts import ActionConfirmed
 from dinnerbell.services.assistant.conversation import MAX_MESSAGE_CHARS, Assistant, Reply, at_cap_notice, converse
@@ -61,7 +65,11 @@ bare 400. The textarea's ``maxlength`` is the service's limit."""
 SEND_TIMEOUT_MS = 120_000
 """How long the page waits for a reply. A message can take several model calls, well past the
 15 seconds base.html gives every other request."""
-NOTICES = {"cleared": "Started over. The conversation is gone, and its drafts are cancelled."}
+NOTICES = {
+    "cleared": (
+        "Started over. The conversation is gone, and its drafts are cancelled. What the assistant did stays done."
+    )
+}
 SERVICE_REFUSALS = (EventRuleViolation, InvalidResponse, Forbidden)
 
 
@@ -112,11 +120,13 @@ async def _page(
     member, now = principal.member, context.clock()
     if conversation is None:
         conversation = await web_history.web_conversation(db, assistant.config, member, now)
-    waiting = await drafts.waiting(db, member, web_key(member.id), now)
+    turns = (*conversation.turns, *latest)
+    records, cards = await _cards(db, member, turns, now)
     page: dict[str, Any] = {
         "conversation": conversation,
-        "turns": (*conversation.turns, *latest),
-        "drafts": waiting,
+        "turns": turns,
+        "records": records,
+        "drafts": cards,
         "notice": notice,
         "outcome": outcome,
         "cap_notice": await at_cap_notice(db, assistant.config, member, now),
@@ -131,6 +141,20 @@ async def assistant_page(
     request: Request, principal: SignedIn, context: Context, db: Database, notice: str = ""
 ) -> Response:
     return await _page(request, context, db, principal, notice=NOTICES.get(notice))
+
+
+async def _cards(
+    db: AsyncSession, member: Member, turns: Sequence[Shown], now: datetime
+) -> tuple[dict[int, DraftView], list[DraftView]]:
+    """The direct actions' records (#374) by ID, for the log to show where their entries are, and
+    the cards after the log: drafts still waiting, and records no entry shows whose **Undo**
+    still works, such as at Conversation hours 0, oldest first."""
+    key = web_key(member.id)
+    records = {r.id: r for r in await direct.records(db, member, key, now)}
+    shown = {t.record for t in turns if t.record is not None}
+    loose = [r for r in records.values() if r.id not in shown and r.undo]
+    waiting = await drafts.waiting(db, member, key, now)
+    return records, sorted([*waiting, *loose], key=lambda d: d.id)
 
 
 def _kept(after: WebConversation, asked: str, reply: Reply) -> bool:
@@ -164,7 +188,7 @@ async def send(
     if is_htmx(request):
         cards: tuple[DraftView, ...] | list[DraftView] = reply.drafts
         if not before.keeps_history:  # the exchange replaces what's shown, so keep the waiting cards
-            cards = await drafts.waiting(db, member, web_key(member.id), context.clock())
+            _, cards = await _cards(db, member, (), context.clock())
         response = await render(request, "_assistant_exchange.html", {"turns": exchange, "drafts": cards})
         if not before.keeps_history:
             response.headers["HX-Reswap"] = "innerHTML"
@@ -195,7 +219,8 @@ async def _streamed(
             if reply is None or before.keeps_history:
                 return None if reply is None else (reply, reply.drafts)
             # The exchange replaces what's shown, so keep the waiting cards.
-            return reply, await drafts.waiting(own, member, web_key(member.id), context.clock())
+            _, cards = await _cards(own, member, (), context.clock())
+            return reply, cards
 
     async def done(result: tuple[Reply, Sequence[DraftView]]) -> str:
         reply, cards = result
@@ -309,3 +334,50 @@ async def cancel(request: Request, principal: CSRFChecked, context: Context, db:
         return await _card(request, context, db, principal, draft_id, outcome, status_code=409)
     outcome = Outcome("Cancelled. Nothing changed.", True)
     return await _card(request, context, db, principal, draft_id, outcome, status_code=200, before=before)
+
+
+# Direct actions' records (#374) ----------------------------------------------------------------
+
+
+@router.post("/records/{record_id}/undo")
+async def undo(request: Request, principal: CSRFChecked, context: Context, db: Database, record_id: RowId) -> Response:
+    """**Undo** on something the assistant did at once: its inverse, through the same service as
+    the form. The record's card shows what Undo did, or its refusal, and loses **Undo** once used."""
+    assistant = await _require(request, db, principal)
+    try:
+        done = await direct.undo(db, context.clock, assistant.config, principal.member, record_id)
+    except (NotFound, DraftUnavailable) as exc:
+        outcome = _refused(request, principal, exc, str(exc), record_id)
+        return await _record_card(request, context, db, principal, record_id, outcome, status_code=409)
+    except IllegalTransition as exc:
+        outcome = _refused(request, principal, friendly(exc), str(friendly(exc)), record_id)
+        return await _record_card(request, context, db, principal, record_id, outcome, status_code=409)
+    except SERVICE_REFUSALS as exc:
+        outcome = _refused(request, principal, exc, str(exc), record_id)
+        return await _record_card(request, context, db, principal, record_id, outcome, status_code=409)
+    link = done.link or ((f"/events/{done.event_id}", "Open the call") if done.event_id is not None else None)
+    outcome = Outcome(done.text, True, link)
+    return await _record_card(request, context, db, principal, record_id, outcome, status_code=200)
+
+
+async def _record_card(
+    request: Request,
+    context: AppContext,
+    db: Database,
+    principal: Principal,
+    record_id: int,
+    outcome: Outcome,
+    *,
+    status_code: int,
+) -> Response:
+    """The record's card after **Undo**, for HTMX, or the page with the outcome on top. A record
+    that's gone, or someone else's, gets an empty card with the outcome."""
+    if not is_htmx(request):
+        return await _page(request, context, db, principal, outcome=outcome, status_code=status_code)
+    member = principal.member
+    found = await direct.records(db, member, web_key(member.id), context.clock())
+    record = next((r for r in found if r.id == record_id), None)
+    if record is None:
+        record = DraftView(id=record_id, kind="", title="", confirm_lines=(), record=True)
+    page = {"r": record, "outcome": outcome}
+    return await render(request, "_assistant_record.html", page, status_code=status_code)

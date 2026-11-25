@@ -45,6 +45,8 @@ def _draft(row: AssistantDraftRow) -> Draft:
         run=row.run,
         used_at=row.used_at,
         confirmed_at=row.confirmed_at,
+        direct=row.direct,
+        undone_at=row.undone_at,
     )
 
 
@@ -186,7 +188,10 @@ class AssistantRepository:
         run: int | None,
         now: datetime,
         expires_at: datetime,
+        direct: bool = False,
     ) -> Draft:
+        """Store a draft, or with ``direct``, a direct action's record before its action uses it
+        (#374). Neither ever counts as waiting for Confirm."""
         row = AssistantDraftRow(
             household_id=household_id,
             member_id=member_id,
@@ -200,6 +205,7 @@ class AssistantRepository:
             created_at=now,
             expires_at=expires_at,
             used_at=None,
+            direct=direct,
         )
         self._session.add(row)
         await self._session.flush()
@@ -223,10 +229,83 @@ class AssistantRepository:
                 AssistantDraftRow.conversation_key == key,
                 AssistantDraftRow.used_at.is_(None),
                 AssistantDraftRow.expires_at > now,
+                AssistantDraftRow.direct.is_(False),
             )
             .order_by(AssistantDraftRow.id)
         )
         return [_draft(row) for row in rows]
+
+    async def records(self, household_id: int, member_id: int, key: str, now: datetime) -> list[Draft]:
+        """``member_id``'s direct actions in the conversation ``key`` (#374) that their action
+        used and the purge hasn't deleted, oldest first."""
+        rows = await self._session.scalars(
+            select(AssistantDraftRow)
+            .where(
+                AssistantDraftRow.household_id == household_id,
+                AssistantDraftRow.member_id == member_id,
+                AssistantDraftRow.conversation_key == key,
+                AssistantDraftRow.direct.is_(True),
+                AssistantDraftRow.confirmed_at.is_not(None),
+                AssistantDraftRow.expires_at > now,
+            )
+            .order_by(AssistantDraftRow.id)
+        )
+        return [_draft(row) for row in rows]
+
+    async def keep_record(
+        self, household_id: int, record_id: int, *, payload: Mapping[str, Any], lines: Sequence[str]
+    ) -> None:
+        """Store what a direct action did (#374): its record's ``lines``, and ``payload`` with
+        what **Undo** puts back."""
+        await self._session.execute(
+            update(AssistantDraftRow)
+            .where(AssistantDraftRow.household_id == household_id, AssistantDraftRow.id == record_id)
+            .values(payload=dict(payload), lines=list(lines))
+            .execution_options(synchronize_session=False)
+        )
+
+    async def mark_undone(
+        self, household_id: int, record_id: int, member_id: int, now: datetime, since: datetime
+    ) -> bool:
+        """Mark a direct action undone (#374), if it's ``member_id``'s, has an Undo, isn't undone,
+        and was made after ``since``. Returns whether it was: of two at once, only the first
+        finds it."""
+        result = await self._session.execute(
+            update(AssistantDraftRow)
+            .where(
+                AssistantDraftRow.household_id == household_id,
+                AssistantDraftRow.id == record_id,
+                AssistantDraftRow.member_id == member_id,
+                AssistantDraftRow.direct.is_(True),
+                AssistantDraftRow.confirmed_at.is_not(None),
+                AssistantDraftRow.undone_at.is_(None),
+                AssistantDraftRow.created_at > since,
+            )
+            .values(undone_at=now)
+            .execution_options(synchronize_session=False)
+        )
+        return int(getattr(result, "rowcount", 0) or 0) == 1
+
+    async def delete_draft(self, household_id: int, draft_id: int) -> None:
+        """Delete one row: a direct action's record whose action was refused (#374)."""
+        await self._session.execute(
+            delete(AssistantDraftRow).where(
+                AssistantDraftRow.household_id == household_id, AssistantDraftRow.id == draft_id
+            )
+        )
+
+    async def delete_records(self, household_id: int, member_id: int, key: str) -> int:
+        """Delete ``member_id``'s direct actions' records in the conversation ``key``, for
+        **Start over** (#374): what they did stays done. Returns how many."""
+        result = await self._session.execute(
+            delete(AssistantDraftRow).where(
+                AssistantDraftRow.household_id == household_id,
+                AssistantDraftRow.member_id == member_id,
+                AssistantDraftRow.conversation_key == key,
+                AssistantDraftRow.direct.is_(True),
+            )
+        )
+        return int(getattr(result, "rowcount", 0) or 0)
 
     async def waiting_drafts(self, household_id: int, member_id: int, now: datetime) -> int:
         """How many of ``member_id``'s drafts still wait for Confirm."""
@@ -238,6 +317,7 @@ class AssistantRepository:
                 AssistantDraftRow.member_id == member_id,
                 AssistantDraftRow.used_at.is_(None),
                 AssistantDraftRow.expires_at > now,
+                AssistantDraftRow.direct.is_(False),
             )
         )
         return int(found or 0)
