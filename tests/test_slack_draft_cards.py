@@ -1002,4 +1002,11 @@ async def test_an_undo_that_something_moved_keeps_the_record_and_says_why(
     [update] = updated(slack)
     assert update["text"] == "Done: Answer Maybe for today's dinner call"
     assert "changed since the assistant did it" in card_text(update)
-    assert "actions" not in [b["type"] for b in update["blocks"]]
+    [record] = await draft_rows(house)
+    assert card_values(update) == {ids.DRAFT_UNDO: str(record.id)}  # it may work again, as on the web
+    async with house.sessionmaker() as db:
+        await calls.respond(db, house["Kim"], event_id, Status.MAYBE, now=house.clock())
+    slack.fake.clear()
+    await tap_dm(slack, "Kim", ids.DRAFT_UNDO, update)
+    [undone] = updated(slack)
+    assert undone["text"].startswith("Undone:") and "actions" not in [b["type"] for b in undone["blocks"]]

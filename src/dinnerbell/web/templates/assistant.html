@@ -4,7 +4,7 @@
 {% block title %}Assistant{% endblock %}
 {% block content %}
 <h1>Assistant</h1>
-<p class="muted">Ask in plain words, such as "something we haven't had in a month" or "tacos at 7, I'll cook." Only you see this conversation. Your answers, votes, roles, and changes to your own preferences happen at once, and you can undo them for 30 minutes. Anything else is a draft: nothing changes until you tap <strong>Confirm</strong>.</p>
+<p class="muted">Ask in plain words, such as "something we haven't had in a month" or "tacos at 7, I'll cook." Only you see this conversation. Most of your answers, votes, and roles, and some changes to your own preferences, happen at once, and you can undo them for 30 minutes. The rest are drafts: nothing changes until you tap <strong>Confirm</strong>.</p>
 {% if notice %}<p class="alert ok" role="status">{{ notice }}</p>{% endif %}
 {% if outcome %}<p class="alert assistant-outcome {{ 'ok' if outcome.ok else 'error' }}" role="{{ 'status' if outcome.ok else 'alert' }}">{{ outcome.text }}{% if outcome.link %} <a href="{{ outcome.link[0] }}">{{ outcome.link[1] }}</a>{% endif %}</p>{% endif %}
 

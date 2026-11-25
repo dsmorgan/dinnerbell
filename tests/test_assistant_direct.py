@@ -7,7 +7,7 @@ that stay drafts stay drafts. The model is ``FakeModel`` where a conversation ru
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import timedelta
 from typing import Any
 
@@ -16,17 +16,21 @@ from sqlalchemy import select
 
 from dinnerbell.config import Settings
 from dinnerbell.db.feedback import FeedbackRepository
+from dinnerbell.db.meals import household_settings
 from dinnerbell.db.models import AssistantDraftRow
+from dinnerbell.db.repositories import HouseholdRepository
 from dinnerbell.domain.assistant import AssistantSettings, web_key
 from dinnerbell.domain.assistant_drafts import DIRECT_KINDS, DraftKind, acts_directly
 from dinnerbell.domain.catalog import TagKind
 from dinnerbell.domain.events import Details, EventRuleViolation, EventState, RoleOffer, Status
 from dinnerbell.domain.feedback import FeedbackInput, Rating
 from dinnerbell.domain.guests import GuestInput
+from dinnerbell.domain.meals import MealInput, Slot
 from dinnerbell.domain.members import Capabilities
 from dinnerbell.domain.preferences import Stance, TargetType
-from dinnerbell.services import away, calls, feedback, guests, preferences
-from dinnerbell.services.assistant import admin, direct, drafts, tools
+from dinnerbell.domain.schedule import FEEDBACK_KEY
+from dinnerbell.services import away, calls, feedback, guests, meals, preferences
+from dinnerbell.services.assistant import admin, call_drafts, direct, drafts, own_drafts, tools
 from dinnerbell.services.assistant.conversation import AT_CAP, Assistant, converse
 from dinnerbell.services.assistant.drafts import TURNED_OFF, DraftUnavailable
 from dinnerbell.services.assistant.runtime import AssistantConfig
@@ -521,17 +525,204 @@ async def test_an_action_its_use_case_refuses_leaves_no_record(house: House, mon
     assert await rows(house) == []
 
 
-async def test_an_undo_that_cant_be_stored_leaves_a_record_without_undo(
+async def test_a_record_whose_words_cant_be_kept_still_counts_as_done(
     house: House, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The level is set already, so a failure working out its Undo is logged, and the record
-    has none, rather than an error that invites setting it again."""
+    """The level and its Undo commit together; a failure saving the record's words afterward is
+    logged, and the model still hears it's done, with an Undo that works."""
+    real = direct.AssistantRepository.keep_record
+    calls_made: list[int] = []
 
-    async def broken(*args: Any, **kwargs: Any) -> Any:
-        raise RuntimeError("the database went away")
+    async def second_fails(self: Any, *args: Any, **kwargs: Any) -> None:
+        calls_made.append(1)
+        if len(calls_made) == 2:
+            raise RuntimeError("the database went away")
+        await real(self, *args, **kwargs)
 
-    monkeypatch.setattr(direct, "_undo", broken)
+    monkeypatch.setattr(direct.AssistantRepository, "keep_record", second_fails)
     result = await tool(house, "draft_preference", {"what": "", "name": "Siam Garden", "level": "1"})
-    assert result.content.startswith("Done at once")
+    assert result.content.startswith("Done at once") and "Undo for" in result.content
     [record] = await rows(house)
-    assert record.payload["undo"] is None and await level(house, "Sam", "Siam Garden") == Stance(score=1)
+    assert record.payload["undo"]["level"] == "0" and await level(house, "Sam", "Siam Garden") == Stance(score=1)
+    monkeypatch.undo()
+    assert (await undo(house, "Sam", record.id)).text == "Undone. Your level for Siam Garden is 0 now."
+
+
+# Telling nobody new: answers that would close early (#374 review) ---------------------------------
+
+
+@pytest.mark.parametrize(
+    ("others", "first", "word"),
+    [
+        # Everyone else is out and Sam a maybe: his out leaves nobody in, so the next tick
+        # abandons the call and says so.
+        ({"Alex": Status.OUT, "Kim": Status.OUT, "Lee": Status.OUT}, Status.MAYBE, "out"),
+        # Kim is in to pick up, everyone else out, and Sam hasn't answered: his in completes the
+        # answers, so ten quiet minutes later the scheduler closes them and posts.
+        ({"Alex": Status.OUT, "Kim": Status.IN, "Lee": Status.OUT}, None, "in"),
+    ],
+)
+async def test_an_answer_that_completes_the_calls_answers_drafts_and_says_why(
+    house: House, others: dict[str, Status], first: Status | None, word: str
+) -> None:
+    event_id = await collecting(house)
+    for name, status in others.items():
+        await act(house, calls.respond, house[name], event_id, status)
+    await act(house, calls.offer_role, house["Kim"], event_id, RoleOffer.PICKUP, True)
+    if first is not None:
+        await act(house, calls.respond, house["Sam"], event_id, first)
+    kinds = await house.kinds()
+    result = await tool(house, "draft_answer", DINNER | {"answer": word})
+    assert result.content.startswith("Draft ") and result.content.endswith(direct.CLOSES_EARLY)
+    assert not any(r.direct for r in await rows(house))
+    for minutes in (0, 11):
+        house.clock.advance(timedelta(minutes=minutes))
+        await house.tick()
+    assert (await house.event(event_id)).state is EventState.COLLECTING
+    assert await house.kinds() == kinds
+
+
+async def test_undo_never_completes_the_calls_answers_either(house: House) -> None:
+    """Sam answered maybe at once; Kim, Alex, and Lee answer out meanwhile. Putting his out back
+    would leave nobody in, so Undo is refused and the call keeps waiting."""
+    event_id = await collecting(house)
+    await act(house, calls.respond, house["Sam"], event_id, Status.OUT)
+    await tool(house, "draft_answer", DINNER | {"answer": "maybe"})
+    [record] = await rows(house)
+    for name in ("Alex", "Kim", "Lee"):
+        await act(house, calls.respond, house[name], event_id, Status.OUT)
+    with pytest.raises(EventRuleViolation, match="close the call's answers early"):
+        await undo(house, "Sam", record.id)
+    assert await answer_of(house, event_id, house["Sam"].id) == (Status.MAYBE, frozenset())
+
+
+async def test_an_out_that_would_end_coordinating_is_caught_under_the_lock(house: House) -> None:
+    """The draft was worked out before Sam claimed coordinating; the check under the call's lock
+    finds he coordinates now, so it drafts, and no record is left."""
+    event_id = await collecting(house, "Sam")
+    async with house.sessionmaker() as db:
+        spec = await call_drafts.answer(
+            db, house["Sam"], await house.event(event_id), Status.OUT, today=house.clock().date(), now=house.clock()
+        )
+    assert spec.payload["coordinating"] is False
+    await act(house, calls.claim_coordinator, house["Sam"], event_id)
+    async with house.sessionmaker() as db:
+        with pytest.raises(direct.DraftInstead, match="coordinates that call now"):
+            await direct.act(db, house["Sam"], web_key(house["Sam"].id), spec, now=house.clock())
+    assert await rows(house) == []
+    assert await answer_of(house, event_id, house["Sam"].id) == (Status.IN, frozenset())
+
+
+# Undo puts back the whole answer (#374 review) -----------------------------------------------------
+
+
+async def whole_answer(house: House, event_id: int, member_id: int) -> Any:
+    async with house.sessionmaker() as db:
+        found = (await load(db, await house.event(event_id))).response_of(member_id)
+    return None if found is None else replace(found, updated_at=None)
+
+
+async def test_undo_puts_an_away_out_back_as_the_windows(house: House) -> None:
+    """Sam's away window answered him out; he says he's in after all, then undoes it. His out is
+    the window's again, so "I'm back" takes it away as it would have."""
+    event_id = await collecting(house)
+    day = (await house.event(event_id)).day
+    await act(house, away.set_my_away, house["Sam"], day, day + timedelta(days=2))
+    sam = house["Sam"].id
+    before = await whole_answer(house, event_id, sam)
+    assert before is not None and before.away_until is not None
+    await tool(house, "draft_answer", DINNER | {"answer": "in"})
+    [record] = await rows(house)
+    await undo(house, "Sam", record.id)
+    assert await whole_answer(house, event_id, sam) == before
+    await act(house, away.clear_my_away, await house.refresh("Sam"))
+    assert await answer_of(house, event_id, sam) is None  # the window's out goes with the window
+
+
+async def test_undo_puts_back_a_maybe_whose_usual_offers_havent_had_their_turn(house: House) -> None:
+    """Sam usually picks up. He's a maybe; answering in at once turns that offer on, its one
+    turn. Undo makes him the maybe he was, offers and turn and when he answered included, so
+    answering in again later turns it on again."""
+    settings = preferences.MySettings(Capabilities(can_pickup=True), mute_dm_reminders=False, feedback_reminder=False)
+    await act(house, preferences.update_my_settings, house["Sam"], settings)
+    sam = await house.refresh("Sam")
+    event_id = await collecting(house)
+    await act(house, calls.respond, sam, event_id, Status.MAYBE)
+    before = await whole_answer(house, event_id, sam.id)
+    house.clock.advance(timedelta(minutes=1))
+    await tool(house, "draft_answer", DINNER | {"answer": "in"})
+    done = await whole_answer(house, event_id, sam.id)
+    assert done.offers == {RoleOffer.PICKUP} and done.usual_offers_done
+    [record] = await rows(house)
+    await undo(house, "Sam", record.id)
+    assert await whole_answer(house, event_id, sam.id) == before
+    await act(house, calls.respond, sam, event_id, Status.IN)
+    assert await answer_of(house, event_id, sam.id) == (Status.IN, frozenset({RoleOffer.PICKUP}))
+
+
+# A level's ratings (#374 review) ------------------------------------------------------------------
+
+
+async def rate_siam(house: House, rating: Rating = Rating.LOVED) -> None:
+    """Sam ate Siam Garden for lunch today and rates it."""
+    lunch = MealInput(house.clock().date(), Slot.LUNCH, house.items["Siam Garden"].id, frozenset({house["Sam"].id}))
+    meal = await act(house, meals.log_meal, house["Sam"], lunch, today=house.clock().date())
+    await act(house, feedback.give, house["Sam"], meal.id, FeedbackInput(rating=rating))
+
+
+async def test_a_level_on_an_item_sams_ratings_move_drafts_even_with_feedback_off(house: House) -> None:
+    """With Feedback at 0, ratings move no score and Preferences shows no note, but a level still
+    stops them for good once Feedback is on, so it's a draft."""
+    async with house.sessionmaker() as db:
+        stored = await household_settings(db, house.household.id)
+        await HouseholdRepository(db).update_settings(house.household.id, stored | {FEEDBACK_KEY: 0})
+        await db.commit()
+    await rate_siam(house)
+    result = await tool(house, "draft_preference", {"what": "", "name": "Siam Garden", "level": "1"})
+    assert result.content.startswith("Draft ")
+    [row] = await rows(house)
+    assert not row.direct and row.payload["ratings_move"] is True
+
+
+async def test_a_rating_saved_meanwhile_is_caught_under_the_lock(house: House) -> None:
+    async with house.sessionmaker() as db:
+        spec = await own_drafts.stance_draft(
+            db, house["Sam"], "", "Siam Garden", Stance(score=1), today=house.clock().date()
+        )
+    await rate_siam(house)
+    async with house.sessionmaker() as db:
+        with pytest.raises(direct.DraftInstead, match="ratings of it count now"):
+            await direct.act(db, house["Sam"], web_key(house["Sam"].id), spec, now=house.clock())
+    assert await rows(house) == []
+
+
+async def test_undo_of_a_level_lets_a_rating_saved_since_count(house: House) -> None:
+    """Sam sets Siam Garden to +1 at once, then rates it, which counts, as a rating after a level
+    does. Undo puts back that he never set a level on it, rather than setting one now, which
+    would stop that rating for good (FR-55)."""
+    await tool(house, "draft_preference", {"what": "", "name": "Siam Garden", "level": "1"})
+    [record] = await rows(house)
+    house.clock.advance(timedelta(minutes=1))
+    await rate_siam(house)
+    today = house.clock().date()
+    async with house.sessionmaker() as db:
+        assert await preferences.my_ratings_move(db, house["Sam"], house.items["Siam Garden"].id, today=today)
+    house.clock.advance(timedelta(minutes=1))
+    await undo(house, "Sam", record.id)
+    async with house.sessionmaker() as db:
+        assert await preferences.my_ratings_move(db, house["Sam"], house.items["Siam Garden"].id, today=today)
+        assert await preferences.my_item_edit(db, house["Sam"], house.items["Siam Garden"].id) is None
+
+
+def test_a_record_with_no_undo_says_why_for_whom() -> None:
+    assert direct._no_undo_line(DraftKind.ANSWER, {}) == direct.NO_UNDO
+    assert direct._no_undo_line(DraftKind.GUEST_ANSWER, {"name": "Bea"}).startswith("It was Bea's first answer")
+    assert direct._no_undo_line(DraftKind.AWAY, {}) == direct.NO_UNDO_SAVED
+
+
+async def test_a_coordinators_maybe_says_it_can_still_end_coordinating(house: House) -> None:
+    event_id = await collecting(house, "Sam")
+    await act(house, calls.claim_coordinator, house["Sam"], event_id)
+    await tool(house, "draft_answer", DINNER | {"answer": "maybe"})
+    [record] = await rows(house)
+    assert record.direct and direct.MAYBE_COORDINATING in record.lines

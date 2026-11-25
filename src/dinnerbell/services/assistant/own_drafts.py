@@ -221,8 +221,10 @@ async def stance_draft(
         "level": after.level,
         "before": before.level,
         # A level on an item stops the member's earlier ratings moving it for good (FR-55), so
-        # Undo couldn't put that back: such a level stays a draft (#374).
-        "ratings_move": target.target_type is TargetType.ITEM and target.target_id in mine.rating_notes,
+        # Undo couldn't put that back: such a level stays a draft (#374). Any rating counted since
+        # their last level, whatever the Feedback setting, and however small its effect.
+        "ratings_move": target.target_type is TargetType.ITEM
+        and await preference_service.my_ratings_move(db, actor, target.target_id, today=today),
     }
     return DraftSpec(DraftKind.PREFERENCE, payload, stance_title(target.name, after), lines, None)
 

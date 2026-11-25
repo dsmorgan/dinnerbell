@@ -280,7 +280,7 @@ async def _item(db: AsyncSession, actor: Member, name: str) -> CatalogItem:
     return found[0]
 
 
-def _details(ctx: CallContext, mine: Response | None, member_id: int, add: int) -> Details:
+def details_with(ctx: CallContext, mine: Response | None, member_id: int, add: int) -> Details:
     """The member's Details with ``add`` among their suggestions, everything else as it is."""
     theirs = [s for s in ctx.suggestions if s.member_id == member_id]
     return Details(
@@ -305,7 +305,7 @@ async def suggestion(
     if any(s.member_id == actor.id and s.item_id == item.id for s in ctx.suggestions):
         raise ToolRefusal(NOTHING_TO_DO)
     active = [i.id for i in ctx.items.values() if i.active]
-    check_details(_details(ctx, mine, actor.id, item.id), active_item_ids=active)
+    check_details(details_with(ctx, mine, actor.id, item.id), active_item_ids=active)
     when, slot = _call_words(event, today)
     lines = suggestion_lines(item.name, slot=event.slot, when=when, counts_in=mine is None)
     title = f"Suggest {item.name} for {when}'s {slot} call"
@@ -583,7 +583,7 @@ async def confirm(db: AsyncSession, actor: Member, draft: Draft, *, today: date,
         return ActionConfirmed(event.id, f"Confirmed. You took back your vote for {name}.")
     if draft.kind is DraftKind.SUGGESTION:
         ctx = await load(db, event)
-        details = _details(ctx, ctx.response_of(actor.id), actor.id, int(payload["item_id"]))
+        details = details_with(ctx, ctx.response_of(actor.id), actor.id, int(payload["item_id"]))
         await calls.save_details(db, actor, event.id, details, run=run, now=now)
         return ActionConfirmed(event.id, f"Confirmed. {payload['name']} is one of your suggestions.")
     if draft.kind is DraftKind.ROLE:

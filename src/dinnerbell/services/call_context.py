@@ -57,6 +57,7 @@ from dinnerbell.domain.events import (
     counted_votes,
     coverage,
     due_step,
+    early_close_at,
     head_count,
     late_people,
     owed_since,
@@ -818,6 +819,22 @@ async def step_inputs(db: AsyncSession, event: Event) -> StepInputs:
     invited = await InvitationRepository(db).for_event(event.household_id, event.id)
     guests = [g for g in invited if g in members and members[g].active]
     return StepInputs(cutoff, responses, active, coverage(responses, members), guests)
+
+
+async def closes_early_with(db: AsyncSession, event: Event, changed: Response, now: datetime) -> bool:
+    """Whether a collecting call would close its answers early once ``changed`` is saved now
+    (FR-56, ``early_close_at``): every member has answered, so the scheduler closes them, at
+    once or after the quiet spell, and posts what that posts. For the assistant acting at once
+    (#374), which tells nobody new: an answer that leaves the call so isn't done at once, even
+    when another answer had it so already, since what's posted would then include this one. In
+    the caller's write transaction, so the answers can't change meanwhile."""
+    if event.is_offer or event.state is not EventState.COLLECTING:
+        return False
+    i = await step_inputs(db, event)
+    members = {m.id: m for m in await MemberRepository(db).list(event.household_id)}
+    saved = replace(changed, updated_at=now, responded_at=changed.responded_at or now)
+    after = [r for r in i.responses if r.member_id != changed.member_id] + [saved]
+    return early_close_at(event, after, i.active_member_ids, coverage(after, members), i.guest_ids) is not None
 
 
 async def due(db: AsyncSession, event: Event, now: datetime) -> Step | None:

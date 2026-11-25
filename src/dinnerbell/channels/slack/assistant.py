@@ -56,7 +56,7 @@ import logging
 import re
 import unicodedata
 from collections.abc import Awaitable, Callable, Coroutine, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any
 
 from slack_bolt.async_app import AsyncApp
@@ -1167,8 +1167,9 @@ class SlackAssistant:
 
     async def _undo_tap(self, member: Member, source: Source, record_id: int, tap: Tap, settled: str) -> Mrkdwn | None:
         """**Undo** on a record card (#374), in the tapper's DM: ``direct.undo`` checks the record
-        is theirs and still undoable. The card stays a record, without **Undo** once it's used,
-        with what Undo did or its refusal under it, through ``chat.update``. A double tap's
+        is theirs and still undoable. The card stays a record, with what Undo did or its refusal
+        under it, through ``chat.update``, and keeps **Undo** only while it still works, as the
+        web's card does. A double tap's
         second finds the first's card in place and leaves it."""
         async with self.draft_lock:
             async with self.sessionmaker() as db:
@@ -1190,7 +1191,9 @@ class SlackAssistant:
                     activity.refused(refusal, str(refusal), member, action=ids.DRAFT_UNDO)
                     found = await direct.record(db, member, record_id, self.assistant.clock())
                     note = safe_reply(str(refusal))
-                    shown = record_card(replace(found, undo=False), note) if found else result_card(note)
+                    # As on the web: the record as it is now, so Undo stays while it still works,
+                    # such as after "that changed since", and goes once it can't.
+                    shown = record_card(found, note) if found else result_card(note)
             replaced, fallback = await self._replace_card(source, tap, shown, member)
             if replaced and refusal is None:
                 self.settled.add(settled)
