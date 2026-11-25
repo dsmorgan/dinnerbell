@@ -9,14 +9,16 @@ header, HTMX and the plain form post get what they always got.
 ``WebStream`` is a ``services.assistant.streaming.ReplyStream``: ``CallText`` holds each call's
 first lines, drops or marks a tool round's text, and puts names back, as for Slack. Its methods
 only put onto a queue, so they never block the model's events. The answer runs in a task of its
-own (``start``) with its own database session, never the request's: when the member leaves the
-page, Starlette cancels only the response, and the reply still finishes and is stored.
+own (``Answers.start``) with its own database session, never the request's: when the member
+leaves the page, Starlette cancels only the response, and the reply still finishes and is stored.
+Shutdown cancels what's still running (``Answers.settle``) before the database closes.
 
 The events, in order:
 
 - ``start``: the member's message and a hidden placeholder for the reply. ``replace`` says the
   exchange replaces the turns shown (Conversation hours 0).
-- ``text``: the current model call's text so far, rendered as the finished reply is.
+- ``text``: the current model call's text so far, rendered as the finished reply is, at most
+  every ``TEXT_SECONDS``.
 - ``discard``: the call whose text was shown calls tools after all, so that text isn't the reply.
 - ``done``: the reply and its draft cards, as the HTMX response has them. It always replaces
   what was shown, so the page ends with what's stored and what a reload shows.
@@ -33,6 +35,7 @@ import enum
 import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
+from dataclasses import dataclass
 from typing import Any
 
 from fastapi import Request
@@ -54,9 +57,22 @@ such as Cloudflare's 125 seconds."""
 HEARTBEAT = ": still working\n\n"
 
 
+TEXT_SECONDS = 0.25
+"""The least time between two ``text`` events: each carries the whole of the call's text so far,
+so a client that reads slowly gets about 4 a second, never one per line."""
+
+
 class _Mark(enum.Enum):
     DISCARD = "discard"
     END = "end"
+
+
+@dataclass(frozen=True, slots=True)
+class _Text:
+    """The call's text changed. ``events`` reads the text when it sends, so a reply queues one of
+    these at a time, never a copy of its text per line."""
+
+    call: int
 
 
 def wants_stream(request: Request) -> bool:
@@ -74,53 +90,88 @@ class WebStream:
     when the member leaves the page, nothing more is queued."""
 
     def __init__(self) -> None:
-        self.queue: asyncio.Queue[str | _Mark] = asyncio.Queue()
+        self.queue: asyncio.Queue[_Text | _Mark] = asyncio.Queue()
         self.listening = True
-        self._shown = ""
+        self.call = 0
+        """Counts each call's text, so text queued for one call never shows as another's."""
+        self.shown = ""
         """The current call's text so far, as ``lines`` gave it."""
+        self._queued = False
+        """A ``_Text`` for this call waits in the queue."""
 
     # ReplyStream ---------------------------------------------------------------------------------
 
     def call_started(self, drafts: int) -> None:
-        self._shown = ""  # a call's text never joins another's
+        self._new_call()  # a call's text never joins another's
 
     def lines(self, text: str) -> None:
-        self._shown += text
-        self._put(self._shown)
+        self.shown += text
+        if not self._queued:
+            self._queued = True
+            self._put(_Text(self.call))
 
     def tool_round(self) -> None:
-        self._shown = ""
+        self._new_call()
         self._put(_Mark.DISCARD)
 
     # ---------------------------------------------------------------------------------------------
+
+    def take(self, item: _Text) -> str | None:
+        """The text to send for ``item``: all of its call's text so far, or None once another
+        call's has begun or there's none."""
+        if item.call != self.call:
+            return None
+        self._queued = False
+        return self.shown or None
 
     def end(self) -> None:
         """The answer is over, with or without a reply."""
         self._put(_Mark.END)
 
-    def _put(self, item: str | _Mark) -> None:
+    def _new_call(self) -> None:
+        self.call += 1
+        self.shown = ""
+        self._queued = False
+
+    def _put(self, item: _Text | _Mark) -> None:
         if self.listening:
             self.queue.put_nowait(item)
 
 
-_running: set[asyncio.Task[Any]] = set()
-"""Answers in flight: the loop keeps only a weak reference to a task."""
+class Answers:
+    """The web's answers in flight, one set per app. The loop keeps only a weak reference to a
+    task, so this holds them; at shutdown, ``settle`` cancels what's left before the database and
+    the model client close."""
 
+    def __init__(self) -> None:
+        self.tasks: set[asyncio.Task[Any]] = set()
 
-def start[T](work: Coroutine[Any, Any, T], stream: WebStream, member_id: int) -> asyncio.Task[T]:
-    """Run ``work``, the answer, in a task of its own, so the response going away doesn't cancel
-    it. ``stream`` hears when it ends; a failure is logged here, whether or not anyone listens."""
-    task = asyncio.create_task(work)
-    _running.add(task)
+    def start[T](self, work: Coroutine[Any, Any, T], stream: WebStream, member_id: int) -> asyncio.Task[T]:
+        """Run ``work``, the answer, in a task of its own, so the response going away doesn't
+        cancel it. ``stream`` hears when it ends; a failure is logged here, with the member's ID
+        only, whether or not anyone listens."""
+        task = asyncio.create_task(work)
+        self.tasks.add(task)
 
-    def finished(done: asyncio.Task[T]) -> None:
-        _running.discard(done)
-        stream.end()
-        if not done.cancelled() and (exc := done.exception()) is not None:
-            log.error("the assistant broke answering on the web", exc_info=exc, extra={"member_id": member_id})
+        def finished(done: asyncio.Task[T]) -> None:
+            self.tasks.discard(done)
+            stream.end()
+            if not done.cancelled() and (exc := done.exception()) is not None:
+                log.error("the assistant broke answering on the web", exc_info=exc, extra={"member_id": member_id})
 
-    task.add_done_callback(finished)
-    return task
+        task.add_done_callback(finished)
+        return task
+
+    async def settle(self, limit: float) -> None:
+        """At shutdown: cancel every answer still running, and wait up to ``limit`` seconds
+        for each to unwind. A cancelled model call keeps its reservation, settled before its task
+        ends (``conversation._shielded``), so this waits for that write too."""
+        pending = set(self.tasks)
+        for task in pending:
+            task.cancel()
+        if pending:
+            log.info("assistant answers on the web cancelled at shutdown", extra={"answers": len(pending)})
+            await asyncio.wait(pending, timeout=limit)
 
 
 async def events[T](
@@ -132,35 +183,30 @@ async def events[T](
     done: Callable[[T], Awaitable[str]],
 ) -> AsyncIterator[str]:
     """The response body: ``start`` with ``pending`` (the member's message and the reply's
-    placeholder), the shown text as it changes, and then ``done`` with what ``done`` renders
-    from the task's result, or ``error``. Pieces that queue up while one is sent go as one."""
+    placeholder), the shown text as it changes, at most every ``TEXT_SECONDS``, and then
+    ``done`` with what ``done`` renders from the task's result, or ``error``."""
+    loop = asyncio.get_running_loop()
+    sent_at = -TEXT_SECONDS
     try:
         yield event("start", {"html": pending, "replace": replace})
-        ended = False
-        while not ended:
+        while True:
             try:
-                first = await asyncio.wait_for(stream.queue.get(), HEARTBEAT_SECONDS)
+                item = await asyncio.wait_for(stream.queue.get(), HEARTBEAT_SECONDS)
             except TimeoutError:
                 yield HEARTBEAT
                 continue
-            batch = [first]
-            while not stream.queue.empty():
-                batch.append(stream.queue.get_nowait())
-            text: str | None = None
-            for item in batch:
-                if isinstance(item, str):
-                    text = item  # each is the whole of the call's text so far
-                    continue
+            if isinstance(item, _Text):
+                wait = sent_at + TEXT_SECONDS - loop.time()
+                if wait > 0:
+                    await asyncio.sleep(wait)  # more lines may come meanwhile: they go with these
+                text = stream.take(item)
                 if text is not None:
+                    sent_at = loop.time()
                     yield event("text", {"html": str(reply_markdown(text))})
-                    text = None
-                if item is _Mark.DISCARD:
-                    yield event("discard", {})
-                else:
-                    ended = True
-                    break
-            if text is not None:
-                yield event("text", {"html": str(reply_markdown(text))})
+            elif item is _Mark.DISCARD:
+                yield event("discard", {})
+            else:
+                break
         await asyncio.wait([task])  # done already: END comes from its done callback
         if task.cancelled() or task.exception() is not None:
             yield event("error", {"status": 500})

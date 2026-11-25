@@ -37,6 +37,7 @@ from dinnerbell.services.database import open_database
 from dinnerbell.services.health import SchedulerState, SlackState, schema_revision
 from dinnerbell.services.open_meteo import OpenMeteo
 from dinnerbell.web.app import build_app
+from dinnerbell.web.assistant_stream import Answers
 from dinnerbell.web.context import LOGIN_STATE_LIFETIME, AppContext, CookieNames
 from dinnerbell.web.oidc import OIDCClient
 from dinnerbell.web.routes.catalog import draft_import_url
@@ -102,6 +103,17 @@ def create_app(
             push_http = new_client(push_transport)
             weather = OpenMeteo(weather_transport)
             stack.push_async_callback(push_http.aclose)
+            deadline: list[float] = []  # set when shutdown begins: one for the scheduler, Slack, and the web
+            answers = Answers()
+            app.state.web_answers = answers
+
+            async def settle_answers() -> None:
+                # After the scheduler and Slack, before the model client and the database close:
+                # cancel the web's answers still running (#370), within the time that's left.
+                left = deadline[0] - asyncio.get_running_loop().time() if deadline else CANCEL_UNWIND_SECONDS
+                await answers.settle(max(left, CANCEL_UNWIND_SECONDS))
+
+            stack.push_async_callback(settle_answers)
             app.state.dinnerbell = AppContext(
                 settings=settings,
                 clock=clock,
@@ -131,7 +143,6 @@ def create_app(
             )
             app.state.jobs = jobs
             app.state.slack = slack
-            deadline: list[float] = []  # set when shutdown begins: one for the scheduler and Slack
             if slack is not None:
                 connection = slack
 
@@ -144,8 +155,9 @@ def create_app(
             scheduler.start()
 
             async def stop_jobs() -> None:
-                # One deadline for both, inside podman's 10-second stop timeout: the scheduler's
-                # jobs first (a drain may be mid-delivery), then Slack, with whatever time is left.
+                # One deadline for all, inside podman's 10-second stop timeout: the scheduler's
+                # jobs first (a drain may be mid-delivery), then Slack, then the web's answers, with
+                # whatever time is left.
                 deadline.append(asyncio.get_running_loop().time() + SHUTDOWN_SECONDS)
                 await stop_scheduler(scheduler, jobs, grace=SHUTDOWN_SECONDS - CANCEL_UNWIND_SECONDS)
 
