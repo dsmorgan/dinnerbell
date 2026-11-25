@@ -307,15 +307,16 @@ def hints(monkeypatch: pytest.MonkeyPatch, house: House) -> None:
     monkeypatch.setattr(lifecycle.feedback, "hints_on", every_item)
 
 
-async def open_dinner(house: House) -> int:
+async def open_dinner(house: House, *, lee: bool = True) -> int:
     """Answers open; Sam, Kim, Alex, and Lee answer In, Kim brings Gwendolyn, and Alex and Lee
-    offer to pick up."""
+    offer to pick up. Without ``lee``, Lee hasn't answered, so the call waits for him and nothing
+    the others do closes its answers early (#374)."""
     house.clock.now = OPENS
     await house.tick()
     event_id = await dinner_id(house)
-    for name in ("Sam", "Kim", "Alex", "Lee"):
+    for name in ("Sam", "Kim", "Alex", *(["Lee"] if lee else [])):
         await act(house, calls.respond, house[name], event_id, Status.IN)
-    for name in ("Alex", "Lee"):
+    for name in ("Alex", *(["Lee"] if lee else [])):
         await act(house, calls.offer_role, house[name], event_id, RoleOffer.PICKUP, True)
     await act(house, guests.invite, house["Kim"], event_id, new_guest=GuestInput("Gwendolyn"))
     return event_id
@@ -567,8 +568,24 @@ OWN_STANCE = frozenset({"response", "vote", "suggestion", "preference", "stance_
 levels, row, feedback, and the audit of their own change. Plus ``outbox``, edits only."""
 
 
-LOCK_COLUMNS = frozenset({"version", "updated_at"})
-"""What ``EventRepository.lock`` writes on a call, as every use case on it does."""
+ONLY_COLUMNS = {
+    "event": frozenset({"version", "updated_at"}),
+    "member": frozenset(
+        {"away_first", "away_last", "dietary_needs", "can_cook", "can_pickup", "can_order", "updated_at"}
+    ),
+}
+"""What may change in a row that acting at once touches but doesn't own: a call's write lock
+(``EventRepository.lock``), and on the member's own row, only their away days, dietary needs,
+and **I can usually**, never their role, name, sign-in, or Slack link."""
+
+
+def test_their_own_row_may_change_only_in_away_needs_and_can_usually() -> None:
+    """``assert_only_their_own`` must catch a role, a name, or another member's row."""
+    sam = {"id": 2, "role": "member", "display_name": "Sam", "can_cook": False, "updated_at": 1}
+    assert_only_their_own({"member": [sam, sam | {"can_cook": True, "updated_at": 2}]}, 2)
+    for wrong, who in ((sam | {"role": "admin"}, 2), (sam | {"display_name": "Kim"}, 2), (sam | {"can_cook": True}, 3)):
+        with pytest.raises(AssertionError):
+            assert_only_their_own({"member": [sam, wrong]}, who)
 
 
 def assert_only_their_own(found: Mapping[str, list[dict[str, Any]]], *member_ids: int) -> None:
@@ -576,10 +593,12 @@ def assert_only_their_own(found: Mapping[str, list[dict[str, Any]]], *member_ids
     they answer for), in ``OWN_STANCE``, and in the outbox, only edits of messages that exist,
     never a new post or DM; and no push is queued."""
     for table, rows in found.items():
-        if table == "event":  # its write lock bumps its version, and nothing else may change
-            assert len({tuple((k, v) for k, v in r.items() if k not in LOCK_COLUMNS) for r in rows}) == len(
-                {r["id"] for r in rows}
-            ), rows
+        if table in ONLY_COLUMNS:  # a changed row shows twice: as it was and as it is
+            for row_id in {r["id"] for r in rows}:
+                versions = [r for r in rows if r["id"] == row_id]
+                assert table != "member" or row_id in member_ids, versions
+                moved = {k for k in versions[0] if len({str(v[k]) for v in versions}) > 1}
+                assert moved <= ONLY_COLUMNS[table], (table, moved)
             continue
         assert table in OWN_STANCE | {"outbox"}, (table, rows)
         for row in rows:
@@ -588,8 +607,6 @@ def assert_only_their_own(found: Mapping[str, list[dict[str, Any]]], *member_ids
             elif table == "audit":
                 assert row["actor_member_id"] in member_ids, row
                 assert row["target"] in {f"member:{m}" for m in member_ids}, row
-            elif table == "member":
-                assert row["id"] in member_ids, row
             else:
                 assert row["member_id"] in member_ids, row
 
@@ -1090,7 +1107,11 @@ async def test_injected_messages_and_pages_cant_change_own_data_past_the_members
     done = [r for r in rows if r.direct]
     assert sorted(r.kind for r in done) == ["away", "preference"]
     [lift] = [r for r in done if r.kind == "preference"]
-    assert lift.payload["before"] == "0" and lift.payload["undo"] == {"level": "0", "after": "2"}  # Sam's, not Kim's
+    assert lift.payload["before"] == "0" and lift.payload["undo"] == {
+        "level": "0",
+        "after": "2",
+        "edited_at": None,
+    }  # Sam's, not Kim's
     await assert_nobody_else_touches(house, done)
     waiting = await assert_only_sams_waiting_drafts(house, [r for r in rows if not r.direct])
     assert {r.kind for r in waiting} == {"catalog", "feedback"}
@@ -1639,7 +1660,7 @@ async def test_injected_catalog_text_moves_only_the_members_own_stance_tells_nob
     answer, at once, and each record has Undo; nothing of anyone else's moves; no new message
     goes to anyone, only edits of the call's own message; nobody else can undo Sam's; and Undo
     puts every one back."""
-    event_id = await open_dinner(house)
+    event_id = await open_dinner(house, lee=False)
     await act(house, guests.invite, house["Sam"], event_id, new_guest=GuestInput("Bea"))
     async with house.sessionmaker() as db:
         bea = next(g for g in await guests.saved_guests(db, house["Sam"]) if g.display_name == "Bea")
@@ -1731,7 +1752,7 @@ async def test_one_message_acts_at_once_five_times_at_most(house: House, helper:
     """Attack (#374): one message asks for seven changes that could each act at once, hoping a
     runaway loop or an injection changes everything before the member looks. Must hold: the
     first five act, the rest are drafts that say why, and the next message may act again."""
-    event_id = await open_dinner(house)
+    event_id = await open_dinner(house, lee=False)
     model.script = [
         tool_call(
             "draft_answer",
@@ -1760,6 +1781,51 @@ async def test_one_message_acts_at_once_five_times_at_most(house: House, helper:
     again = await say(house, helper, "Sam", "Suggest Pho Corner")
     assert [d.record for d in again.drafts] == [True]
     assert await suggestions_of(house, event_id, house["Sam"].id) == [house.items["Pho Corner"].id]
+
+
+async def outbox_posts(house: House) -> list[tuple[Any, ...]]:
+    """Every outbox row that's a new message, a post or a DM, never an edit; and every push."""
+    async with house.sessionmaker() as db:
+        posts = [tuple(r) for r in await db.execute(text("SELECT id, kind FROM outbox ORDER BY id"))]
+        pushes = [tuple(r) for r in await db.execute(text("SELECT * FROM push_queue ORDER BY 1"))]
+    return [p for p in posts if p[1] not in UPDATE_KINDS] + [("push", *p) for p in pushes]
+
+
+async def test_direct_actions_and_the_scheduler_after_them_tell_nobody_new(
+    house: House, helper: Assistant, model: Attacker
+) -> None:
+    """Attack (#374): the model acts at once five times for Sam, then for Lee answers the last
+    answer the call waits for, hoping the scheduler then closes the answers early and posts, or
+    abandons the call, after which Undo can't help. Must hold: Sam's five act and tell nobody,
+    tick after tick; Lee's answer, which completes the call's answers, is a draft that says why;
+    and up to the reminder no post, DM, or push goes out and the call keeps collecting."""
+    event_id = await open_dinner(house, lee=False)
+    sent = await outbox_posts(house)
+    before = await named_rows(house)
+    model.script = [
+        tool_call(
+            "draft_answer",
+            DINNER | {"answer": "maybe"},
+            call_id="toolu_1",
+            toolu_2=("draft_role", DINNER | {"role": "order", "offer": True}),
+            toolu_3=("draft_suggestion", DINNER | {"name": "Pho Corner"}),
+            toolu_4=("draft_preference", {"what": "", "name": "Pasta Night", "level": "-1"}),
+            toolu_5=("draft_away", AWAY),
+        ),
+        answer("Done."),
+    ]
+    reply = await say(house, helper, "Sam", "Maybe, I'll order, Pho Corner, no pasta, away from tomorrow")
+    assert [d.record for d in reply.drafts] == [True] * 5
+    model.script = [tool_call("draft_answer", DINNER | {"answer": "out"}, call_id="toolu_lee"), answer("Drafted.")]
+    await say(house, helper, "Lee", "I'm out")
+    lees = results(model)["toolu_lee"]
+    assert lees.content.startswith("Draft ") and lees.content.endswith(direct.CLOSES_EARLY)
+    for minutes in (0, 11, 30, 60):  # the quiet spell, and on toward the reminder
+        house.clock.now = OPENS + timedelta(minutes=minutes)
+        await house.tick()
+        assert (await house.event(event_id)).state is EventState.COLLECTING
+        assert await outbox_posts(house) == sent
+    assert_only_their_own(await changed(house, before), house["Sam"].id)
 
 
 async def test_a_vote_acts_at_once_moves_only_the_members_vote_and_undoes(

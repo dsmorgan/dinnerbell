@@ -104,6 +104,27 @@ class PreferenceRepository:
         else:
             row.edited_at = now
 
+    async def restore_edit(self, household_id: int, member_id: int, item_id: int, edited_at: datetime | None) -> None:
+        """Put back when the member last set a stance on the item, or that they never had: for
+        **Undo** of a level the assistant set (#374), so ratings it stopped count again."""
+        row = await self._session.scalar(
+            select(StanceEditRow).where(
+                StanceEditRow.household_id == household_id,
+                StanceEditRow.member_id == member_id,
+                StanceEditRow.item_id == item_id,
+            )
+        )
+        if edited_at is None:
+            if row is not None:
+                await self._session.delete(row)
+        elif row is None:
+            self._session.add(
+                StanceEditRow(household_id=household_id, member_id=member_id, item_id=item_id, edited_at=edited_at)
+            )
+        else:
+            row.edited_at = edited_at
+        await self._session.flush()
+
     async def item_edits(self, household_id: int, member_ids: Iterable[int]) -> dict[tuple[int, int], datetime]:
         """(member, item) to when each member last set a stance on each item."""
         query = select(StanceEditRow.member_id, StanceEditRow.item_id, StanceEditRow.edited_at).where(

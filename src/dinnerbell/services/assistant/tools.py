@@ -708,17 +708,23 @@ LOOK_UP_CALL = Tool(
 
 async def _keep_action(ctx: ToolContext, spec: DraftSpec) -> str:
     """Do ``spec`` at once, in a private conversation when ``acts_directly`` allows and the
-    message hasn't acted ``MAX_DIRECT_ACTIONS`` times (#374); otherwise store it as a draft."""
-    over = False
+    message hasn't acted ``MAX_DIRECT_ACTIONS`` times (#374); otherwise, or when acting at once
+    would tell someone new (``direct.DraftInstead``), store it as a draft, and say why."""
+    why = ""
     if ctx.private and acts_directly(spec.kind, spec.payload):
         if len(ctx.session.records) < MAX_DIRECT_ACTIONS:
-            record = await direct.act(ctx.db, ctx.actor, ctx.session.key, spec, now=ctx.now)
-            ctx.session.records.append(record)
-            ctx.session.drafts.append(direct.view(record, ctx.now))
-            return direct.summary(record, ctx.session.label(ctx.actor.id))
-        over = True
+            try:
+                record = await direct.act(ctx.db, ctx.actor, ctx.session.key, spec, now=ctx.now)
+            except direct.DraftInstead as instead:  # it would tell someone new, found under the lock
+                why = instead.reason
+            else:
+                ctx.session.records.append(record)
+                ctx.session.drafts.append(direct.view(record, ctx.now))
+                return direct.summary(record, ctx.session.label(ctx.actor.id))
+        else:
+            why = direct.OVER_THE_LIMIT.format(most=MAX_DIRECT_ACTIONS)
     told = await _keep(ctx, await drafts.store_action(ctx.db, ctx.actor, ctx.session.key, spec, now=ctx.now))
-    return f"{told} {direct.OVER_THE_LIMIT.format(most=MAX_DIRECT_ACTIONS)}" if over else told
+    return f"{told} {why}" if why else told
 
 
 async def draft_answer_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
@@ -744,7 +750,7 @@ DRAFT_ANSWER = Tool(
     description=(
         "Answer a call for the member: in, out, or maybe, while answers are open. While the call is voting, in "
         "means joining late; out and maybe aren't possible then."
-        + at_once("joining late, or an out that ends their coordinating")
+        + at_once("joining late, an out that ends their coordinating, or an answer that completes the call's answers")
     ),
     input_schema={
         "type": "object",
@@ -784,7 +790,7 @@ DRAFT_VOTE = Tool(
     description=(
         "Vote for one of a voting call's picks for the member, or take their vote back. Send the pick's "
         "number from look_up_call, or 0 with a name and mode the member gave. Someone who isn't in joins late "
-        "first, as a draft." + at_once("joining late first")
+        "first, as a draft." + at_once("joining late first, or completing the call's answers")
     ),
     input_schema={
         "type": "object",
@@ -820,7 +826,8 @@ DRAFT_SUGGESTION = Tool(
     name="draft_suggestion",
     description=(
         "Suggest a catalog item the member would like for a call, while answers are open, by its name "
-        "exactly as look_up_catalog_items returned it. A member suggests up to 3." + at_once()
+        "exactly as look_up_catalog_items returned it. A member suggests up to 3."
+        + at_once("one that completes the call's answers")
     ),
     input_schema={
         "type": "object",
@@ -848,7 +855,7 @@ DRAFT_ROLE = Tool(
     description=(
         'Put the member down for a role on a call, such as "put me down for pickup", or take them off one: cook, '
         "pickup, or order. Taking one counts them in. While the call is voting, someone who isn't in joins late "
-        "first, as a draft." + at_once("joining late first")
+        "first, as a draft." + at_once("joining late first, or completing the call's answers")
     ),
     input_schema={
         "type": "object",
@@ -981,7 +988,7 @@ DRAFT_GUEST_ANSWER = Tool(
     description=(
         "Answer for a guest the member invited who isn't on Slack: in or out, or a role (cook, pickup, "
         "or order) taken or given up for them. Use the guest's name as the member wrote it. Only the member who "
-        "invited a guest answers for them." + at_once()
+        "invited a guest answers for them." + at_once("one that completes the call's answers")
     ),
     input_schema={
         "type": "object",
@@ -1198,7 +1205,9 @@ DRAFT_FEEDBACK = Tool(
     description=(
         OWN + "Give the member's feedback on a meal from look_up_my_feedback, every part optional. It replaces "
         "theirs, so keep what they didn't change from yours; all empty takes it back."
-        + at_once_unless("their first feedback on a meal, and feedback that thanks the cook or replaces a thank-you")
+        + at_once_unless(
+            "their first feedback on a meal, and feedback that thanks the cook, leaves them a note, or replaces either"
+        )
     ),
     input_schema={
         "type": "object",

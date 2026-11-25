@@ -184,6 +184,48 @@ async def set_my_preference(
     return await _set_preference(db, actor, target_type, target_id, stance, now=now)
 
 
+async def my_item_edit(db: AsyncSession, actor: Member, item_id: int) -> datetime | None:
+    """When the actor last set a stance on the item, or None: ratings saved before it no longer
+    move their score (FR-55)."""
+    require_member(actor)
+    return (await PreferenceRepository(db).item_edits(actor.household_id, [actor.id])).get((actor.id, item_id))
+
+
+async def my_ratings_move(db: AsyncSession, actor: Member, item_id: int, *, today: date) -> bool:
+    """Whether the actor has a rating of the item that counts toward their score now, whatever
+    the Feedback setting: any saved since they last set a stance on it, in the ratings' window.
+    A level set on the item stops those for good (FR-55)."""
+    require_member(actor)
+    edited = await my_item_edit(db, actor, item_id)
+    theirs = await FeedbackRepository(db).opinions(actor.household_id, member_ids=[actor.id], item_ids=[item_id])
+    return has_ratings(theirs, today=today, edited_at=edited)
+
+
+async def restore_my_preference(
+    db: AsyncSession,
+    actor: Member,
+    target_type: TargetType,
+    target_id: int,
+    stance: Stance,
+    *,
+    edited_at: datetime | None,
+    now: datetime,
+) -> str:
+    """**Undo** of a level the assistant set (#374): ``set_my_preference``, then, on an item, when
+    the actor had last set a stance on it, as it was, so a rating saved since counts as it would
+    have. Returns the target's name."""
+    require_member(actor)
+    target = await _target(db, actor.household_id, target_type, target_id)
+    if target is None:
+        raise NotFound(f"No such {target_type.value}.")
+    repo = PreferenceRepository(db)
+    await repo.set(actor.household_id, actor.id, target_type, target_id, stance, now)
+    if target_type is TargetType.ITEM:
+        await repo.restore_edit(actor.household_id, actor.id, target_id, edited_at)
+    await db.commit()
+    return target.name
+
+
 async def set_member_preference(
     db: AsyncSession,
     actor: Member,

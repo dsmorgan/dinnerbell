@@ -20,7 +20,7 @@ with ``add_only``, so an item that appeared meanwhile is left alone.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Any
@@ -518,11 +518,16 @@ async def confirm_draft(
     return result
 
 
-async def confirm_direct(db: AsyncSession, actor: Member, draft: Draft, now: datetime) -> Confirmed:
+Check = Callable[[], Awaitable[None]]
+
+
+async def confirm_direct(db: AsyncSession, actor: Member, draft: Draft, now: datetime, *, check: Check) -> Confirmed:
     """Run a direct action's record through its draft's Confirm (#374, ``direct.act``), as
     ``actor``, ``tool_actor`` of its member: the same use case and checks, using it in that use
-    case's transaction. A refusal leaves it unused, for ``act`` to delete."""
-    return await _confirm(db, "", actor, draft, now)
+    case's transaction. ``check`` runs in that transaction too, once the record is used and
+    before the use case: what it reads can't change before the use case commits, and what it
+    raises rolls everything back. A refusal leaves the record unused, for ``act`` to delete."""
+    return await _confirm(db, "", actor, draft, now, check=check)
 
 
 CATALOG_CONFIRMED = "Nothing is added until the items are imported from the preview."
@@ -556,19 +561,24 @@ async def _told(db: AsyncSession, member: Member, result: Confirmed, now: dateti
     return CATALOG_CONFIRMED
 
 
-async def _confirm(db: AsyncSession, instance_label: str, actor: Member, draft: Draft, now: datetime) -> Confirmed:
+async def _confirm(
+    db: AsyncSession, instance_label: str, actor: Member, draft: Draft, now: datetime, *, check: Check | None = None
+) -> Confirmed:
     """Run the draft's Confirm as ``actor``, ``tool_actor`` of its member. ``instance_label`` is
-    ``AssistantConfig``'s, for an ad-hoc call's restart rule."""
+    ``AssistantConfig``'s, for an ad-hoc call's restart rule. ``check``, for a direct action,
+    runs in the use case's transaction once the draft is used."""
     if draft.kind is DraftKind.PROPOSAL:
         return await _confirm_proposal(db, actor, draft, now)
     if draft.kind is DraftKind.OFFER:
         return await _confirm_offer(db, actor, draft, now)
     if draft.kind in CALL_ACTIONS:
-        return await _confirm_action(db, actor, draft, now, instance_label=instance_label)
+        return await _confirm_action(db, actor, draft, now, instance_label=instance_label, check=check)
     if draft.kind in OWN_DATA:
 
         async def use() -> None:
             await _use(db, draft, actor, now)
+            if check is not None:
+                await check()
 
         return await own_drafts.confirm(db, actor, draft, now=now, use=use)
     if draft.kind in COORDINATING:
@@ -589,7 +599,7 @@ async def _confirm(db: AsyncSession, instance_label: str, actor: Member, draft: 
 
 
 async def _confirm_action(
-    db: AsyncSession, actor: Member, draft: Draft, now: datetime, *, instance_label: str
+    db: AsyncSession, actor: Member, draft: Draft, now: datetime, *, instance_label: str, check: Check | None = None
 ) -> ActionConfirmed:
     today, _ = await _today(db, actor.household_id, now)
     if draft.kind is DraftKind.CALL:  # ``start_call`` takes the write lock itself, and uses the draft in it
@@ -602,6 +612,8 @@ async def _confirm_action(
         )
     async with write_transaction(db):
         await _use(db, draft, actor, now)
+        if check is not None:
+            await check()
         # The use case locks the call in this transaction, then commits the draft's use with its
         # change, or rolls both back (``call_drafts.confirm``).
         return await call_drafts.confirm(db, actor, draft, today=today, now=now)

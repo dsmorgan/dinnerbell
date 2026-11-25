@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,10 +45,28 @@ from dinnerbell.domain.assistant_drafts import (
     expires_at,
     undone_text,
 )
-from dinnerbell.domain.events import Details, Event, EventRuleViolation, Response, RoleOffer, Status, check_run
+from dinnerbell.domain.assistant_own import level_label
+from dinnerbell.domain.events import (
+    Event,
+    EventRuleViolation,
+    Response,
+    RoleOffer,
+    Status,
+    check_details,
+    check_run,
+    drops_coordinating,
+    with_details,
+    with_offer,
+    with_status,
+    with_usual_offers,
+)
+from dinnerbell.domain.feedback import FeedbackInput, PlaceIssue, Rating
 from dinnerbell.domain.members import Member
+from dinnerbell.domain.preferences import Stance, TargetType
+from dinnerbell.services import call_context as cc
 from dinnerbell.services import calls
-from dinnerbell.services.assistant import draft_log, drafts, own_drafts
+from dinnerbell.services import preferences as preference_service
+from dinnerbell.services.assistant import call_drafts, draft_log, drafts, own_drafts
 from dinnerbell.services.assistant.acting import tool_actor
 from dinnerbell.services.assistant.call_drafts import ActionConfirmed, DraftSpec, check_same_pick
 from dinnerbell.services.assistant.drafts import TURNED_OFF, DraftUnavailable, DraftView
@@ -65,6 +83,7 @@ UNDO_CLOSED = f"Undo works for {UNDO_MINUTES} minutes, and that's over. Change i
 NO_UNDO = "It was your first answer to this call, so there's no Undo. Answer again to change it."
 """A record's line, and Undo's refusal, for an action that answered a call the member hadn't:
 Dinnerbell can't un-answer anyone."""
+NO_UNDO_GUEST = "It was {name}'s first answer to this call, so there's no Undo. Answer for them again to change it."
 NO_UNDO_SAVED = "There's no Undo for this one. Change it yourself on the web."
 """A record's line when its Undo couldn't be stored: rare, and logged."""
 MOVED_CALL = "That changed since the assistant did it, so Undo changed nothing. Change it on the call's page."
@@ -124,13 +143,9 @@ def summary(record: Draft, label: str) -> str:
     did = " ".join(record.lines[:1])
     if record.undoable:
         shows = f"Dinnerbell shows {label} a record of it with Undo for {UNDO_MINUTES} minutes."
-    elif NO_UNDO not in record.lines:
-        shows = f"Dinnerbell shows {label} a record of it, with no Undo."
     else:
-        shows = (
-            f"Dinnerbell shows {label} a record of it. It was their first answer to the call, so it has no Undo; "
-            "answering again changes it."
-        )
+        why = " ".join(record.lines[1:2]).replace("your ", "their ").replace("You ", "They ")
+        shows = f"Dinnerbell shows {label} a record of it with no Undo: {why}"
     return f"Done at once, not a draft: {record.title}. {did} {shows} Tell them briefly that it's done."
 
 
@@ -140,10 +155,76 @@ OVER_THE_LIMIT = "It's a draft, not done at once, because this message did {most
 # Acting -----------------------------------------------------------------------------------------
 
 
-def _snap(response: Response | None) -> dict[str, Any] | None:
+class DraftInstead(Exception):
+    """A direct action that would tell someone new, found under the call's lock: it stays a
+    draft, and ``reason`` tells the model why."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+CLOSES_EARLY = (
+    "It's a draft, not done at once: with it, everyone has answered the call, so its answers close early and "
+    "Dinnerbell tells the household."
+)
+ENDS_COORDINATING = (
+    "It's a draft, not done at once: the member coordinates that call now, and an out ends that and tells "
+    "the household."
+)
+RATINGS_MOVE = "It's a draft, not done at once: the member's ratings of it count now, and a level stops them for good."
+MAYBE_COORDINATING = (
+    "You coordinate this call: if you're still a maybe when answers close, you stop coordinating, as on the "
+    "call's page."
+)
+
+
+def _response_json(response: Response | None) -> dict[str, Any] | None:
+    """A whole answer, as **Undo** puts it back and compares it (#374): everything the call keeps
+    of it, but when it last changed."""
     if response is None:
         return None
-    return {"status": response.status.value, "offers": sorted(o.value for o in response.offers)}
+    return {
+        "member_id": response.member_id,
+        "status": response.status.value,
+        "guests": response.guests,
+        "guest_needs": sorted(response.guest_needs),
+        "eat_from": response.eat_from.isoformat() if response.eat_from else None,
+        "eat_until": response.eat_until.isoformat() if response.eat_until else None,
+        "offers": sorted(o.value for o in response.offers),
+        "note": response.note,
+        "maybe_at_deadline": response.maybe_at_deadline,
+        "responded_at": response.responded_at.isoformat() if response.responded_at else None,
+        "late": response.late,
+        "vote_counts": response.vote_counts,
+        "usual_offers_done": response.usual_offers_done,
+        # Only an out can be away's, as the call keeps it.
+        "away_until": response.away_until.isoformat()
+        if response.away_until and response.status is Status.OUT
+        else None,
+    }
+
+
+def _response(raw: Mapping[str, Any]) -> Response:
+    def moment(value: Any) -> datetime | None:
+        return datetime.fromisoformat(str(value)) if value else None
+
+    return Response(
+        member_id=int(raw["member_id"]),
+        status=Status(str(raw["status"])),
+        guests=int(raw["guests"]),
+        guest_needs=frozenset(int(n) for n in raw["guest_needs"]),
+        eat_from=time.fromisoformat(str(raw["eat_from"])) if raw["eat_from"] else None,
+        eat_until=time.fromisoformat(str(raw["eat_until"])) if raw["eat_until"] else None,
+        offers=frozenset(RoleOffer(str(o)) for o in raw["offers"]),
+        note=raw["note"],
+        maybe_at_deadline=bool(raw["maybe_at_deadline"]),
+        responded_at=moment(raw["responded_at"]),
+        late=bool(raw["late"]),
+        vote_counts=bool(raw["vote_counts"]),
+        usual_offers_done=bool(raw["usual_offers_done"]),
+        away_until=date.fromisoformat(str(raw["away_until"])) if raw["away_until"] else None,
+    )
 
 
 def _suggested(ctx: CallContext, member_id: int) -> dict[str, list[Any]]:
@@ -154,68 +235,120 @@ def _suggested(ctx: CallContext, member_id: int) -> dict[str, list[Any]]:
     }
 
 
-async def _call(db: AsyncSession, actor: Member, event_id: int | None) -> CallContext:
-    event = await EventRepository(db).get(actor.household_id, event_id) if event_id is not None else None
-    if event is None:
-        raise NotFound(NO_SUCH_CALL)
-    return await load(db, event)
-
-
 def _whose(kind: DraftKind, payload: Mapping[str, Any], actor: Member) -> int:
     """The person whose answer a call action changes: the member's, or their guest's."""
     return int(payload["guest_id"]) if kind is DraftKind.GUEST_ANSWER else actor.id
 
 
-async def _before(db: AsyncSession, actor: Member, spec: DraftSpec) -> Any:
-    """What a call action's Undo needs from before it runs: the answer it changes, or, for a
-    suggestion, whether the member had answered. Own data carries its own in the payload."""
-    if spec.kind not in CALL_ACTIONS or spec.kind is DraftKind.VOTE:
-        return None
-    ctx = await _call(db, actor, spec.event.id if spec.event is not None else None)
-    return ctx.response_of(_whose(spec.kind, spec.payload, actor))
-
-
-async def _undo(db: AsyncSession, actor: Member, record: Draft, before: Any) -> dict[str, Any] | None:
-    """What **Undo** puts back, read once the action ran, with what it left, so Undo can tell
-    whether anything moved since. None when nothing can be put back: a first answer."""
-    kind, payload = record.kind, record.payload
-    if kind in (DraftKind.ANSWER, DraftKind.ROLE, DraftKind.GUEST_ANSWER):
-        if before is None:
-            return None
-        whose = _whose(kind, payload, actor)
-        left = (await _call(db, actor, record.event_id)).response_of(whose)
-        return {"member_id": whose, **(_snap(before) or {}), "after": _snap(left)}
-    if kind is DraftKind.VOTE:
-        return {"vote": not payload["vote"]}
+def _predicted(ctx: CallContext, actor: Member, kind: DraftKind, payload: Mapping[str, Any], now: datetime) -> Any:
+    """The answer a call action leaves, by the rules its use case applies, under the same lock:
+    ``respond``, ``offer_role``, ``save_details``, or ``guests.answer_for``. None for a vote."""
+    whose = _whose(kind, payload, actor)
+    mine = ctx.response_of(whose)
+    if kind is DraftKind.ANSWER:
+        return with_usual_offers(with_status(mine, whose, Status(str(payload["status"])), now), actor)
+    if kind is DraftKind.ROLE:
+        return with_offer(mine, whose, RoleOffer(str(payload["role"])), bool(payload["offered"]), now) or mine
     if kind is DraftKind.SUGGESTION:
-        if before is None:
-            return None
-        return {"after": _suggested(await _call(db, actor, record.event_id), actor.id)}
-    if kind is DraftKind.PREFERENCE:
-        return {"level": payload["before"], "after": payload["level"]}
-    if kind is DraftKind.AWAY:
-        me = await own_drafts.fresh(db, actor)
-        today, _ = await drafts.household_day(db, actor.household_id, record.created_at)
-        window = me.away_now(today)
-        now_away = None if window is None else [window.first.isoformat(), window.last.isoformat()]
-        return {"window": payload.get("before"), "after": now_away}
-    if kind is DraftKind.NEEDS:
-        me = await own_drafts.fresh(db, actor)
-        return {"needs": payload["before"], "after": sorted(me.dietary_needs)}
-    if kind is DraftKind.CAN_USUALLY:
-        return {"flags": payload["before"], "after": payload["after"]}
-    saved = await FeedbackRepository(db).get(actor.household_id, int(payload["meal_id"]), actor.id)
-    kept = own_drafts.stored_answers(saved.answers if saved else None)
-    return {"answers": payload.get("replaced"), "after": own_drafts.stamp(saved), "after_answers": kept}
+        active = [i.id for i in ctx.items.values() if i.active]
+        details = check_details(
+            call_drafts.details_with(ctx, mine, whose, int(payload["item_id"])), active_item_ids=active
+        )
+        new = with_details(mine, whose, details, now)
+        return new if mine is not None else with_usual_offers(new, actor)
+    if kind is DraftKind.GUEST_ANSWER:
+        if payload.get("status"):
+            return with_status(mine, whose, Status(str(payload["status"])), now)
+        role = RoleOffer(str(payload["role"]))
+        return with_offer(mine, whose, role, bool(payload["offered"]), now) or mine
+    return None
+
+
+@dataclass
+class _Checked:
+    """What ``act``'s check found under the call's lock, for the record."""
+
+    undo: dict[str, Any] | None = None
+    extra: tuple[str, ...] = ()
+
+
+async def _check(
+    db: AsyncSession, actor: Member, record: Draft, found: _Checked, *, now: datetime, today: date
+) -> None:
+    """In the action's transaction, before its use case: whether it still acts at once, and
+    what **Undo** puts back and what the action leaves, read where nothing can change them before
+    the use case commits. Writes the Undo into the record, so it commits with the action."""
+    kind, payload = record.kind, record.payload
+    undo: dict[str, Any] | None = None
+    if kind in CALL_ACTIONS:
+        event = await _event(db, actor, record)
+        ctx = await load(db, event)
+        if kind is DraftKind.VOTE:
+            undo = {"vote": not payload["vote"]}
+        else:
+            whose = _whose(kind, payload, actor)
+            before = ctx.response_of(whose)
+            after = _predicted(ctx, actor, kind, payload, now)
+            if kind is DraftKind.ANSWER and drops_coordinating(event, after):
+                raise DraftInstead(ENDS_COORDINATING)
+            if after is not None and await cc.closes_early_with(db, event, after, now):
+                raise DraftInstead(CLOSES_EARLY)
+            if kind is DraftKind.ANSWER and after.status is Status.MAYBE and event.coordinator_id == actor.id:
+                found.extra = (MAYBE_COORDINATING,)
+            if before is not None:
+                undo = {"answer": _response_json(before), "after": _response_json(after)}
+                if kind is DraftKind.SUGGESTION:
+                    left = _suggested(ctx, actor.id)
+                    added = sorted([*left["items"], int(payload["item_id"])])
+                    undo |= {"suggestions": left, "after_suggestions": {**left, "items": added}}
+    elif kind is DraftKind.PREFERENCE:
+        target_type, target_id = TargetType(str(payload["target_type"])), int(payload["target_id"])
+        edited = None
+        if target_type is TargetType.ITEM:
+            if await preference_service.my_ratings_move(db, actor, target_id, today=today):
+                raise DraftInstead(RATINGS_MOVE)
+            at = await preference_service.my_item_edit(db, actor, target_id)
+            edited = at.isoformat() if at else None
+        undo = {"level": payload["before"], "after": payload["level"], "edited_at": edited}
+    elif kind is DraftKind.AWAY:
+        after = None if payload.get("clear") else [payload["first"], payload["last"]]
+        undo = {"window": payload.get("before"), "after": after}
+    elif kind is DraftKind.NEEDS:
+        undo = {"needs": payload["before"], "after": sorted(int(n) for n in payload["needs"])}
+    elif kind is DraftKind.CAN_USUALLY:
+        undo = {"flags": payload["before"], "after": payload["after"]}
+    else:
+        answers = FeedbackInput(
+            rating=Rating(str(payload["rating"])) if payload.get("rating") else None,
+            place_issues=frozenset(PlaceIssue(str(i)) for i in payload.get("issues", [])),
+            issue_note=payload.get("issue_note"),
+            cook_thanks=bool(payload.get("cook_thanks")),
+            cook_note=payload.get("cook_note"),
+        )
+        saving = None if answers.is_empty else own_drafts.stored_answers(answers)
+        undo = {"answers": payload.get("replaced"), "after_answers": saving}
+    found.undo = undo
+    await AssistantRepository(db).keep_record(
+        actor.household_id, record.id, payload={**payload, "undo": undo}, lines=record.lines
+    )
+
+
+def _no_undo_line(kind: DraftKind, payload: Mapping[str, Any]) -> str:
+    if kind is DraftKind.GUEST_ANSWER:
+        return NO_UNDO_GUEST.format(name=payload.get("name", "your guest"))
+    return NO_UNDO if kind in CALL_ACTIONS else NO_UNDO_SAVED
 
 
 async def act(db: AsyncSession, member: Member, key: str, spec: DraftSpec, *, now: datetime) -> Draft:
     """Do ``spec`` at once for ``member`` (#374), which ``acts_directly`` allows, as
     ``tool_actor(member)``, through the Confirm path its draft would take, and return its record.
-    A refusal deletes the record and comes through unchanged, for the model to read."""
+    Under that path's lock, a call action that would complete the call's answers, or end the
+    member's coordinating, and a level on an item their ratings move, raise ``DraftInstead``.
+    The record, with what **Undo** puts back, commits with the action. A refusal deletes the
+    record and comes through unchanged, for the model to read."""
     actor = tool_actor(member)
     repo = AssistantRepository(db)
-    before = await _before(db, actor, spec)
+    today, _ = await drafts.household_day(db, actor.household_id, now)
     async with write_transaction(db):
         record = await repo.add_draft(
             actor.household_id,
@@ -232,28 +365,29 @@ async def act(db: AsyncSession, member: Member, key: str, spec: DraftSpec, *, no
             direct=True,
         )
         await db.commit()
+    found = _Checked()
+
+    async def check() -> None:
+        await _check(db, actor, record, found, now=now, today=today)
+
     try:
-        result = await drafts.confirm_direct(db, actor, record, now)
+        result = await drafts.confirm_direct(db, actor, record, now, check=check)
     except Exception:  # refused: the record goes too (a cancel leaves it unused, shown nowhere, for the purge)
         async with write_transaction(db):
             await repo.delete_draft(actor.household_id, record.id)
             await db.commit()
         raise
-    text = done_text(result.text) if isinstance(result, ActionConfirmed) else ""
+    text = plain(done_text(result.text)) if isinstance(result, ActionConfirmed) else ""
+    why = (_no_undo_line(spec.kind, spec.payload),) if found.undo is None else ()
+    lines = (text, *why, *found.extra)
+    kept = replace(record, payload={**record.payload, "undo": found.undo}, lines=lines, used_at=now, confirmed_at=now)
     try:
-        undo = await _undo(db, actor, record, before)
-    except Exception:  # done already: a record without an Undo, never an error that invites doing it again
-        log.exception("assistant direct action's undo not kept", extra={"member_id": actor.id, "draft_id": record.id})
-        undo = None
-    first_answer = before is None and spec.kind in CALL_ACTIONS and spec.kind is not DraftKind.VOTE
-    lines = (plain(text),) if undo is not None else (plain(text), NO_UNDO if first_answer else NO_UNDO_SAVED)
-    async with write_transaction(db):
-        await repo.keep_record(actor.household_id, record.id, payload={**record.payload, "undo": undo}, lines=lines)
-        await db.commit()
+        async with write_transaction(db):
+            await repo.keep_record(actor.household_id, record.id, payload=kept.payload, lines=lines)
+            await db.commit()
+    except Exception:  # done, and its Undo is stored: only the card's words after a reload differ
+        log.exception("assistant direct action's words not kept", extra={"member_id": actor.id, "draft_id": record.id})
     log.info("assistant acted", extra={"member_id": actor.id, "kind": spec.kind.value, "draft_id": record.id})
-    kept = await repo.draft(actor.household_id, record.id)
-    if kept is None:  # pragma: no cover - only the purge deletes it, 30 minutes on
-        raise NotFound(NO_SUCH_RECORD)
     return kept
 
 
@@ -293,8 +427,8 @@ async def _mine(db: AsyncSession, member: Member, record_id: int) -> Draft:
 def _check_open(record: Draft, now: datetime) -> None:
     if record.undone_at is not None:
         raise DraftUnavailable(UNDONE)
-    if not record.undoable:
-        raise DraftUnavailable(NO_UNDO)
+    if not record.undoable:  # its record's second line says why: a first answer, or not saved
+        raise DraftUnavailable(record.lines[1] if len(record.lines) > 1 else NO_UNDO_SAVED)
     if not record.undo_open(now):
         raise DraftUnavailable(UNDO_CLOSED)
 
@@ -347,8 +481,8 @@ async def _inverse(
     if kind in CALL_ACTIONS:
         return await _inverse_call(db, actor, record, back, now=now, mark=mark)
     if kind is DraftKind.PREFERENCE:
-        inverse = {**payload, "level": back["level"], "before": back["after"]}
-    elif kind is DraftKind.AWAY:
+        return await _inverse_level(db, actor, record, back, now=now, mark=mark)
+    if kind is DraftKind.AWAY:
         window = back.get("window")
         if window is None:
             inverse = {"first": None, "last": None, "clear": True, "before": back.get("after")}
@@ -360,6 +494,9 @@ async def _inverse(
         inverse = {"after": back["flags"], "before": back["after"]}
     else:
         answers = back.get("answers") or {}
+        # Give's own check wants the feedback's save time as it is; the answers, compared under
+        # its lock in ``use``, say whether anything moved since the action.
+        now_saved = await FeedbackRepository(db).get(actor.household_id, int(payload["meal_id"]), actor.id)
         inverse = {
             "meal_id": payload["meal_id"],
             "item_id": payload["item_id"],
@@ -368,12 +505,12 @@ async def _inverse(
             "issue_note": answers.get("issue_note"),
             "cook_thanks": bool(answers.get("cook_thanks")),
             "cook_note": answers.get("cook_note"),
-            "before": back.get("after"),
+            "before": own_drafts.stamp(now_saved),
         }
 
     async def use() -> None:
         await mark()
-        if kind is DraftKind.FEEDBACK:  # a save in the same second keeps the stamp, so the answers too
+        if kind is DraftKind.FEEDBACK:
             saved = await FeedbackRepository(db).get(actor.household_id, int(payload["meal_id"]), actor.id)
             if own_drafts.stored_answers(saved.answers if saved else None) != back.get("after_answers"):
                 raise _moved(kind)
@@ -382,6 +519,35 @@ async def _inverse(
     if kind is DraftKind.FEEDBACK and back.get("answers") is not None:
         return replace(done, text="Undone. Your earlier feedback is back as it was.")
     return replace(done, text=undone_text(done.text))
+
+
+async def _inverse_level(
+    db: AsyncSession,
+    actor: Member,
+    record: Draft,
+    back: Mapping[str, Any],
+    *,
+    now: datetime,
+    mark: Callable[[], Awaitable[None]],
+) -> ActionConfirmed:
+    """The earlier level, and on an item, when the member had last set one, as it was, so a
+    rating saved since counts as it would have (FR-55): ``restore_my_preference``."""
+    payload = record.payload
+    target_type, target_id = TargetType(str(payload["target_type"])), int(payload["target_id"])
+    level = Stance.parse(str(back["level"]))
+    edited = datetime.fromisoformat(str(back["edited_at"])) if back.get("edited_at") else None
+    async with write_transaction(db):
+        await mark()
+        current = await preference_service.my_stance(db, actor, target_type, target_id)
+        if current is None:
+            raise NotFound(own_drafts.GONE)
+        if current[1].level != back["after"]:
+            raise _moved(DraftKind.PREFERENCE)
+        name = await preference_service.restore_my_preference(
+            db, actor, target_type, target_id, level, edited_at=edited, now=now
+        )
+    text = f"Undone. Your level for {name} is {level_label(level)} now."
+    return ActionConfirmed(None, text, link=own_drafts.PREFERENCES)
 
 
 async def _event(db: AsyncSession, actor: Member, record: Draft) -> Event:
@@ -418,41 +584,26 @@ async def _inverse_call(
                 return ActionConfirmed(event.id, f"Undone. Your vote for {name} is in again.")
             await calls.unvote(db, actor, event.id, pick.id, now=now)
             return ActionConfirmed(event.id, f"Undone. You took back your vote for {name}.")
+        earlier = _response(back["answer"])
+        suggestions = None
         if kind is DraftKind.SUGGESTION:
-            ctx = await load(db, event)
-            if _suggested(ctx, actor.id) != back["after"]:
-                raise _moved(kind)
-            mine = ctx.response_of(actor.id)
-            theirs = [s for s in ctx.suggestions if s.member_id == actor.id]
-            item_id = int(payload["item_id"])
-            details = Details(
-                eat_from=mine.eat_from if mine else None,
-                eat_until=mine.eat_until if mine else None,
-                suggestion_item_ids=tuple(s.item_id for s in theirs if s.item_id is not None and s.item_id != item_id),
-                suggestion_texts=tuple(s.free_text for s in theirs if s.free_text),
-                note=mine.note if mine else None,
-            )
-            await calls.save_details(db, actor, event.id, details, run=record.run, now=now)
-            return ActionConfirmed(event.id, f"Undone. {payload['name']} is no longer one of your suggestions.")
-        status = Status(str(back["status"]))
-        offers = frozenset(RoleOffer(str(o)) for o in back.get("offers", []))
+            kept = back["suggestions"]
+            suggestions = (tuple(int(i) for i in kept["items"]), tuple(str(t) for t in kept["texts"]))
 
-        def expect(current: Response | None) -> None:
-            if _snap(current) != back.get("after"):
+        def expect(ctx: CallContext) -> None:
+            if _response_json(ctx.response_of(earlier.member_id)) != back.get("after"):
+                raise _moved(kind)
+            if kind is DraftKind.SUGGESTION and _suggested(ctx, actor.id) != back.get("after_suggestions"):
                 raise _moved(kind)
 
         await calls.restore_answer(
-            db,
-            actor,
-            event.id,
-            member_id=int(back["member_id"]),
-            status=status,
-            offers=offers,
-            run=record.run,
-            now=now,
-            expect=expect,
+            db, actor, event.id, earlier, suggestions=suggestions, run=record.run, now=now, expect=expect
         )
-    return ActionConfirmed(event.id, _restored_text(kind, payload, status, offers, when=when, slot=slot))
+    if kind is DraftKind.SUGGESTION:
+        return ActionConfirmed(event.id, f"Undone. {payload['name']} is no longer one of your suggestions.")
+    return ActionConfirmed(
+        event.id, _restored_text(kind, payload, earlier.status, earlier.offers, when=when, slot=slot)
+    )
 
 
 STATUS_WORDS = {Status.IN: "in for", Status.OUT: "out of", Status.MAYBE: "a maybe for"}

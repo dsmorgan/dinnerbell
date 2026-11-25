@@ -277,6 +277,9 @@ async def offer_role(
 UNDO_ENDS_COORDINATING = (
     "You coordinate this call now, so Undo can't answer you out. Change your answer on the call's page."
 )
+UNDO_CLOSES_EARLY = (
+    "Putting that back would close the call's answers early, so Undo changed nothing. Change it on the call's page."
+)
 NO_SUCH_GUEST = "No such guest on this call."
 
 
@@ -284,29 +287,33 @@ async def restore_answer(
     db: AsyncSession,
     actor: Member,
     event_id: int,
+    earlier: Response,
     *,
-    member_id: int,
-    status: Status,
-    offers: frozenset[RoleOffer],
+    suggestions: tuple[tuple[int, ...], tuple[str, ...]] | None = None,
     run: int | None = None,
     now: datetime,
-    expect: Callable[[Response | None], None],
+    expect: Callable[[CallContext], None],
 ) -> None:
     """**Undo** of an answer, a role, or an answer for a guest that the assistant made at once
-    (#374): set ``member_id``'s answer and role offers back to ``status`` and ``offers``, in one
-    transaction, as answering and tapping the role buttons would. ``member_id`` is the actor's,
-    or a guest's they answer for (``can_answer_for``). Under the lock, ``expect`` gets the answer
-    as it is now and raises when it isn't what the action left. A change of answer needs answers
-    open, as ``respond`` does; a change of offers alone, a late joiner's included, needs what
-    ``offer_role`` does. Refused rather than end the actor's coordinating, which tells the
-    household, and updates the call's messages, as either would."""
+    (#374): put ``earlier``, the whole answer as it was, back as it was, in one transaction, as
+    answering and tapping the role buttons would: its away window's out, its usual offers' turn,
+    and when it was first answered included. ``earlier.member_id`` is the actor's, or a guest's
+    they answer for (``can_answer_for``). ``suggestions``, for a suggestion's Undo, are the actor's
+    suggestions as they were, item IDs and texts, put back with the answer, as saving Details
+    does. Under the lock, ``expect`` gets the call as it is now and raises when it isn't what the
+    action left. A change of answer or suggestions needs answers open, as ``respond`` and
+    ``save_details`` do; a change of offers alone, a late joiner's included, needs what
+    ``offer_role`` does. Refused rather than end the actor's coordinating, or complete the answers
+    so they close early (``closes_early_with``), since either tells the household. Updates the
+    call's messages, as either would."""
+    member_id = earlier.member_id
     async with locked_event(db, actor.household_id, event_id, now) as event:
         check_run(event, run)
         ctx = await load(db, event)
         current = ctx.response_of(member_id)
-        expect(current)
+        expect(ctx)
         if member_id == actor.id:
-            await guest_rules.gate(db, event, actor, answer_action(status))
+            await guest_rules.gate(db, event, actor, answer_action(earlier.status))
             who, invited = actor, await _invited(db, event, actor)
         else:
             guest = ctx.members.get(member_id)
@@ -315,20 +322,20 @@ async def restore_answer(
             if not can_answer_for(guest, actor, ctx.invitations[member_id]):
                 raise Forbidden("Only whoever invited them answers for a guest without Slack.")
             who, invited = guest, True
-        moved = current is None or current.status is not status
-        if moved:
+        if current is None or current.status is not earlier.status or suggestions is not None:
             check_can_respond(event, who, invited=invited)
         else:
             check_can_offer_role(event, who, current, invited=invited)
-        base = with_status(current, member_id, status, now) if moved else current
-        if base is None:  # pragma: no cover - with_status always answers
-            raise NotFound(NO_SUCH_MEMBER)
-        new = replace(base, offers=frozenset() if status is Status.OUT else offers, usual_offers_done=True)
-        if drops_coordinating(event, new):
+        if drops_coordinating(event, earlier):
             raise EventRuleViolation(UNDO_ENDS_COORDINATING, code="undo_coordinating")
-        await ResponseRepository(db).save(actor.household_id, event.id, new, now)
+        if await cc.closes_early_with(db, event, earlier, now):
+            raise EventRuleViolation(UNDO_CLOSES_EARLY, code="undo_closes_early")
+        await ResponseRepository(db).save(actor.household_id, event.id, earlier, now)
+        if suggestions is not None:
+            items, texts = suggestions
+            await SuggestionRepository(db).replace(actor.household_id, event.id, member_id, items, texts, now)
         await _roster_changed(db, event, now)
-        activity.action(db, "undo_answer", event, actor, answer=status.value, guest=member_id != actor.id)
+        activity.action(db, "undo_answer", event, actor, answer=earlier.status.value, guest=member_id != actor.id)
 
 
 async def toggle_role(db: AsyncSession, actor: Member, event_id: int, role: RoleOffer, *, now: datetime) -> bool:
