@@ -27,7 +27,7 @@ from dinnerbell.services.assistant.anthropic_client import (
 )
 from dinnerbell.services.assistant.client import ModelCallFailed
 from dinnerbell.services.assistant.conversation import _reply_text, build_request
-from dinnerbell.services.assistant.streaming import CallText
+from dinnerbell.services.assistant.streaming import CallText, Cut
 from dinnerbell.services.assistant.tools import TOOLS
 
 pytestmark = pytest.mark.anyio
@@ -332,6 +332,8 @@ async def test_a_calls_timeout_never_passes_the_clients_own() -> None:
 class Heard:
     """A ``ReplyStream`` that keeps what ``CallText`` passes on."""
 
+    cut = Cut.LINES
+
     def __init__(self) -> None:
         self.pieces: list[str] = []
         self.tool_rounds = 0
@@ -340,7 +342,7 @@ class Heard:
     def call_started(self, drafts: int) -> None:
         self.calls.append(drafts)
 
-    def lines(self, text: str) -> None:
+    def more(self, text: str) -> None:
         self.pieces.append(text)
 
     def tool_round(self) -> None:

@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The **Assistant** page's reply shown as the model writes it (#370, spec 6.14): the events of
-``POST /assistant`` with ``Accept: text/event-stream``, in order; the finished reply replacing
-what was shown; a member leaving mid-reply; and the HTMX and plain form posts left as they were.
-The model is ``FakeModel``; the browser is the real test client with HTTPS, CSRF, and Origin."""
+"""The **Assistant** page's reply shown as the model writes it (#370, #372, spec 6.14): the events
+of ``POST /assistant`` with ``Accept: text/event-stream``, in order; the reply word by word, with
+names put back and half-written Markdown closed; the finished reply replacing what was shown; a
+member leaving mid-reply; and the HTMX and plain form posts left as they were. The model is
+``FakeModel``; the browser is the real test client with HTTPS, CSRF, and Origin."""
 
 from __future__ import annotations
 
@@ -10,6 +11,7 @@ import asyncio
 import html
 import json
 import logging
+import random
 import re
 import time
 from collections.abc import Iterator, Mapping
@@ -25,12 +27,15 @@ from joserfc.jwk import RSAKey
 from dinnerbell.app_factory import create_app
 from dinnerbell.config import Settings
 from dinnerbell.db.models import AssistantConversationRow, AssistantUsageRow
+from dinnerbell.domain.assistant import Pseudonyms
 from dinnerbell.services.assistant.client import ModelEvents, ModelReply
 from dinnerbell.services.assistant.conversation import FAILED, MAX_MESSAGE_CHARS, TOO_LONG_ANSWER
+from dinnerbell.services.assistant.streaming import WORDS_HOLD_CHARS, CallText, Cut
 from dinnerbell.services.database import Database
 from dinnerbell.web import assistant_stream
 from dinnerbell.web import render as render_module
-from dinnerbell.web.assistant_stream import STREAM_TYPE, WebStream, events
+from dinnerbell.web.assistant_stream import STREAM_TYPE, TEXT_SECONDS, WebStream, events, next_text_at
+from dinnerbell.web.reply_markdown import reply_blocks
 from dinnerbell.web.routes import assistant_page
 from tests.conftest import BASE_URL, csrf_from, page
 from tests.support.clock import FakeClock
@@ -46,7 +51,7 @@ LONG = (
     "Noodle Bar is close by and quick on a weeknight.\n"
     "Either one works for the whole household."
 )
-"""A reply long enough to pass the hold (two lines and 160 characters)."""
+"""A reply long enough to pass the hold (`WORDS_HOLD_CHARS`)."""
 LONG_SHOWN = LONG.replace("Member 1", "Kim")
 
 
@@ -119,6 +124,44 @@ def streamed(client: TestClient, text: str) -> tuple[httpx.Response, list[tuple[
     return response, parsed(response.text)
 
 
+_TAG = re.compile(r"<(/?)(\w+)[^>]*>")
+
+
+def top_level(html_text: str) -> list[str]:
+    """``html_text``'s top-level elements, as the browser counts a ``text`` event's ``keep``."""
+    out, depth, start = [], 0, 0
+    for tag in _TAG.finditer(html_text):
+        closing, name = tag.group(1), tag.group(2)
+        if name in ("br", "hr"):
+            if depth == 0:
+                out.append(html_text[start : tag.end()])
+                start = tag.end()
+            continue
+        depth += -1 if closing else 1
+        if depth == 0:
+            out.append(html_text[start : tag.end()])
+            start = tag.end()
+    assert depth == 0 and start == len(html_text), html_text
+    return out
+
+
+def shown(found: list[tuple[str, dict[str, Any]]]) -> list[str]:
+    """What the placeholder shows after each ``text`` and ``discard`` event, as ``app.js`` puts
+    them together."""
+    blocks: list[str] = []
+    out = []
+    for name, data in found:
+        if name == "text":
+            assert 0 <= data["keep"] <= len(blocks)
+            blocks = blocks[: data["keep"]] + top_level(data["html"])
+        elif name == "discard":
+            blocks = []
+        else:
+            continue
+        out.append("".join(blocks))
+    return out
+
+
 def names(found: list[tuple[str, dict[str, Any]]]) -> list[str]:
     """Event names, with each run of ``text`` as one."""
     out: list[str] = []
@@ -171,13 +214,13 @@ def test_the_reply_streams_in_order_and_ends_as_a_reload_shows_it(
     assert start["replace"] is False
     assert "Ideas for tonight?" in start["html"] and "data-stream-reply" in start["html"]
     assert 'aria-hidden="true"' in start["html"] and " hidden " in start["html"]
-    texts = [data["html"] for name, data in found if name == "text"]
+    texts = shown(found)
     assert "Let me check" in texts[0]
     last = texts[-1]
     assert "Kim" in last and "Member 1" not in last  # names put back as it's written
     assert "<p>" in last  # rendered as the finished reply is
-    # Only whole lines show: the last line waits for the finished reply.
-    assert "Either one works" not in last
+    # Word by word: the last line shows too, all but the word still being written.
+    assert "Either one works for the whole" in last and "household" not in last
     done = found[-1][1]["html"]
     assert "Either one works for the whole household." in done and "Ideas for tonight?" not in done
     assert len(draft_ids(done)) == 1 and 'hx-post="/assistant/drafts/' in done
@@ -192,7 +235,7 @@ def test_a_short_reply_shows_only_when_its_done(client: TestClient, provider: Fa
     as_who(client, provider, "kim")
     model.script = [answer("Siam Garden.")]
     _, found = streamed(client, "Thai?")
-    assert names(found) == ["start", "done"]  # held: under two lines
+    assert names(found) == ["start", "done"]  # held: under WORDS_HOLD_CHARS
     assert "Siam Garden." in found[-1][1]["html"]
 
 
@@ -457,7 +500,7 @@ def test_the_stream_carries_the_security_headers(client: TestClient, provider: F
 
 
 def run_events(stream: WebStream, script: list[Any], result: Any) -> list[tuple[str, dict[str, Any]]]:
-    """``events`` for a task that returns ``result`` after ``script``: strings for ``lines``,
+    """``events`` for a task that returns ``result`` after ``script``: strings for ``more``,
     "tool" for ``tool_round``, "call" for ``call_started``."""
 
     async def go() -> str:
@@ -468,7 +511,7 @@ def run_events(stream: WebStream, script: list[Any], result: Any) -> list[tuple[
                 elif step == "call":
                     stream.call_started(0)
                 else:
-                    stream.lines(step)
+                    stream.more(step)
                 await asyncio.sleep(0)
             return result
 
@@ -484,20 +527,21 @@ def run_events(stream: WebStream, script: list[Any], result: Any) -> list[tuple[
 
 def test_pieces_that_queue_up_go_as_one_and_calls_never_join() -> None:
     stream = WebStream()
-    stream.lines("one")  # both before anyone reads: they go as one event
-    stream.lines("\ntwo")
+    stream.more("one")  # both before anyone reads: they go as one event
+    stream.more("\ntwo")
     found = run_events(stream, ["tool", "call", "three"], "finished")
     assert names(found) == ["start", "text", "discard", "text", "done"]
-    texts = [data["html"] for name, data in found if name == "text"]
+    texts = shown(found)
     assert "two" in texts[0] and "one" in texts[0]
     assert "three" in texts[-1] and "one" not in texts[-1]  # the next call starts fresh
+    assert [data["keep"] for name, data in found if name == "text"] == [0, 0]
     assert found[-1][1] == {"html": "<p>finished</p>"}
 
 
 def test_a_stream_nobody_listens_to_queues_nothing() -> None:
     stream = WebStream()
     stream.listening = False
-    stream.lines("text")
+    stream.more("text")
     stream.tool_round()
     stream.end()
     assert stream.queue.empty()
@@ -530,13 +574,13 @@ def test_a_reply_queues_one_marker_and_text_events_are_throttled(monkeypatch: py
     stream = WebStream()
     stream.call_started(0)
     for n in range(100):
-        stream.lines(f"line {n}\n")
+        stream.more(f"line {n}\n")
     assert stream.queue.qsize() == 1  # one marker, not a copy of the text per line
     monkeypatch.setattr(assistant_stream, "TEXT_SECONDS", 3600.0)  # a second text event would wait an hour
 
     async def go() -> list[str]:
         async def work() -> str:
-            stream.lines("the last line")  # while the first text event goes out
+            stream.more("the last line")  # while the first text event goes out
             await asyncio.sleep(0)
             return "ok"
 
@@ -557,12 +601,11 @@ def test_a_reply_queues_one_marker_and_text_events_are_throttled(monkeypatch: py
 def test_text_queued_for_a_call_never_shows_after_its_discard() -> None:
     stream = WebStream()
     stream.call_started(0)
-    stream.lines("first call")
+    stream.more("first call")
     stream.tool_round()
-    stream.lines("second call")
+    stream.more("second call")
     found = run_events(stream, [], "finished")
-    texts = [data["html"] for name, data in found if name == "text"]
-    assert names(found) == ["start", "discard", "text", "done"] and "second call" in texts[0]
+    assert names(found) == ["start", "discard", "text", "done"] and "second call" in shown(found)[-1]
 
 
 def test_the_streamed_fragments_skip_the_whole_page_queries(
@@ -586,3 +629,231 @@ def test_the_streamed_fragments_skip_the_whole_page_queries(
     asked.clear()
     response = client.post("/assistant", data={"message": "Ideas?", "csrf_token": token}, headers=STREAM)
     assert names(parsed(response.text)) == ["start", "text", "done"] and asked == []
+
+
+# Word by word (#372) -----------------------------------------------------------------------------
+
+
+class Words:
+    """A ``ReplyStream`` in words that keeps what it's given."""
+
+    cut = Cut.WORDS
+
+    def __init__(self) -> None:
+        self.pieces: list[str] = []
+        self.tool_rounds = 0
+
+    def call_started(self, drafts: int) -> None:
+        pass
+
+    def more(self, text: str) -> None:
+        self.pieces.append(text)
+
+    def tool_round(self) -> None:
+        self.tool_rounds += 1
+
+    @property
+    def joined(self) -> str:
+        return "".join(self.pieces)
+
+
+PAST_HOLD = "Here is a plan for the week. " * 5
+"""More than ``WORDS_HOLD_CHARS``, ending in whitespace."""
+NAMES = Pseudonyms({7: 1, 8: 2, 9: 12})
+SHOWN_NAMES = {7: "Kim", 8: "Lee", 9: "Ana"}
+
+
+def restore(text: str) -> str:
+    return NAMES.restore_names(text, SHOWN_NAMES)
+
+
+def feed(events: CallText, deltas: list[str]) -> None:
+    events.text_started()
+    for delta in deltas:
+        events.text(delta)
+
+
+def test_past_the_hold_each_word_shows_as_its_written() -> None:
+    assert len(PAST_HOLD) > WORDS_HOLD_CHARS
+    out = Words()
+    events = CallText(out, lambda text: text)
+    feed(events, [PAST_HOLD])
+    assert out.joined == PAST_HOLD.rstrip()
+    shown = len(out.pieces)
+    for word in ["One", " paragraph,", " no", " line", " break"]:
+        events.text(word)
+    # Each word shows once the next one starts: no line break needed, and the last waits.
+    assert out.pieces[shown:] == [" One", " paragraph,", " no", " line"]
+    for piece in out.pieces[1:]:
+        assert piece[0].isspace() and not piece[-1].isspace()
+
+
+def test_a_short_preface_and_then_a_tool_call_shows_nothing() -> None:
+    out = Words()
+    events = CallText(out, lambda text: text)
+    feed(events, ["Let me check ", "this week's plan ", "for you."])
+    events.tool_started()
+    assert out.pieces == [] and out.tool_rounds == 0
+
+
+def test_a_tool_call_after_the_hold_takes_the_text_back() -> None:
+    out = Words()
+    events = CallText(out, lambda text: text)
+    feed(events, [PAST_HOLD, "and more"])
+    events.tool_started()
+    events.text(" after the tool call ")
+    assert out.joined == PAST_HOLD + "and" and out.tool_rounds == 1
+
+
+@pytest.mark.parametrize(
+    ("deltas", "name", "ending"),
+    [
+        (["Ask Mem", "ber 1 ", "tonight. "], "Kim", " Ask Kim tonight."),  # two deltas, and a third after
+        (["Ask Member", " 1", "2 tonight. "], "Ana", " Ask Ana tonight."),  # three: Member 1, then Member 12
+        (["Ask Member 1", "2", " tonight. "], "Ana", " Ask Ana tonight."),
+        (["Ask M", "ember ", "2 tonight. "], "Lee", " Ask Lee tonight."),
+        (["Ask (Member", " 2) tonight. "], "Lee", " Ask (Lee) tonight."),
+    ],
+)
+def test_a_label_split_across_deltas_never_shows_as_a_label_or_the_wrong_name(
+    deltas: list[str], name: str, ending: str
+) -> None:
+    out = Words()
+    events = CallText(out, restore)
+    feed(events, [PAST_HOLD])
+    before = len(out.pieces)
+    for delta in deltas:
+        events.text(delta)
+        later = "".join(out.pieces[before:])
+        assert "M" not in later  # nothing of the label, or a name in place of part of it
+        assert not [other for other in SHOWN_NAMES.values() if other != name and other in later]
+    assert "".join(out.pieces[before:]) == ending
+
+
+def test_member_followed_by_other_text_isnt_held() -> None:
+    out = Words()
+    events = CallText(out, restore)
+    feed(events, [PAST_HOLD, "Ask Member Services ", "now"])
+    assert out.joined.endswith("Ask Member Services")
+
+
+ALPHABET = ["Member", "Member ", "Mem", "ber", " ", "  ", "\n", "\n\n", "1", "2", "12", "123", "x", "(", ")", ".", "-"]
+
+
+@pytest.mark.parametrize("seed", range(4))
+def test_whatever_the_deltas_the_shown_text_is_a_prefix_of_the_reply_with_names(seed: int) -> None:
+    """Property: after every delta, the words shown, names put back piece by piece, are a
+    prefix of the whole reply with names put back once."""
+    rng = random.Random(seed)  # noqa: S311 - reproducible test data, not a secret
+    for _ in range(300):
+        text = PAST_HOLD + "".join(rng.choice(ALPHABET) for _ in range(rng.randint(0, 60)))
+        whole = restore(text.strip())
+        out = Words()
+        events = CallText(out, restore)
+        events.text_started()
+        at = 0
+        while at < len(text):
+            step = rng.randint(1, 7)
+            events.text(text[at : at + step])
+            at += step
+            assert whole.startswith(out.joined), (text, out.pieces)
+        for n, piece in enumerate(out.pieces):
+            assert piece and not piece[-1].isspace()
+            assert n == 0 or piece[0].isspace()
+
+
+def drive(script: Any) -> list[tuple[str, dict[str, Any]]]:
+    """Run ``events`` one event at a time: ``script(stream, step)`` writes to the stream and
+    awaits ``step()`` for each next event."""
+
+    async def go() -> str:
+        stream = WebStream()
+        stream.call_started(0)
+        finish = asyncio.Event()
+
+        async def work() -> str:
+            await finish.wait()
+            return "finished"
+
+        async def done(value: str) -> str:
+            return f"<p>{value}</p>"
+
+        task = assistant_stream.Answers().start(work(), stream, 1)
+        body = events(stream, task, "", replace=False, done=done)
+        parts = [await anext(body)]
+
+        async def step() -> None:
+            parts.append(await anext(body))
+
+        await script(stream, step)
+        finish.set()
+        parts.extend([part async for part in body])
+        return "".join(parts)
+
+    return parsed(asyncio.run(go()))
+
+
+def test_a_text_event_sends_only_the_blocks_that_changed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(assistant_stream, "TEXT_SECONDS", 0.0)
+
+    async def script(stream: WebStream, step: Any) -> None:
+        stream.more("The first paragraph.\n\nThe second")
+        await step()
+        stream.more(" goes on")
+        await step()
+        stream.more("\n- and a list")
+        await step()
+
+    found = drive(script)
+    texts = [data for name, data in found if name == "text"]
+    assert [data["keep"] for data in texts] == [0, 1, 2]
+    assert "first" not in texts[1]["html"] + texts[2]["html"]  # sent once
+    assert shown(found)[-1] == "".join(reply_blocks("The first paragraph.\n\nThe second goes on\n- and a list"))
+    assert found[-1] == ("done", {"html": "<p>finished</p>"})
+
+
+def test_half_written_markdown_shows_styled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(assistant_stream, "TEXT_SECONDS", 0.0)
+
+    async def script(stream: WebStream, step: Any) -> None:
+        stream.more("Tonight: **Siam")
+        await step()
+        stream.more(" Garden** with `rice")
+        await step()
+
+    found = drive(script)
+    assert shown(found) == [
+        "<p>Tonight: <strong>Siam</strong></p>",
+        "<p>Tonight: <strong>Siam Garden</strong> with <code>rice</code></p>",
+    ]
+
+
+def test_a_big_text_event_holds_the_next_one_back_longer() -> None:
+    assert next_text_at(10.0, "x" * 10) == 10.0 + TEXT_SECONDS
+    big = "x" * assistant_stream.TEXT_BYTES_PER_SECOND
+    assert next_text_at(10.0, big) == 11.0
+
+
+def test_a_short_preface_before_a_tool_call_never_shows_on_the_page(
+    client: TestClient, provider: FakeProvider, model: FakeModel
+) -> None:
+    furnish(client, provider)
+    as_who(client, provider, "kim")
+    model.script = [with_text_and_tool("Let me look at this week's plan."), answer(LONG)]
+    _, found = streamed(client, "Ideas for tonight?")
+    assert names(found) == ["start", "text", "done"]  # no discard: nothing of the preface showed
+    assert not [text for text in shown(found) if "Let me look" in text]
+    assert "Kim" in shown(found)[-1]
+
+
+def test_a_one_paragraph_reply_streams_word_by_word(
+    client: TestClient, provider: FakeProvider, model: FakeModel
+) -> None:
+    furnish(client, provider)
+    as_who(client, provider, "kim")
+    one = " ".join(["Siam Garden has the green curry you liked, and it's close by."] * 4)
+    model.script = [answer(one)]
+    _, found = streamed(client, "Thai?")
+    texts = shown(found)
+    assert texts and all("<br>" not in text for text in texts)
+    assert texts[-1].endswith("close</p>")  # all but the last word, before done

@@ -455,15 +455,26 @@
       reply = placeholders[placeholders.length - 1] || null;
     }
 
-    function shown(html) {
+    // The reply's text so far: keep the first `keep` blocks shown and put `html`, the blocks
+    // that changed, after them. Nothing kept and no html empties it.
+    function shown(data) {
       var text = reply && reply.querySelector("[data-stream-text]");
       if (!text) {
         return;
       }
-      text.textContent = "";
-      put(text, html, "beforeend");
-      reply.hidden = !html;
-      form.classList.toggle("writing", Boolean(html));
+      var keep = Number(data.keep) || 0;
+      if (!keep) {
+        text.textContent = "";
+      }
+      while (text.children.length > keep) {
+        text.lastElementChild.remove();
+      }
+      if (data.html) {
+        put(text, data.html, "beforeend");
+      }
+      var any = text.children.length > 0;
+      reply.hidden = !any;
+      form.classList.toggle("writing", any);
     }
 
     function done(data) {
@@ -489,9 +500,9 @@
       if (item.name === "start") {
         started(item.data);
       } else if (item.name === "text") {
-        shown(item.data.html);
+        shown(item.data);
       } else if (item.name === "discard") {
-        shown("");
+        shown({});
       } else if (item.name === "done") {
         done(item.data);
       } else if (item.name === "error") {

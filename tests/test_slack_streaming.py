@@ -50,7 +50,7 @@ from dinnerbell.services.assistant.conversation import (
 from dinnerbell.services.assistant.drafts import DraftView
 from dinnerbell.services.assistant.prompt import system_prompt
 from dinnerbell.services.assistant.runtime import AssistantConfig
-from dinnerbell.services.assistant.streaming import HOLD_CHARS, CallText
+from dinnerbell.services.assistant.streaming import HOLD_CHARS, CallText, Cut
 from dinnerbell.services.database import Database, open_database
 from tests.support.calls import House, furnish, make_house
 from tests.support.clock import FakeClock
@@ -256,6 +256,8 @@ def test_clip_markdown_never_splits_an_escape() -> None:
 
 
 class Heard:
+    cut = Cut.LINES
+
     def __init__(self) -> None:
         self.pieces: list[str] = []
         self.tool_rounds = 0
@@ -263,7 +265,7 @@ class Heard:
     def call_started(self, drafts: int) -> None:
         pass
 
-    def lines(self, text: str) -> None:
+    def more(self, text: str) -> None:
         self.pieces.append(text)
 
     def tool_round(self) -> None:
@@ -328,6 +330,17 @@ async def test_names_go_back_into_whole_lines() -> None:
     text = "Member 2 can cook.\n" + "x" * HOLD_CHARS + "\nAsk Member 2\nlater"
     await tell(events, [{"type": "text", "text": text}], random.Random(1))  # noqa: S311 - reproducible test data
     assert "".join(heard.pieces) == "Kim can cook.\n" + "x" * HOLD_CHARS + "\nAsk Kim"
+
+
+async def test_slack_still_gets_whole_lines_never_words() -> None:
+    """The web's stream is in words (#372); Slack's stays in lines."""
+    assert slack_assistant.SlackStream.cut is Cut.LINES
+    heard = Heard()
+    events = CallText(heard, lambda text: text)
+    events.text_started()
+    for delta in ["One line of text that runs on", " for a while.\n", "x" * HOLD_CHARS, "\nAnd another", " line"]:
+        events.text(delta)
+    assert heard.pieces == ["One line of text that runs on for a while.\n" + "x" * HOLD_CHARS]
 
 
 async def test_short_text_is_held_and_a_tool_call_drops_it_unseen() -> None:
@@ -473,7 +486,7 @@ async def test_a_dm_reply_with_drafts_streams_then_posts_its_cards(
 ) -> None:
     async def drafting(*args: Any, stream: Any = None, **kwargs: Any) -> Reply:
         stream.call_started(1)
-        stream.lines(LONG.rsplit("\n", 1)[0])
+        stream.more(LONG.rsplit("\n", 1)[0])
         await asyncio.sleep(0)
         return Reply(LONG, (DraftView(1, "proposal", "A noodle place", ("Adds it.",)),))
 
@@ -601,7 +614,7 @@ async def test_a_failure_in_converse_after_streaming_ends_the_stream_with_the_fa
 ) -> None:
     async def breaks(*args: Any, stream: Any = None, **kwargs: Any) -> Reply:
         stream.call_started(0)
-        stream.lines(LONG.rsplit("\n", 1)[0])
+        stream.more(LONG.rsplit("\n", 1)[0])
         await asyncio.sleep(0)
         raise RuntimeError("boom")
 
@@ -753,11 +766,11 @@ async def test_a_tool_round_while_the_stream_is_starting_keeps_the_calls_apart()
     starting = api.held["start"] = asyncio.Event()
     stream = dm_stream(api)
     stream.call_started(0)
-    stream.lines(FIRST_CALL)
+    stream.more(FIRST_CALL)
     await turns()  # the worker is waiting for chat.startStream
     stream.tool_round()
     stream.call_started(0)
-    stream.lines(SECOND_CALL.split("\n")[0])
+    stream.more(SECOND_CALL.split("\n")[0])
     starting.set()
     unseen = await stream.finish(SECOND_CALL)
     for text in api.messages.values():
@@ -778,12 +791,12 @@ async def test_a_slow_resume_never_feeds_the_next_call_into_the_last_message() -
 
     stream = dm_stream(api, resume)
     stream.call_started(0)
-    stream.lines(FIRST_CALL)
+    stream.more(FIRST_CALL)
     await turns()
     stream.tool_round()
     await turns()  # the first message is stopped, and the status is being shown again
     stream.call_started(0)
-    stream.lines(SECOND_CALL.split("\n")[0])
+    stream.more(SECOND_CALL.split("\n")[0])
     resuming.set()
     unseen = await stream.finish(SECOND_CALL)
     assert list(api.messages.values()) == [safe_markdown(FIRST_CALL), safe_markdown(SECOND_CALL)]
@@ -795,12 +808,12 @@ async def test_a_slow_stop_never_feeds_the_next_call_into_the_last_message() -> 
     stopping = api.held["stop"] = asyncio.Event()
     stream = dm_stream(api)
     stream.call_started(0)
-    stream.lines(FIRST_CALL)
+    stream.more(FIRST_CALL)
     await turns()
     stream.tool_round()
     await turns()  # chat.stopStream is slow
     stream.call_started(0)
-    stream.lines(SECOND_CALL.split("\n")[0])
+    stream.more(SECOND_CALL.split("\n")[0])
     stopping.set()
     unseen = await stream.finish(SECOND_CALL)
     assert list(api.messages.values()) == [safe_markdown(FIRST_CALL), safe_markdown(SECOND_CALL)]
@@ -812,7 +825,7 @@ async def test_a_call_that_streams_nothing_after_a_tool_round_leaves_the_reply_t
     api.held["start"] = asyncio.Event()
     stream = dm_stream(api)
     stream.call_started(0)
-    stream.lines(FIRST_CALL)
+    stream.more(FIRST_CALL)
     await turns()
     stream.tool_round()
     stream.call_started(0)  # the final call is short: held, never streamed
@@ -849,10 +862,10 @@ async def test_a_stuck_worker_holds_up_the_end_only_so_long(monkeypatch: pytest.
 
     stream = dm_stream(api, resume)
     stream.call_started(0)
-    stream.lines(FIRST_CALL)
+    stream.more(FIRST_CALL)
     stream.tool_round()
     stream.call_started(0)
-    stream.lines(SECOND_CALL.split("\n")[0])
+    stream.more(SECOND_CALL.split("\n")[0])
     assert await asyncio.wait_for(stream.finish(SECOND_CALL), 5) == SECOND_CALL  # nothing of it shown
 
 
@@ -862,7 +875,7 @@ async def test_a_slack_call_that_hangs_is_cut_off_and_the_reply_posted(monkeypat
     api.held["start"] = asyncio.Event()  # never set
     stream = dm_stream(api)
     stream.call_started(0)
-    stream.lines(SECOND_CALL.split("\n")[0])
+    stream.more(SECOND_CALL.split("\n")[0])
     assert await asyncio.wait_for(stream.finish(SECOND_CALL), 2) == SECOND_CALL  # well before the drain's bound
 
 
@@ -905,7 +918,7 @@ async def test_a_cancelled_answer_cancels_the_streams_worker(slack: Slack, monke
 async def test_a_streamed_message_with_no_reply_is_stopped(slack: Slack, monkeypatch: pytest.MonkeyPatch) -> None:
     async def nothing(*args: Any, stream: Any = None, **kwargs: Any) -> None:
         stream.call_started(0)
-        stream.lines(LONG.rsplit("\n", 1)[0])
+        stream.more(LONG.rsplit("\n", 1)[0])
         await asyncio.sleep(0)
         return
 
@@ -918,7 +931,7 @@ async def test_a_streamed_message_with_no_reply_is_stopped(slack: Slack, monkeyp
 
 async def test_a_listener_that_breaks_is_dropped_and_the_call_goes_on(caplog: pytest.LogCaptureFixture) -> None:
     class Breaks(Heard):
-        def lines(self, text: str) -> None:
+        def more(self, text: str) -> None:
             raise RuntimeError("boom")
 
     out = Breaks()
@@ -946,7 +959,7 @@ async def test_a_stop_that_hangs_is_cut_off_and_the_rest_posted(monkeypatch: pyt
     api.held["stop"] = asyncio.Event()  # never set: Slack doesn't answer chat.stopStream
     stream = dm_stream(api)
     stream.call_started(0)
-    stream.lines(SECOND_CALL.split("\n")[0])
+    stream.more(SECOND_CALL.split("\n")[0])
     unseen = await asyncio.wait_for(stream.finish(SECOND_CALL), 2)
     assert unseen == "It does pickup."  # only what the member hasn't seen
     assert api.calls == ["start", "stop"]
@@ -962,7 +975,7 @@ async def test_a_chunk_for_the_wrong_message_is_refused_and_the_reply_posted(
     api = SlowSlack()
     stream = dm_stream(api)
     stream.call_started(0)
-    stream.lines(FIRST_CALL)
+    stream.more(FIRST_CALL)
     await stream._drain()
     first = stream.current
     assert first is not None and first.ts is not None
@@ -984,7 +997,7 @@ async def test_a_reply_that_breaks_after_streaming_still_stops_the_stream(
 ) -> None:
     async def streaming(*args: Any, stream: Any = None, **kwargs: Any) -> Reply:
         stream.call_started(0)
-        stream.lines(LONG.rsplit("\n", 1)[0])
+        stream.more(LONG.rsplit("\n", 1)[0])
         await asyncio.sleep(0)
         return Reply(LONG)
 

@@ -34,6 +34,7 @@ from dinnerbell.domain.assistant import (
     dollars,
     fallback_prices,
     format_dollars,
+    label_may_span,
     long_day,
     month_key,
     recent_turns,
@@ -261,6 +262,26 @@ def test_names_come_back_only_for_labels_the_conversation_gave() -> None:
     assert names.restore_names(text, {7: "Sam", 3: ""}) == (
         "Sam and Member 2 can go; Member 3 can't, and Member 10 isn't here."
     )
+
+
+@pytest.mark.parametrize(
+    ("before", "after", "spans"),
+    [
+        ("Ask Member", "", True),  # nothing after it yet
+        ("Ask Member", " ", True),
+        ("Ask Member", " 1", True),  # Member 1, or Member 12 once more comes
+        ("Ask Member", " 12 now", True),
+        ("(Member", " 2)", True),
+        ("Ask Member", " Services", False),
+        ("Ask Member", "  1", False),  # two spaces: never a label
+        ("Ask Member", "\n1", False),
+        ("AskMember", " 1", False),  # not the word "Member"
+        ("Ask Members", " 1", False),
+        ("Ask Member 1", " now", False),  # a whole label, already followed by whitespace
+    ],
+)
+def test_a_label_may_span_a_cut_only_after_the_word_member(before: str, after: str, spans: bool) -> None:
+    assert label_may_span(before, after) is spans
 
 
 # Conversations ---------------------------------------------------------------------------------
