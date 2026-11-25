@@ -10,6 +10,7 @@ import time
 import pytest
 from markupsafe import escape
 
+from dinnerbell.web import reply_markdown as markdown_module
 from dinnerbell.web.reply_markdown import reply_blocks, reply_markdown
 
 ALLOWED_TAGS = {"p", "br", "ul", "ol", "li", "strong", "em", "del", "code", "pre", "hr"}
@@ -146,7 +147,15 @@ def test_an_entity_the_model_wrote_stays_text() -> None:
         ("a [link", "<p>a [link</p>"),
         # A closer that would make the line another kind of block isn't used.
         ("``", "<p>``</p>"),
-        ("**", "<p>**</p>"),
+        ("a ``", "<p>a ``</p>"),
+        # Markers inside code don't count, and code closes first.
+        ("Run `ls *.py", "<p>Run <code>ls *.py</code></p>"),
+        ("Run `a **b", "<p>Run <code>a **b</code></p>"),
+        # A line that ends in a marker gets no closer: it would only make a span of markers.
+        ("a ***", "<p>a ***</p>"),
+        ("a **", "<p>a **</p>"),
+        ("Rating: *****", "".join(reply_blocks("Rating: *****"))),
+        ("**bold** and ~~", "<p><strong>bold</strong> and ~~</p>"),
         # A code block shows as code, open or not, and gets nothing appended.
         ("```\nx = `a", "<pre><code>x = `a</code></pre>"),
     ],
@@ -166,3 +175,62 @@ def test_a_finished_replys_blocks_are_its_markdown() -> None:
     blocks = reply_blocks(text)
     assert "".join(blocks) == html(text)
     assert [block[:4] for block in blocks] == ["<p>O", "<ul>", "<hr>", "<pre", "<p><"]
+
+
+@pytest.mark.parametrize(
+    ("text", "shown"),
+    [
+        # A list item's marker waits for its first word, so it never shows as a paragraph.
+        ("- **Tacos** on Monday\n-", "<ul><li><strong>Tacos</strong> on Monday</li></ul>"),
+        (
+            "- **Tacos** on Monday\n- **Pasta",
+            "<ul><li><strong>Tacos</strong> on Monday</li><li><strong>Pasta</strong></li></ul>",
+        ),
+        ("1. Tacos\n2.", "<ol><li>Tacos</li></ol>"),
+        ("1. Tacos\n2)", "<ol><li>Tacos</li></ol>"),
+        ("Plan:\n\n3.", "<p>Plan:</p>"),
+        ("Plan:\n•", "<p>Plan:</p>"),
+        ("- a\n  -", "<ul><li>a</li></ul>"),
+        # A heading's, a rule's, or a code block's start waits too.
+        ("Plan:\n\n##", "<p>Plan:</p>"),
+        ("Plan:\n--", "<p>Plan:</p>"),
+        ("Plan:\n**", "<p>Plan:</p>"),
+        ("Plan:\n```py", "<p>Plan:</p>"),
+        ("Plan:\n~~~", "<p>Plan:</p>"),
+        ("-", ""),
+        # Once it's more than a marker, it shows as the block it is.
+        ("Plan:\n---", "<p>Plan:</p><hr>"),
+        ("Plan:\n```py\nx", "<p>Plan:</p><pre><code>x</code></pre>"),
+        ("Plan:\n## Monday", "<p>Plan:</p><p><strong>Monday</strong></p>"),
+        # A block quote's marker is text, as in the finished reply.
+        ("Plan:\n>", "<p>Plan:<br>&gt;</p>"),
+    ],
+)
+def test_an_unfinished_replys_last_line_that_is_only_a_marker_waits(text: str, shown: str) -> None:
+    assert "".join(reply_blocks(text, unfinished=True)) == shown
+
+
+def test_a_marker_line_waits_only_while_its_last() -> None:
+    text = "- a\n-\n- b"
+    assert reply_blocks(text, unfinished=True) == reply_blocks(text)
+
+
+def test_closing_a_line_styles_it_only_as_often_as_it_needs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each closer tried styles the whole line again, so only closers whose characters the line
+    has are tried, and the first that leaves no marker showing ends the search."""
+    calls = []
+    styled = markdown_module.inline
+
+    def counted(text: str) -> str:
+        calls.append(text)
+        return styled(text)
+
+    monkeypatch.setattr(markdown_module, "inline", counted)
+    assert markdown_module._closed("plain words") == "plain words"
+    assert len(calls) == 1
+    calls.clear()
+    assert markdown_module._closed("Tonight: **Siam") == "Tonight: **Siam**"
+    assert len(calls) == 2  # the line, then ** leaves none
+    calls.clear()
+    markdown_module._closed("*a " * 600 + "*a")  # nothing closes it all: only the * closers
+    assert len(calls) == 4

@@ -28,8 +28,9 @@ from dinnerbell.app_factory import create_app
 from dinnerbell.config import Settings
 from dinnerbell.db.models import AssistantConversationRow, AssistantUsageRow
 from dinnerbell.domain.assistant import Pseudonyms
+from dinnerbell.services.assistant import streaming
 from dinnerbell.services.assistant.client import ModelEvents, ModelReply
-from dinnerbell.services.assistant.conversation import FAILED, MAX_MESSAGE_CHARS, TOO_LONG_ANSWER
+from dinnerbell.services.assistant.conversation import FAILED, MAX_MESSAGE_CHARS, TOO_LONG_ANSWER, _reply_text
 from dinnerbell.services.assistant.streaming import WORDS_HOLD_CHARS, CallText, Cut
 from dinnerbell.services.database import Database
 from dinnerbell.web import assistant_stream
@@ -80,6 +81,14 @@ class GatedModel(FakeModel):
             if self.gate is not None:
                 await self.gate.wait()
             events.text(text[half:])
+
+
+@pytest.fixture
+def unthrottled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every ``text`` event goes as soon as its text is there, so a test sees each one: with the
+    throttle, text still waiting when the answer ends goes with ``done`` instead."""
+    monkeypatch.setattr(assistant_stream, "TEXT_SECONDS", 0.0)
+    monkeypatch.setattr(assistant_stream, "TEXT_BYTES_PER_SECOND", float("inf"))
 
 
 @pytest.fixture
@@ -189,6 +198,7 @@ def with_text_and_tool(text: str) -> ModelReply:
 # The events --------------------------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("unthrottled")
 def test_the_reply_streams_in_order_and_ends_as_a_reload_shows_it(
     client: TestClient, provider: FakeProvider, model: GatedModel, migrated: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -525,6 +535,7 @@ def run_events(stream: WebStream, script: list[Any], result: Any) -> list[tuple[
     return parsed(asyncio.run(go()))
 
 
+@pytest.mark.usefixtures("unthrottled")
 def test_pieces_that_queue_up_go_as_one_and_calls_never_join() -> None:
     stream = WebStream()
     stream.more("one")  # both before anyone reads: they go as one event
@@ -737,29 +748,71 @@ def test_member_followed_by_other_text_isnt_held() -> None:
     assert out.joined.endswith("Ask Member Services")
 
 
-ALPHABET = ["Member", "Member ", "Mem", "ber", " ", "  ", "\n", "\n\n", "1", "2", "12", "123", "x", "(", ")", ".", "-"]
+ALPHABET = [
+    *["Member", "Member ", "Mem", "ber", "Members", "MemberX", " ", "  ", "\t", "\n", "\n\n"],
+    *["1", "2", "12", "123", "1234", "12345", "x", "word", "(", ")", ".", ",", "-", "*", "`"],
+    "\u0661",  # ARABIC-INDIC DIGIT ONE: a digit to ``\\d``, so it can make a label
+    "\u00a0",  # NO-BREAK SPACE: whitespace to ``str.isspace``, but never a label's space
+    "\u3000",  # IDEOGRAPHIC SPACE
+]
 
 
 @pytest.mark.parametrize("seed", range(4))
 def test_whatever_the_deltas_the_shown_text_is_a_prefix_of_the_reply_with_names(seed: int) -> None:
     """Property: after every delta, the words shown, names put back piece by piece, are a
-    prefix of the whole reply with names put back once."""
+    prefix of the whole reply with names put back once, across several text blocks."""
     rng = random.Random(seed)  # noqa: S311 - reproducible test data, not a secret
     for _ in range(300):
-        text = PAST_HOLD + "".join(rng.choice(ALPHABET) for _ in range(rng.randint(0, 60)))
-        whole = restore(text.strip())
+        texts = [PAST_HOLD, "".join(rng.choice(ALPHABET) for _ in range(rng.randint(0, 60)))]
+        texts += ["".join(rng.choice(ALPHABET) for _ in range(rng.randint(0, 40))) for _ in range(rng.randint(0, 2))]
+        blocks = [{"type": "text", "text": text} for text in texts]
+        whole = restore(_reply_text(blocks))
         out = Words()
         events = CallText(out, restore)
-        events.text_started()
-        at = 0
-        while at < len(text):
-            step = rng.randint(1, 7)
-            events.text(text[at : at + step])
-            at += step
-            assert whole.startswith(out.joined), (text, out.pieces)
+        for text in texts:
+            events.text_started()
+            at = 0
+            while at < len(text):
+                step = rng.randint(1, 7)
+                events.text(text[at : at + step])
+                at += step
+                assert whole.startswith(out.joined), (texts, out.pieces)
         for n, piece in enumerate(out.pieces):
             assert piece and not piece[-1].isspace()
             assert n == 0 or piece[0].isspace()
+
+
+@pytest.mark.parametrize(
+    ("cut", "text"),
+    [
+        (Cut.LINES, "intro line\nsecond line here\n" + "word " * 3200),  # one long paragraph
+        (Cut.WORDS, "x " * 70 + "-" * 16_000),  # no whitespace at all
+        (Cut.WORDS, "x" * 200 + " " * 16_000 + "y "),  # only whitespace
+        (Cut.WORDS, "x " * 70 + "Member " * 3000),  # each "Member" held a while
+        (Cut.LINES, "x\n" * 100 + "\n" * 16_000 + "y\n"),
+    ],
+)
+def test_looking_for_where_to_cut_costs_about_the_texts_length(
+    monkeypatch: pytest.MonkeyPatch, cut: Cut, text: str
+) -> None:
+    """Each delta looks for a break only in what's new, so the text searched in all adds up to
+    about the reply's length, not its square, whatever it holds."""
+    searched = []
+    look = streaming._last_break
+
+    def counted(text: str, start: int, stop: int, *, words: bool) -> int:
+        searched.append(max(0, stop - start))
+        return look(text, start, stop, words=words)
+
+    monkeypatch.setattr(streaming, "_last_break", counted)
+    out = Words()
+    out.cut = cut  # type: ignore[misc]
+    events = CallText(out, lambda text: text)
+    events.text_started()
+    for at in range(0, len(text), 4):
+        events.text(text[at : at + 4])
+    assert out.pieces
+    assert sum(searched) < 3 * len(text)
 
 
 def drive(script: Any) -> list[tuple[str, dict[str, Any]]]:
@@ -785,9 +838,10 @@ def drive(script: Any) -> list[tuple[str, dict[str, Any]]]:
         async def step() -> None:
             parts.append(await anext(body))
 
-        await script(stream, step)
-        finish.set()
-        parts.extend([part async for part in body])
+        async with asyncio.timeout(10):  # a test that fails, not one that hangs
+            await script(stream, step)
+            finish.set()
+            parts.extend([part async for part in body])
         return "".join(parts)
 
     return parsed(asyncio.run(go()))
@@ -828,6 +882,21 @@ def test_half_written_markdown_shows_styled(monkeypatch: pytest.MonkeyPatch) -> 
     ]
 
 
+def test_the_end_never_waits_for_the_throttle(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Text still waiting for its turn when the answer ends goes with ``done``, at once: the
+    next ``text`` event would wait for ages here, and ``done`` doesn't."""
+    monkeypatch.setattr(assistant_stream, "TEXT_SECONDS", 3600.0)
+
+    async def script(stream: WebStream, step: Any) -> None:
+        stream.more("```\n" + "a line of code\n" * 1000)
+        await step()
+        stream.more("the rest")  # would go only after an hour
+
+    found = drive(script)
+    assert names(found) == ["start", "text", "done"]
+    assert "the rest" not in shown(found)[-1] and found[-1] == ("done", {"html": "<p>finished</p>"})
+
+
 def test_a_big_text_event_holds_the_next_one_back_longer() -> None:
     assert next_text_at(10.0, "x" * 10) == 10.0 + TEXT_SECONDS
     big = "x" * assistant_stream.TEXT_BYTES_PER_SECOND
@@ -846,6 +915,7 @@ def test_a_short_preface_before_a_tool_call_never_shows_on_the_page(
     assert "Kim" in shown(found)[-1]
 
 
+@pytest.mark.usefixtures("unthrottled")
 def test_a_one_paragraph_reply_streams_word_by_word(
     client: TestClient, provider: FakeProvider, model: FakeModel
 ) -> None:

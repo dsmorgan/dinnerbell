@@ -281,7 +281,7 @@ def test_names_come_back_only_for_labels_the_conversation_gave() -> None:
     ],
 )
 def test_a_label_may_span_a_cut_only_after_the_word_member(before: str, after: str, spans: bool) -> None:
-    assert label_may_span(before, after) is spans
+    assert label_may_span(before + after, len(before)) is spans
 
 
 # Conversations ---------------------------------------------------------------------------------
