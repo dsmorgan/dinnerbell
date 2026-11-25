@@ -304,13 +304,14 @@ _LABEL_HEAD = re.compile(r"\bMember\Z")
 _LABEL_REST = re.compile(r" ?\Z| \d")
 
 
-def label_may_span(before: str, after: str) -> bool:
-    """Whether a member label could run from ``before`` into ``after``, the text after it so
-    far, now or once more is written: ``before`` ends with the word "Member", and ``after`` is the
-    rest of a label or could still grow into one. A reply shown while it's written is cut only
-    just before whitespace; where this is False, names put back into the two sides apart are
-    what they'd be in the whole (``services.assistant.streaming``)."""
-    return _LABEL_HEAD.search(before) is not None and _LABEL_REST.match(after) is not None
+def label_may_span(text: str, end: int) -> bool:
+    """Whether a member label could run across ``end`` in ``text``, now or once more is
+    written: ``text[:end]`` ends with the word "Member", and what follows it so far is the rest of
+    a label or could still grow into one. A reply shown while it's written is cut only just
+    before whitespace; where this is False, names put back into the two sides apart are what
+    they'd be in the whole (``services.assistant.streaming``)."""
+    head = _LABEL_HEAD.search(text, max(0, end - len("Member")), end)  # \b still sees text[:pos]
+    return head is not None and _LABEL_REST.match(text, end) is not None
 
 
 @dataclass(frozen=True, slots=True)

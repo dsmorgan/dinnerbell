@@ -13,7 +13,9 @@ clickable (ADR 0009).
 
 A reply still being written (``reply_blocks`` with ``unfinished``, #372) gets its last line's
 open code span, bold, italics, or strikethrough closed, so it shows styled while the model writes
-it, not as the characters typed. A ``[`` needs nothing: a link always shows as typed."""
+it, not as the characters typed. A last line that's only a list, heading, rule, or code block's
+marker so far is left out until its first word comes. A ``[`` or ``>`` needs nothing: links and
+block quotes always show as typed."""
 
 from __future__ import annotations
 
@@ -73,33 +75,47 @@ def inline(text: str) -> str:
 
 _CLOSERS = ("**", "*", "`", "_", "__", "~~", "***", "``")
 """What ``_closed`` tries at the end of a line still being written, best first."""
+_CODE_SPAN = re.compile(r"<code>.*?</code>")
 _TAG = re.compile(r"<[^>]*>")
 _MARKER = re.compile(r"[*_~`]")
+_EMPTY_SPAN = re.compile(r"<(strong|em|del|code)>(?:<[^>]*>|[\s*_~`])*</")
+"""A span with nothing in it but markers or whitespace: a closer made it from markers alone."""
+_JUST_MARKER = re.compile(r"\s{0,3}(?:[-*+•]|\d{1,9}[.)]|#{1,6}|([-*_])\s*\1?|`{3,}.*|~{3,}.*)")
+"""A last line that's only what starts a list item, heading, rule, or code block, so far."""
 
 
 def _kind(line: str) -> tuple[bool, ...]:
     return tuple(bool(p.match(line)) for p in (_FENCE, _RULE, _HEADING, _BULLET, _NUMBERED))
 
 
-def _literal_markers(line: str) -> int:
-    """How many marker characters ``line`` shows as typed."""
-    return len(_MARKER.findall(_TAG.sub("", inline(line))))
+def _literal_markers(styled: str) -> int:
+    """How many marker characters ``styled``, a line from ``inline``, shows as typed outside
+    code."""
+    return len(_MARKER.findall(_TAG.sub("", _CODE_SPAN.sub("", styled))))
 
 
 def _closed(line: str) -> str:
     """``line``, the last of a reply still being written, with the closer from ``_CLOSERS`` that
-    leaves the fewest markers showing as typed, if any leaves fewer, and keeps the line the kind
-    of block it is."""
-    if len(line) > MAX_STYLED:
+    leaves the fewest markers showing as typed outside code, if any leaves fewer. A closer must
+    keep the line the kind of block it is, and make no span of markers alone, so a line that
+    ends in a marker, such as "Rating: ****", gets none. Each try styles the line once, so only
+    closers whose characters the line has are tried, and the first that leaves none wins."""
+    if len(line) > MAX_STYLED or not line or _MARKER.match(line[-1]):
         return line
-    best, fewest = line, _literal_markers(line)
-    if not fewest:
-        return line
+    fewest = _literal_markers(inline(line))
+    best = line
     for closer in _CLOSERS:
+        if not fewest:
+            break
+        if closer[0] not in line:
+            continue
         candidate = line + closer
         if _kind(candidate) != _kind(line):
             continue
-        shown = _literal_markers(candidate)
+        styled = inline(candidate)
+        if _EMPTY_SPAN.search(styled):
+            continue
+        shown = _literal_markers(styled)
         if shown < fewest:
             best, fewest = candidate, shown
     return best
@@ -127,6 +143,8 @@ def _blocks(lines: list[str], *, unfinished: bool = False) -> Iterator[str]:
         line = lines[index]
         index += 1
         if unfinished and index == len(lines):  # a fence's last line never comes here
+            if _JUST_MARKER.fullmatch(line):
+                continue  # it shows once its first word does, as the block it starts
             line = _closed(line)
         fence = _FENCE.match(line)
         if fence:

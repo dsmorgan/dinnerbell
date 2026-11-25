@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import enum
 import logging
+import re
 from collections.abc import Callable
 from typing import Protocol
 
@@ -46,6 +47,24 @@ model's writing, and more than the sentence or two a model writes before a tool 
 ignores the prompt's "Write no text before a tool call"."""
 SEPARATOR = "\n\n"
 """What joins a reply's text blocks (``conversation._reply_text``)."""
+_SPACE = re.compile(r"\s")
+"""Whitespace, as ``str.isspace`` and ``str.rstrip`` see it."""
+
+
+def _last_break(text: str, start: int, stop: int, *, words: bool) -> int:
+    """The index of the last break in ``text[start:stop]``, or -1: a line break, or with
+    ``words`` any whitespace. It looks back from ``stop`` in doubling steps, so it costs about
+    the distance to the break, at C speed."""
+    if not words:
+        return text.rfind("\n", start, stop)
+    high, size = stop, 64
+    while high > start:
+        low = max(start, high - size)
+        found = _SPACE.search(text[low:high][::-1])
+        if found is not None:
+            return high - 1 - found.start()
+        high, size = low, size * 2
+    return -1
 
 
 class Cut(enum.Enum):
@@ -96,6 +115,10 @@ class CallText:
         """The open text block, as written so far."""
         self._sent = 0
         """How much of the joined text (``_joined_open``) has gone to ``more``."""
+        self._clear = 0
+        """No break in the joined text before here gives more to send: each delta looks for one
+        only in what's new. A closed block's stripped whitespace can move a break, so it starts
+        over."""
         self._showing = False
         """Past the hold: this call's text is being shown."""
         self._tools = False
@@ -130,6 +153,7 @@ class CallText:
             self._done = self._done + separator + self._current.strip()
             self._done_has_text = True
         self._current = None
+        self._clear = 0
 
     def _pump(self) -> None:
         text = self._joined_open()
@@ -141,26 +165,30 @@ class CallText:
             elif shown.count("\n") < HOLD_LINES or len(shown) < HOLD_CHARS:
                 return
             self._showing = True
-        end = self._end(text, len(text))
-        while end > self._sent and label_may_span(text[:end], text[end:]):
-            end = self._end(text, end - len("Member"))  # before the label's word
+        at = _last_break(text, max(self._sent, self._clear), len(text), words=self._words)
+        if at < 0:
+            self._clear = len(text)
+            return
+        end = self._end(text, at)
+        while end > self._sent and label_may_span(text, end):
+            # Before the label's word: the last break before it.
+            end = self._end(text, _last_break(text, self._sent, end - len("Member"), words=self._words))
         if end <= self._sent:
+            # No break up to ``at`` gives anything now. A label held there shows with the words
+            # after the next break, a word late at most.
+            self._clear = at + 1
             return
         piece = text[self._sent : end]
         self._sent = end
         restored = self._restore(piece)
         self._tell(lambda out: out.more(restored))
 
-    def _end(self, text: str, before: int) -> int:
-        """Where a piece may end, at most at ``before``: just before the last whitespace (a line
-        break's, for lines) that starts before ``before``, with any whitespace before it left
-        out; or no further than what's sent, when there's none."""
-        at = before - 1
-        while at >= self._sent and not (text[at] == "\n" or (self._words and text[at].isspace())):
-            at -= 1
+    def _end(self, text: str, at: int) -> int:
+        """Where a piece may end for the break at ``at``: just before it, with any whitespace
+        before it left out. No further than what's sent, when there's no break (-1)."""
         if at < self._sent:
             return self._sent
-        return len(text[:at].rstrip())
+        return self._sent + len(text[self._sent : at].rstrip())
 
     def _joined_open(self) -> str:
         """The call's text so far as the reply would join it. The open block keeps its trailing

@@ -221,16 +221,28 @@ async def events[T](
     """The call whose text they are."""
     try:
         yield event("start", {"html": pending, "replace": replace})
+        waiting: _Text | None = None
+        """Text to send once ``ready_at`` comes, unless the answer ends first: ``done`` then
+        replaces it, so it never holds ``done`` up."""
         while True:
-            try:
-                item = await asyncio.wait_for(stream.queue.get(), HEARTBEAT_SECONDS)
-            except TimeoutError:
-                yield HEARTBEAT
+            timeout = HEARTBEAT_SECONDS if waiting is None else ready_at - loop.time()
+            item: _Text | _Mark | None = None
+            if timeout > 0:
+                try:
+                    item = await asyncio.wait_for(stream.queue.get(), timeout)
+                except TimeoutError:
+                    if waiting is None:
+                        yield HEARTBEAT
+                        continue
+            elif not stream.queue.empty():
+                item = stream.queue.get_nowait()  # an end that came meanwhile goes first
+            if item is None:  # the wait for ``waiting`` is over
+                item, waiting = waiting, None
+            elif isinstance(item, _Text) and item is not waiting and loop.time() < ready_at:
+                waiting = item  # the latest call's text; more words may come meanwhile
                 continue
             if isinstance(item, _Text):
-                wait = ready_at - loop.time()
-                if wait > 0:
-                    await asyncio.sleep(wait)  # more words may come meanwhile: they go with these
+                waiting = None
                 text = stream.take(item)
                 if text is None:
                     continue
@@ -245,7 +257,7 @@ async def events[T](
                 ready_at = next_text_at(loop.time(), sent)
                 yield sent
             elif item is _Mark.DISCARD:
-                blocks = []
+                waiting, blocks = None, []
                 yield event("discard", {})
             else:
                 break
