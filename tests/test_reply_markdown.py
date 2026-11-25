@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The assistant's replies on the web (#284): a small Markdown subset, escaped first."""
+"""The assistant's replies on the web (#284): a small Markdown subset, escaped first, and a reply
+still being written (#372)."""
 
 from __future__ import annotations
 
@@ -9,7 +10,7 @@ import time
 import pytest
 from markupsafe import escape
 
-from dinnerbell.web.reply_markdown import reply_markdown
+from dinnerbell.web.reply_markdown import reply_blocks, reply_markdown
 
 ALLOWED_TAGS = {"p", "br", "ul", "ol", "li", "strong", "em", "del", "code", "pre", "hr"}
 
@@ -72,10 +73,15 @@ def test_the_subset_renders(text: str, shown: str) -> None:
         "&lt;script&gt; &#60;b&#62;",
     ],
 )
-def test_nothing_but_the_renderers_tags_comes_out(text: str) -> None:
+@pytest.mark.parametrize("unfinished", [False, True])
+def test_nothing_but_the_renderers_tags_comes_out(text: str, unfinished: bool) -> None:
     """Escaped first: every tag in the result is one the renderer wrote, with no attribute but
-    an ``ol``'s ``start``, and no link."""
-    out = html(text)
+    an ``ol``'s ``start``, and no link, finished or not, and cut anywhere."""
+    for cut in range(1, len(text) + 1) if unfinished else [len(text)]:
+        check_tags("".join(reply_blocks(text[:cut], unfinished=unfinished)))
+
+
+def check_tags(out: str) -> None:
     for tag in re.findall(r"<(/?)([a-zA-Z0-9]+)([^>]*)>", out):
         assert tag[1] in ALLOWED_TAGS, out
         assert tag[2] == "" or re.fullmatch(r' start="\d+"', tag[2]), out
@@ -115,3 +121,48 @@ def test_a_backslashed_backtick_opens_no_code() -> None:
 
 def test_an_entity_the_model_wrote_stays_text() -> None:
     assert html("&lt;b&gt;") == "<p>&amp;lt;b&amp;gt;</p>"
+
+
+# A reply still being written (#372) ------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "shown"),
+    [
+        ("Tonight: **Siam", "<p>Tonight: <strong>Siam</strong></p>"),
+        ("Run `uv", "<p>Run <code>uv</code></p>"),
+        ("a *maybe", "<p>a <em>maybe</em></p>"),
+        ("a _maybe", "<p>a <em>maybe</em></p>"),
+        ("~~old", "<p><del>old</del></p>"),
+        ("***both", "<p><strong><em>both</em></strong></p>"),
+        ("- **Tacos", "<ul><li><strong>Tacos</strong></li></ul>"),
+        ("1. **Tacos", "<ol><li><strong>Tacos</strong></li></ol>"),
+        ("**closed** and _open", "<p><strong>closed</strong> and <em>open</em></p>"),
+        ("**Earlier** line\nand **now", "<p><strong>Earlier</strong> line<br>and <strong>now</strong></p>"),
+        # Nothing open: as the finished reply.
+        ("2*3 is 6", "<p>2*3 is 6</p>"),
+        ("x * y", "<p>x * y</p>"),
+        ("snake_case", "<p>snake_case</p>"),
+        ("a [link", "<p>a [link</p>"),
+        # A closer that would make the line another kind of block isn't used.
+        ("``", "<p>``</p>"),
+        ("**", "<p>**</p>"),
+        # A code block shows as code, open or not, and gets nothing appended.
+        ("```\nx = `a", "<pre><code>x = `a</code></pre>"),
+    ],
+)
+def test_an_unfinished_replys_last_line_closes_what_it_opened(text: str, shown: str) -> None:
+    assert "".join(reply_blocks(text, unfinished=True)) == shown
+
+
+def test_only_the_last_line_is_closed() -> None:
+    text = "an **open line\n\nand **the last"
+    assert "".join(reply_blocks(text, unfinished=True)) == "<p>an **open line</p><p>and <strong>the last</strong></p>"
+    assert "".join(reply_blocks(text)) == html(text)
+
+
+def test_a_finished_replys_blocks_are_its_markdown() -> None:
+    text = "One.\n\n- a\n- b\n\n---\n\n```\ncode\n```\n\n# Head"
+    blocks = reply_blocks(text)
+    assert "".join(blocks) == html(text)
+    assert [block[:4] for block in blocks] == ["<p>O", "<ul>", "<hr>", "<pre", "<p><"]

@@ -103,6 +103,7 @@ from dinnerbell.services.assistant.drafts import (
     confirm_draft,
 )
 from dinnerbell.services.assistant.runtime import available
+from dinnerbell.services.assistant.streaming import Cut
 from dinnerbell.services.errors import Forbidden
 
 log = logging.getLogger(__name__)
@@ -606,13 +607,17 @@ class SlackStream:
 
     # ReplyStream ---------------------------------------------------------------------------------
 
+    cut = Cut.LINES
+    """Whole lines: ``MarkdownLines`` gives the same on a line as on the whole reply, and each
+    piece is a Slack call, under Slack's rate limits."""
+
     def call_started(self, drafts: int) -> None:
         """A new call: its text, if any, goes to a new message. A DM's reply and its cards are
         the member's own, drafts or not."""
         self._end_current()  # a call that ended without a tool round leaves nothing open
         self.calls += 1
 
-    def lines(self, text: str) -> None:
+    def more(self, text: str) -> None:
         if not self.calls:
             return
         message = self.current

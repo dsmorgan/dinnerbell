@@ -6,19 +6,23 @@
 every proxy on the way recognizes as a stream (``docs/troubleshooting.md``). Without that
 header, HTMX and the plain form post get what they always got.
 
-``WebStream`` is a ``services.assistant.streaming.ReplyStream``: ``CallText`` holds each call's
-first lines, drops or marks a tool round's text, and puts names back, as for Slack. Its methods
-only put onto a queue, so they never block the model's events. The answer runs in a task of its
-own (``Answers.start``) with its own database session, never the request's: when the member
-leaves the page, Starlette cancels only the response, and the reply still finishes and is stored.
+``WebStream`` is a ``services.assistant.streaming.ReplyStream`` in words (#372): ``CallText``
+holds each call's first ``WORDS_HOLD_CHARS`` characters, passes on the rest a word at a time
+with names put back, and drops or marks a tool round's text. Its methods only put onto a queue,
+so they never block the model's events. The answer runs in a task of its own
+(``Answers.start``) with its own database session, never the request's: when the member leaves
+the page, Starlette cancels only the response, and the reply still finishes and is stored.
 Shutdown cancels what's still running (``Answers.settle``) before the database closes.
 
 The events, in order:
 
 - ``start``: the member's message and a hidden placeholder for the reply. ``replace`` says the
   exchange replaces the turns shown (Conversation hours 0).
-- ``text``: the current model call's text so far, rendered as the finished reply is, at most
-  every ``TEXT_SECONDS``.
+- ``text``: the current model call's text so far, rendered as the finished reply is, with its
+  last line's open bold, italics, strikethrough, or code closed. Each is the blocks that changed:
+  the page keeps its first ``keep`` blocks (top-level elements) and puts ``html`` after them, so
+  a long reply costs about its length once, not once per event. At most every ``TEXT_SECONDS``,
+  and less often when an event is large (``TEXT_BYTES_PER_SECOND``).
 - ``discard``: the call whose text was shown calls tools after all, so that text isn't the reply.
 - ``done``: the reply and its draft cards, as the HTMX response has them. It always replaces
   what was shown, so the page ends with what's stored and what a reload shows.
@@ -40,7 +44,8 @@ from typing import Any
 
 from fastapi import Request
 
-from dinnerbell.web.reply_markdown import reply_markdown
+from dinnerbell.services.assistant.streaming import Cut
+from dinnerbell.web.reply_markdown import reply_blocks
 
 log = logging.getLogger(__name__)
 
@@ -57,9 +62,13 @@ such as Cloudflare's 125 seconds."""
 HEARTBEAT = ": still working\n\n"
 
 
-TEXT_SECONDS = 0.25
-"""The least time between two ``text`` events: each carries the whole of the call's text so far,
-so a client that reads slowly gets about 4 a second, never one per line."""
+TEXT_SECONDS = 0.05
+"""The least time between two ``text`` events: 20 a second, a word or two each at the model's
+usual pace. Text that comes meanwhile goes in the next one."""
+TEXT_BYTES_PER_SECOND = 16_000
+"""The most ``text`` events carry a second: after a large one, the next waits longer than
+``TEXT_SECONDS``. A reply that's one long block goes whole in each event, so this keeps its cost
+from growing with every word."""
 
 
 class _Mark(enum.Enum):
@@ -89,13 +98,16 @@ class WebStream:
     """A ``ReplyStream`` into a queue that ``events`` reads. Once ``events`` stops listening, as
     when the member leaves the page, nothing more is queued."""
 
+    cut = Cut.WORDS
+    """Words: the page shows the reply as it's written, not a line at a time (#372)."""
+
     def __init__(self) -> None:
         self.queue: asyncio.Queue[_Text | _Mark] = asyncio.Queue()
         self.listening = True
         self.call = 0
         """Counts each call's text, so text queued for one call never shows as another's."""
         self.shown = ""
-        """The current call's text so far, as ``lines`` gave it."""
+        """The current call's text so far, as ``more`` gave it."""
         self._queued = False
         """A ``_Text`` for this call waits in the queue."""
 
@@ -104,7 +116,7 @@ class WebStream:
     def call_started(self, drafts: int) -> None:
         self._new_call()  # a call's text never joins another's
 
-    def lines(self, text: str) -> None:
+    def more(self, text: str) -> None:
         self.shown += text
         if not self._queued:
             self._queued = True
@@ -174,6 +186,21 @@ class Answers:
             await asyncio.wait(pending, timeout=limit)
 
 
+def next_text_at(now: float, sent: str) -> float:
+    """When the ``text`` event after ``sent``, which went at ``now``, may go."""
+    return now + max(TEXT_SECONDS, len(sent) / TEXT_BYTES_PER_SECOND)
+
+
+def _kept(before: list[str], after: list[str]) -> int:
+    """How many blocks ``after`` starts with that the page shows already, as ``before``."""
+    kept = 0
+    for old, new in zip(before, after, strict=False):
+        if old != new:
+            break
+        kept += 1
+    return kept
+
+
 async def events[T](
     stream: WebStream,
     task: asyncio.Task[T | None],
@@ -186,7 +213,12 @@ async def events[T](
     placeholder), the shown text as it changes, at most every ``TEXT_SECONDS``, and then
     ``done`` with what ``done`` renders from the task's result, or ``error``."""
     loop = asyncio.get_running_loop()
-    sent_at = -TEXT_SECONDS
+    ready_at = loop.time()
+    """When the next ``text`` event may go."""
+    blocks: list[str] = []
+    """The blocks the page shows of the current call's text."""
+    call = 0
+    """The call whose text they are."""
     try:
         yield event("start", {"html": pending, "replace": replace})
         while True:
@@ -196,14 +228,24 @@ async def events[T](
                 yield HEARTBEAT
                 continue
             if isinstance(item, _Text):
-                wait = sent_at + TEXT_SECONDS - loop.time()
+                wait = ready_at - loop.time()
                 if wait > 0:
-                    await asyncio.sleep(wait)  # more lines may come meanwhile: they go with these
+                    await asyncio.sleep(wait)  # more words may come meanwhile: they go with these
                 text = stream.take(item)
-                if text is not None:
-                    sent_at = loop.time()
-                    yield event("text", {"html": str(reply_markdown(text))})
+                if text is None:
+                    continue
+                if item.call != call:  # another call's text replaces what's shown
+                    call, blocks = item.call, []
+                now = reply_blocks(text, unfinished=True)
+                keep = _kept(blocks, now)
+                if keep == len(now) == len(blocks):
+                    continue
+                blocks = now
+                sent = event("text", {"keep": keep, "html": "".join(now[keep:])})
+                ready_at = next_text_at(loop.time(), sent)
+                yield sent
             elif item is _Mark.DISCARD:
+                blocks = []
                 yield event("discard", {})
             else:
                 break

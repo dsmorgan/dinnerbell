@@ -9,7 +9,11 @@ strikethrough (``~~``), and code (`````). A backslash before a marker keeps it a
 
 Everything else stays text: links, images, tables, block quotes, and HTML. The text is escaped
 first, so the only tags in the result are the fixed ones this module writes, and a link is never
-clickable (ADR 0009)."""
+clickable (ADR 0009).
+
+A reply still being written (``reply_blocks`` with ``unfinished``, #372) gets its last line's
+open code span, bold, italics, or strikethrough closed, so it shows styled while the model writes
+it, not as the characters typed. A ``[`` needs nothing: a link always shows as typed."""
 
 from __future__ import annotations
 
@@ -67,7 +71,41 @@ def inline(text: str) -> str:
     return "".join(parts)
 
 
-def _blocks(lines: list[str]) -> Iterator[str]:
+_CLOSERS = ("**", "*", "`", "_", "__", "~~", "***", "``")
+"""What ``_closed`` tries at the end of a line still being written, best first."""
+_TAG = re.compile(r"<[^>]*>")
+_MARKER = re.compile(r"[*_~`]")
+
+
+def _kind(line: str) -> tuple[bool, ...]:
+    return tuple(bool(p.match(line)) for p in (_FENCE, _RULE, _HEADING, _BULLET, _NUMBERED))
+
+
+def _literal_markers(line: str) -> int:
+    """How many marker characters ``line`` shows as typed."""
+    return len(_MARKER.findall(_TAG.sub("", inline(line))))
+
+
+def _closed(line: str) -> str:
+    """``line``, the last of a reply still being written, with the closer from ``_CLOSERS`` that
+    leaves the fewest markers showing as typed, if any leaves fewer, and keeps the line the kind
+    of block it is."""
+    if len(line) > MAX_STYLED:
+        return line
+    best, fewest = line, _literal_markers(line)
+    if not fewest:
+        return line
+    for closer in _CLOSERS:
+        candidate = line + closer
+        if _kind(candidate) != _kind(line):
+            continue
+        shown = _literal_markers(candidate)
+        if shown < fewest:
+            best, fewest = candidate, shown
+    return best
+
+
+def _blocks(lines: list[str], *, unfinished: bool = False) -> Iterator[str]:
     paragraph: list[str] = []
     items: list[str] = []
     kind = ""  # "ul" or "ol" while ``items`` holds a list
@@ -88,6 +126,8 @@ def _blocks(lines: list[str]) -> Iterator[str]:
     while index < len(lines):
         line = lines[index]
         index += 1
+        if unfinished and index == len(lines):  # a fence's last line never comes here
+            line = _closed(line)
         fence = _FENCE.match(line)
         if fence:
             yield from flush()
@@ -134,6 +174,12 @@ def _blocks(lines: list[str]) -> Iterator[str]:
     yield from flush()
 
 
+def reply_blocks(text: str, *, unfinished: bool = False) -> list[str]:
+    """The reply ``text`` as HTML, one element per block. With ``unfinished``, ``text`` is a
+    reply still being written, and its last line's open spans are closed."""
+    return list(_blocks(text.replace("\r\n", "\n").split("\n"), unfinished=unfinished))
+
+
 def reply_markdown(text: str) -> Markup:
     """The reply ``text`` as HTML, with the subset above shown and everything else as text."""
-    return Markup("".join(_blocks(text.replace("\r\n", "\n").split("\n"))))  # noqa: S704 - built from escaped text
+    return Markup("".join(reply_blocks(text)))  # noqa: S704 - built from escaped text
