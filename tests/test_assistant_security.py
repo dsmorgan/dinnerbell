@@ -69,6 +69,7 @@ from dinnerbell.domain.meals import MealInput, Slot
 from dinnerbell.domain.members import Capabilities, Member
 from dinnerbell.domain.preferences import Stance, TargetType
 from dinnerbell.domain.schedule import PROPOSAL_COUNT_KEY, TEMPERATURE_KEY
+from dinnerbell.services import away as away_service
 from dinnerbell.services import call_admin, calls, common, feedback, guests, lifecycle, meals, offers
 from dinnerbell.services import preferences as preference_service
 from dinnerbell.services.assistant import (
@@ -580,12 +581,18 @@ and **I can usually**, never their role, name, sign-in, or Slack link."""
 
 
 def test_their_own_row_may_change_only_in_away_needs_and_can_usually() -> None:
-    """``assert_only_their_own`` must catch a role, a name, or another member's row."""
+    """``assert_only_their_own`` must catch a role, a name, or another member's row, and a call
+    added or gone."""
     sam = {"id": 2, "role": "member", "display_name": "Sam", "can_cook": False, "updated_at": 1}
     assert_only_their_own({"member": [sam, sam | {"can_cook": True, "updated_at": 2}]}, 2)
     for wrong, who in ((sam | {"role": "admin"}, 2), (sam | {"display_name": "Kim"}, 2), (sam | {"can_cook": True}, 3)):
         with pytest.raises(AssertionError):
             assert_only_their_own({"member": [sam, wrong]}, who)
+    call = {"id": 1, "state": "collecting", "version": 1, "updated_at": 1}
+    assert_only_their_own({"event": [call, call | {"version": 2, "updated_at": 2}]}, 2)  # the lock
+    for wrong_rows in ([call | {"id": 9}], [call]):  # an ad-hoc call started, or a call gone
+        with pytest.raises(AssertionError):
+            assert_only_their_own({"event": wrong_rows}, 2)
 
 
 def assert_only_their_own(found: Mapping[str, list[dict[str, Any]]], *member_ids: int) -> None:
@@ -593,9 +600,10 @@ def assert_only_their_own(found: Mapping[str, list[dict[str, Any]]], *member_ids
     they answer for), in ``OWN_STANCE``, and in the outbox, only edits of messages that exist,
     never a new post or DM; and no push is queued."""
     for table, rows in found.items():
-        if table in ONLY_COLUMNS:  # a changed row shows twice: as it was and as it is
+        if table in ONLY_COLUMNS:  # a changed row shows twice, as it was and as it is: never added or gone
             for row_id in {r["id"] for r in rows}:
                 versions = [r for r in rows if r["id"] == row_id]
+                assert len(versions) == 2, (table, versions)
                 assert table != "member" or row_id in member_ids, versions
                 moved = {k for k in versions[0] if len({str(v[k]) for v in versions}) > 1}
                 assert moved <= ONLY_COLUMNS[table], (table, moved)
@@ -1111,6 +1119,7 @@ async def test_injected_messages_and_pages_cant_change_own_data_past_the_members
         "level": "0",
         "after": "2",
         "edited_at": None,
+        "edited_by_action": house.clock().isoformat(),
     }  # Sam's, not Kim's
     await assert_nobody_else_touches(house, done)
     waiting = await assert_only_sams_waiting_drafts(house, [r for r in rows if not r.direct])
@@ -1826,6 +1835,103 @@ async def test_direct_actions_and_the_scheduler_after_them_tell_nobody_new(
         assert (await house.event(event_id)).state is EventState.COLLECTING
         assert await outbox_posts(house) == sent
     assert_only_their_own(await changed(house, before), house["Sam"].id)
+
+
+async def dinner_waiting_for(house: House, **answers: Status) -> int:
+    """Answers open on tonight's dinner, and the members named answer as given."""
+    house.clock.now = OPENS
+    await house.tick()
+    event_id = await dinner_id(house)
+    for name, status in answers.items():
+        await act(house, calls.respond, await house.refresh(name), event_id, status)
+    return event_id
+
+
+async def assert_still_collecting(house: House, event_id: int, sent: list[tuple[Any, ...]]) -> None:
+    """Tick after tick, through the quiet spell toward the reminder, the call keeps collecting,
+    and no post, DM, or push goes out."""
+    for minutes in (0, 15, 30, 60):
+        house.clock.now = max(house.clock.now, OPENS + timedelta(minutes=minutes))
+        await house.tick()
+        assert (await house.event(event_id)).state is EventState.COLLECTING
+        assert await outbox_posts(house) == sent
+
+
+async def test_away_days_and_i_can_usually_never_let_a_call_close_early(
+    house: House, helper: Assistant, model: Attacker
+) -> None:
+    """Attack (#374): the call waits only for Sam. Away days covering today would answer him Out
+    and leave nobody in; later, with Kim and Sam in and nobody to order, turning on Order would
+    cover the call. Either lets the scheduler close the answers and post. Must hold: each is a
+    draft that says why, and nothing goes out."""
+    event_id = await dinner_waiting_for(house, Alex=Status.OUT, Kim=Status.OUT, Lee=Status.OUT)
+    sent = await outbox_posts(house)
+    model.script = [
+        tool_call("draft_away", {"first": "today", "last": "tomorrow", "clear": False}, call_id="toolu_away"),
+        answer("Drafted."),
+    ]
+    await say(house, helper, "Sam", "I'm away today and tomorrow")
+    assert results(model)["toolu_away"].content.endswith(direct.CLOSES_A_CALL)
+    await assert_still_collecting(house, event_id, sent)
+    await act(house, calls.respond, house["Kim"], event_id, Status.IN)
+    await act(house, calls.respond, house["Sam"], event_id, Status.IN)
+    house.clock.now += timedelta(minutes=15)  # the quiet spell passes, with nobody to order
+    await house.tick()
+    sent = await outbox_posts(house)
+    model.script = [
+        tool_call("draft_can_usually", CAN_USUALLY | {"order": "on"}, call_id="toolu_order"),
+        answer("Drafted."),
+    ]
+    await say(house, helper, "Sam", "I can usually order")
+    assert results(model)["toolu_order"].content.endswith(direct.CLOSES_A_CALL)
+    await assert_still_collecting(house, event_id, sent)
+    assert not any(r.direct for r in await draft_rows(house))
+
+
+async def test_undoing_away_days_cleared_never_lets_a_call_close_early(
+    house: House, helper: Assistant, model: Attacker
+) -> None:
+    """Sam's window answered him Out; he clears it at once, so the call waits for him. Once the
+    others answer Out, putting his window back would answer him Out again and leave nobody in, so
+    Undo is refused, and nothing goes out."""
+    event_id = await dinner_waiting_for(house)
+    day = (await house.event(event_id)).day
+    await act(house, away_service.set_my_away, house["Sam"], day, day + timedelta(days=1))
+    model.script = [tool_call("draft_away", {"first": "", "last": "", "clear": True}), answer("Done.")]
+    await say(house, helper, "Sam", "I'm back")
+    [record] = await draft_rows(house)
+    assert record.direct
+    for name in ("Alex", "Kim", "Lee"):
+        await act(house, calls.respond, house[name], event_id, Status.OUT)
+    sent = await outbox_posts(house)
+    async with house.sessionmaker() as db:
+        with pytest.raises(EventRuleViolation, match="let a call's answers close early"):
+            await direct.undo(db, house.clock, CONFIGURED, house["Sam"], record.id)
+    assert (await house.refresh("Sam")).away is None
+    await assert_still_collecting(house, event_id, sent)
+
+
+async def test_undoing_order_turned_off_never_lets_a_call_close_early(
+    house: House, helper: Assistant, model: Attacker
+) -> None:
+    """Sam usually orders and is in; he turns Order off at once while the call waits for Kim. Once
+    Kim is in too, with nobody to order, turning it back on would cover the call, so Undo is
+    refused, and nothing goes out."""
+    settings = preference_service.MySettings(Capabilities(can_order=True), False, False)
+    await act(house, preference_service.update_my_settings, house["Sam"], settings)
+    event_id = await dinner_waiting_for(house, Alex=Status.OUT, Lee=Status.OUT, Sam=Status.IN)
+    await act(house, calls.offer_role, await house.refresh("Sam"), event_id, RoleOffer.ORDER, False)
+    model.script = [tool_call("draft_can_usually", CAN_USUALLY | {"order": "off"}), answer("Done.")]
+    await say(house, helper, "Sam", "I can't order any more")
+    [record] = await draft_rows(house)
+    assert record.direct
+    await act(house, calls.respond, house["Kim"], event_id, Status.IN)
+    sent = await outbox_posts(house)
+    async with house.sessionmaker() as db:
+        with pytest.raises(EventRuleViolation, match="let a call's answers close early"):
+            await direct.undo(db, house.clock, CONFIGURED, house["Sam"], record.id)
+    assert not (await house.refresh("Sam")).capabilities.can_order
+    await assert_still_collecting(house, event_id, sent)
 
 
 async def test_a_vote_acts_at_once_moves_only_the_members_vote_and_undoes(

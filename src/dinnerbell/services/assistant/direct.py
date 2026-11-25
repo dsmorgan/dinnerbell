@@ -46,6 +46,7 @@ from dinnerbell.domain.assistant_drafts import (
     undone_text,
 )
 from dinnerbell.domain.assistant_own import level_label
+from dinnerbell.domain.away import Away
 from dinnerbell.domain.events import (
     Event,
     EventRuleViolation,
@@ -171,6 +172,13 @@ CLOSES_EARLY = (
 ENDS_COORDINATING = (
     "It's a draft, not done at once: the member coordinates that call now, and an out ends that and tells "
     "the household."
+)
+CLOSES_A_CALL = (
+    "It's a draft, not done at once: it would let a call's answers close early, and Dinnerbell would tell the "
+    "household."
+)
+UNDO_CLOSES_A_CALL = (
+    "Putting that back would let a call's answers close early, so Undo changed nothing. Change it on Preferences."
 )
 RATINGS_MOVE = "It's a draft, not done at once: the member's ratings of it count now, and a level stops them for good."
 MAYBE_COORDINATING = (
@@ -310,12 +318,18 @@ async def _check(
             at = await preference_service.my_item_edit(db, actor, target_id)
             edited = at.isoformat() if at else None
         undo = {"level": payload["before"], "after": payload["level"], "edited_at": edited}
+        if target_type is TargetType.ITEM:  # the action's own edit time, for Undo to tell it's still the last
+            undo["edited_by_action"] = now.isoformat()
     elif kind is DraftKind.AWAY:
         after = None if payload.get("clear") else [payload["first"], payload["last"]]
+        if await _closes_a_call(db, actor, window=after, now=now):
+            raise DraftInstead(CLOSES_A_CALL)
         undo = {"window": payload.get("before"), "after": after}
     elif kind is DraftKind.NEEDS:
         undo = {"needs": payload["before"], "after": sorted(int(n) for n in payload["needs"])}
     elif kind is DraftKind.CAN_USUALLY:
+        if await _closes_a_call(db, actor, flags=payload["after"], now=now):
+            raise DraftInstead(CLOSES_A_CALL)
         undo = {"flags": payload["before"], "after": payload["after"]}
     else:
         answers = FeedbackInput(
@@ -331,6 +345,26 @@ async def _check(
     await AssistantRepository(db).keep_record(
         actor.household_id, record.id, payload={**payload, "undo": undo}, lines=record.lines
     )
+
+
+_KEEP: Any = object()
+
+
+async def _closes_a_call(
+    db: AsyncSession, actor: Member, *, now: datetime, window: Any = _KEEP, flags: Mapping[str, Any] | None = None
+) -> bool:
+    """Whether away days as ``window`` (first and last, or None for none), or **I can usually**
+    as ``flags``, would let a call taking answers close them early (``own_change_closes_early``):
+    the window answering the member Out, or giving back what it answered, or their ordering
+    counting toward who covers a call they're in. In the caller's write transaction."""
+    me = await own_drafts.fresh(db, actor)
+    after = me
+    if window is not _KEEP:
+        away = None if window is None else Away(date.fromisoformat(str(window[0])), date.fromisoformat(str(window[1])))
+        after = replace(after, away=away)
+    if flags is not None:
+        after = replace(after, capabilities=own_drafts.capabilities(flags))
+    return await cc.own_change_closes_early(db, me, after, now)
 
 
 def _no_undo_line(kind: DraftKind, payload: Mapping[str, Any]) -> str:
@@ -510,6 +544,10 @@ async def _inverse(
 
     async def use() -> None:
         await mark()
+        if kind is DraftKind.AWAY and await _closes_a_call(db, actor, window=back.get("window"), now=now):
+            raise EventRuleViolation(UNDO_CLOSES_A_CALL, code="undo_closes_early")
+        if kind is DraftKind.CAN_USUALLY and await _closes_a_call(db, actor, flags=back["flags"], now=now):
+            raise EventRuleViolation(UNDO_CLOSES_A_CALL, code="undo_closes_early")
         if kind is DraftKind.FEEDBACK:
             saved = await FeedbackRepository(db).get(actor.household_id, int(payload["meal_id"]), actor.id)
             if own_drafts.stored_answers(saved.answers if saved else None) != back.get("after_answers"):
@@ -543,6 +581,10 @@ async def _inverse_level(
             raise NotFound(own_drafts.GONE)
         if current[1].level != back["after"]:
             raise _moved(DraftKind.PREFERENCE)
+        if back.get("edited_by_action") is not None:  # set again since, even to the same level: theirs now
+            last = await preference_service.my_item_edit(db, actor, target_id)
+            if last is None or last != datetime.fromisoformat(str(back["edited_by_action"])):
+                raise _moved(DraftKind.PREFERENCE)
         name = await preference_service.restore_my_preference(
             db, actor, target_type, target_id, level, edited_at=edited, now=now
         )

@@ -521,7 +521,7 @@ async def _confirm_needs(db: AsyncSession, actor: Member, draft: Draft, *, now: 
     return ActionConfirmed(None, f"Confirmed. Your dietary needs are {and_words(names, '')} now.", link=NEEDS_PAGE)
 
 
-def _capabilities(flags: Mapping[str, object]) -> Capabilities:
+def capabilities(flags: Mapping[str, object]) -> Capabilities:
     return Capabilities(can_cook=bool(flags["cook"]), can_pickup=bool(flags["pick_up"]), can_order=bool(flags["order"]))
 
 
@@ -534,7 +534,7 @@ async def can_usually_draft(db: AsyncSession, actor: Member, changes: Mapping[st
     after = {name: before[name] if changes.get(name) is None else bool(changes[name]) for name in before}
     if after == before:
         raise ToolRefusal(NOTHING_TO_DO)
-    was, now = _capabilities(before), _capabilities(after)
+    was, now = capabilities(before), capabilities(after)
     payload = {"after": after, "before": before}
     return DraftSpec(
         DraftKind.CAN_USUALLY, payload, can_usually_title(was, now), can_usually_lines(before=was, after=now), None
@@ -547,7 +547,7 @@ async def _confirm_can_usually(
     """``update_my_settings`` under the write lock, once **I can usually** is still what the card
     said it changes, with the reminders as they are then, so a reminder saved meanwhile stays."""
     payload = draft.payload
-    after = _capabilities(payload["after"])
+    after = capabilities(payload["after"])
     async with write_transaction(db):
         await use()
         me = await fresh(db, actor)
