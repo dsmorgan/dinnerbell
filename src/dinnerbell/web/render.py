@@ -121,8 +121,16 @@ def _color_mode(request: Request) -> ColorMode:
 
 
 async def render(
-    request: Request, template: str, context: dict[str, Any] | None = None, status_code: int = 200
+    request: Request,
+    template: str,
+    context: dict[str, Any] | None = None,
+    status_code: int = 200,
+    *,
+    fragment: bool = False,
 ) -> Response:
+    """``template`` with what every page needs. ``fragment`` marks a piece of a page that isn't
+    an HTMX response, such as the Assistant's streamed reply (#370): it skips the queries only a
+    whole page uses (the nav's Assistant link, the web app, fun mode, and stuck calls)."""
     settings = app_context(request).settings
     principal = getattr(request.state, "principal", None)
     base = {
@@ -134,15 +142,15 @@ async def render(
         "provider_is_slack": settings.oidc_issuer.rstrip("/") == "https://slack.com",
         "instance_label": settings.instance_label,
         "test_instance": is_test_instance(settings.instance_label),  # what only test may do (#60)
-        "stuck_calls": _stuck_calls(request),
-        "fun": await _fun_scene(request),
+        "stuck_calls": [] if fragment else _stuck_calls(request),
+        "fun": None if fragment else await _fun_scene(request),
         "color_mode": _color_mode(request),
         # Admin > Assistant shows only with the operator's key (ADR 0009).
         "assistant_admin": AssistantConfig.from_settings(settings).configured,
         # The member's Assistant page shows only when the assistant answers them (ADR 0009).
-        "assistant_link": await _assistant_link(request),
+        "assistant_link": False if fragment else await _assistant_link(request),
         # The manifest link and Get the app show only with Admin's Web app switch on (spec 6.15).
-        "web_app": await _web_app(request),
+        "web_app": False if fragment else await _web_app(request),
         "push_key": app_context(request).vapid_public_key,
     }
     return TEMPLATES.TemplateResponse(request, template, base | (context or {}), status_code=status_code)

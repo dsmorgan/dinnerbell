@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import html
 import json
+import logging
 import re
 import time
 from collections.abc import Iterator, Mapping
@@ -23,17 +24,19 @@ from joserfc.jwk import RSAKey
 
 from dinnerbell.app_factory import create_app
 from dinnerbell.config import Settings
-from dinnerbell.db.models import AssistantConversationRow
+from dinnerbell.db.models import AssistantConversationRow, AssistantUsageRow
 from dinnerbell.services.assistant.client import ModelEvents, ModelReply
 from dinnerbell.services.assistant.conversation import FAILED, MAX_MESSAGE_CHARS, TOO_LONG_ANSWER
+from dinnerbell.services.database import Database
 from dinnerbell.web import assistant_stream
+from dinnerbell.web import render as render_module
 from dinnerbell.web.assistant_stream import STREAM_TYPE, WebStream, events
 from dinnerbell.web.routes import assistant_page
 from tests.conftest import BASE_URL, csrf_from, page
 from tests.support.clock import FakeClock
 from tests.support.fake_model import FakeModel, answer, stopped, usage
 from tests.support.fake_oidc import FakeProvider
-from tests.test_assistant_page import HX, KEY, as_who, draft_ids, furnish, offer_tool, send
+from tests.test_assistant_page import HX, KEY, as_who, draft_ids, furnish, member_id, offer_tool, send
 from tests.test_auth_flow import rows
 
 STREAM = {"Accept": STREAM_TYPE}
@@ -53,10 +56,14 @@ class GatedModel(FakeModel):
     leave mid-reply."""
 
     gate: asyncio.Event | None = None
+    before_tool: asyncio.Event | None = None
+    """When set, a tool call waits for it: for a test that needs the text before it sent."""
 
     async def write(self, reply: ModelReply, events: ModelEvents) -> None:
         for block in reply.content:
             if block.get("type") == "tool_use":
+                if self.before_tool is not None:
+                    await self.before_tool.wait()
                 events.tool_started()
             if block.get("type") != "text":
                 continue
@@ -140,10 +147,20 @@ def with_text_and_tool(text: str) -> ModelReply:
 
 
 def test_the_reply_streams_in_order_and_ends_as_a_reload_shows_it(
-    client: TestClient, provider: FakeProvider, model: FakeModel, migrated: Settings
+    client: TestClient, provider: FakeProvider, model: GatedModel, migrated: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     furnish(client, provider)
     as_who(client, provider, "kim")
+    # The tool call waits until the call's text has gone out, so the page has shown it.
+    model.before_tool = asyncio.Event()
+    send_event = assistant_stream.event
+
+    def sent(name: str, data: dict[str, Any]) -> str:
+        if name == "text" and model.before_tool is not None:
+            model.before_tool.set()
+        return send_event(name, data)
+
+    monkeypatch.setattr(assistant_stream, "event", sent)
     model.script = [with_text_and_tool("Let me check what's open.\n" + "x" * 200 + "\nOne moment."), answer(LONG)]
     response, found = streamed(client, "Ideas for tonight?")
     assert response.status_code == 200
@@ -217,8 +234,13 @@ def test_at_hours_zero_the_exchange_replaces_the_log_and_keeps_waiting_cards(
     assert rows(migrated, AssistantConversationRow) == []
 
 
-def test_a_failure_while_answering_is_an_error_event(
-    client: TestClient, provider: FakeProvider, model: FakeModel, monkeypatch: pytest.MonkeyPatch
+def test_a_failure_while_answering_is_an_error_event_and_logs_the_member_id_only(
+    client: TestClient,
+    provider: FakeProvider,
+    model: FakeModel,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    migrated: Settings,
 ) -> None:
     furnish(client, provider)
     as_who(client, provider, "kim")
@@ -227,8 +249,14 @@ def test_a_failure_while_answering_is_an_error_event(
         raise RuntimeError("boom")
 
     monkeypatch.setattr(assistant_page, "converse", broken)
-    _, found = streamed(client, "Hi")
+    with caplog.at_level(logging.ERROR, logger="dinnerbell.web.assistant_stream"):
+        _, found = streamed(client, "Hi from Kim")
     assert names(found) == ["start", "error"] and found[-1][1] == {"status": 500}
+    [line] = [r for r in caplog.records if r.name == "dinnerbell.web.assistant_stream"]
+    assert line.getMessage() == "the assistant broke answering on the web"
+    assert line.member_id == member_id(migrated, "Kim")  # type: ignore[attr-defined]
+    logged = caplog.text
+    assert "Hi from Kim" not in logged and "kim@example.com" not in logged
 
 
 def test_turned_off_while_answering_is_a_404_event(
@@ -263,13 +291,12 @@ def test_an_empty_message_is_a_204(client: TestClient, provider: FakeProvider, m
 # Leaving mid-reply ---------------------------------------------------------------------------------
 
 
-def test_leaving_mid_reply_still_stores_the_reply(
-    client: TestClient, provider: FakeProvider, model: GatedModel, migrated: Settings
-) -> None:
-    furnish(client, provider)
-    as_who(client, provider, "kim")
-    model.script = [answer(LONG)]
-    body = urlencode({"message": "Ideas for tonight?", "csrf_token": csrf_from(client)}).encode()
+def leave_mid_reply(client: TestClient, model: GatedModel, message: str, *, release: bool = True) -> bytes:
+    """Send ``message`` asking for the stream, and leave as soon as ``start`` arrives, while the
+    model has written half its text. With ``release``, the model then goes on writing. Returns
+    what the response sent before the member left. Raw ASGI, since the test client reads every
+    response to its end."""
+    body = urlencode({"message": message, "csrf_token": csrf_from(client)}).encode()
     host = urlsplit(BASE_URL).hostname or ""
     cookies = "; ".join(f"{name}={value}" for name, value in client.cookies.items())
     scope = {
@@ -296,7 +323,7 @@ def test_leaving_mid_reply_still_stores_the_reply(
     }
     sent: list[dict[str, Any]] = []
 
-    async def leave_mid_reply() -> None:
+    async def go() -> None:
         model.gate = asyncio.Event()
         started = asyncio.Event()
         asked = False
@@ -315,16 +342,57 @@ def test_leaving_mid_reply_still_stores_the_reply(
                 started.set()
 
         await client.app(scope, receive, send_)  # type: ignore[arg-type]
-        model.gate.set()  # the model goes on writing after the member left
+        if release:
+            model.gate.set()  # the model goes on writing after the member left
 
-    client.portal.call(leave_mid_reply)  # type: ignore[union-attr]
-    body_sent = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
+    client.portal.call(go)  # type: ignore[union-attr]
+    return b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
+
+
+def test_leaving_mid_reply_still_stores_the_reply(
+    client: TestClient, provider: FakeProvider, model: GatedModel, migrated: Settings
+) -> None:
+    furnish(client, provider)
+    as_who(client, provider, "kim")
+    model.script = [answer(LONG)]
+    body_sent = leave_mid_reply(client, model, "Ideas for tonight?")
     assert b"event: start" in body_sent and b"event: done" not in body_sent
     deadline = time.monotonic() + 10
     while not rows(migrated, AssistantConversationRow) and time.monotonic() < deadline:
         client.portal.call(asyncio.sleep, 0.01)  # type: ignore[union-attr]
     assert rows(migrated, AssistantConversationRow)
     assert "Either one works for the whole household." in page(client.get("/assistant"))
+
+
+def test_shutdown_cancels_an_answer_still_running_before_the_database_closes(
+    migrated: Settings, clock: FakeClock, provider: FakeProvider, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model = GatedModel(script=[answer(LONG)])
+    app = create_app(migrated, clock=clock, oidc_transport=httpx.ASGITransport(app=provider.app), model_client=model)
+    closing: list[set[asyncio.Task[Any]]] = []
+    close = Database.close
+
+    async def closed_after_answers(self: Database) -> None:
+        closing.append(set(app.state.web_answers.tasks))
+        await close(self)
+
+    monkeypatch.setattr(Database, "close", closed_after_answers)
+    client = TestClient(app, base_url=BASE_URL, headers={"Origin": BASE_URL}, follow_redirects=False)
+    with client:
+        furnish(client, provider)
+        as_who(client, provider, "kim")
+        leave_mid_reply(client, model, "Ideas for tonight?", release=False)  # the model never finishes
+        deadline = time.monotonic() + 10
+        while not model.requests and time.monotonic() < deadline:
+            client.portal.call(asyncio.sleep, 0.01)  # type: ignore[union-attr]
+        assert model.requests  # the call is reserved and running
+        [task] = app.state.web_answers.tasks
+    assert task.cancelled()
+    assert closing == [set()]  # every answer had ended when the database closed
+    # The cancelled call keeps its reservation, settled before its task ended.
+    [usage_row] = rows(migrated, AssistantUsageRow)
+    assert usage_row.state == "settled"
+    assert rows(migrated, AssistantConversationRow) == []  # nothing of the message is kept
 
 
 # Unchanged without the header, and the same gates -------------------------------------------------
@@ -404,7 +472,7 @@ def run_events(stream: WebStream, script: list[Any], result: Any) -> list[tuple[
                 await asyncio.sleep(0)
             return result
 
-        task = assistant_stream.start(work(), stream, 1)
+        task = assistant_stream.Answers().start(work(), stream, 1)
 
         async def done(value: Any) -> str:
             return f"<p>{value}</p>"
@@ -446,7 +514,7 @@ def test_a_quiet_stream_sends_a_heartbeat(monkeypatch: pytest.MonkeyPatch) -> No
             await release.wait()
             return "ok"
 
-        task = assistant_stream.start(work(), stream, 1)
+        task = assistant_stream.Answers().start(work(), stream, 1)
         parts = []
         async for part in events(stream, task, "", replace=False, done=lambda v: asyncio.sleep(0, v)):
             parts.append(part)
@@ -456,3 +524,65 @@ def test_a_quiet_stream_sends_a_heartbeat(monkeypatch: pytest.MonkeyPatch) -> No
 
     body = asyncio.run(go())
     assert assistant_stream.HEARTBEAT in body and body.rstrip().endswith('"ok"}')
+
+
+def test_a_reply_queues_one_marker_and_text_events_are_throttled(monkeypatch: pytest.MonkeyPatch) -> None:
+    stream = WebStream()
+    stream.call_started(0)
+    for n in range(100):
+        stream.lines(f"line {n}\n")
+    assert stream.queue.qsize() == 1  # one marker, not a copy of the text per line
+    monkeypatch.setattr(assistant_stream, "TEXT_SECONDS", 3600.0)  # a second text event would wait an hour
+
+    async def go() -> list[str]:
+        async def work() -> str:
+            stream.lines("the last line")  # while the first text event goes out
+            await asyncio.sleep(0)
+            return "ok"
+
+        task = assistant_stream.Answers().start(work(), stream, 1)
+        parts = []
+        async for part in events(stream, task, "", replace=False, done=lambda v: asyncio.sleep(0, v)):
+            parts.append(part)
+            if len(parts) == 2:  # start and the first text: let the second one wait
+                break
+        task.cancel()
+        return parts
+
+    found = parsed("".join(asyncio.run(go())))
+    assert [name for name, _ in found] == ["start", "text"]
+    assert "line 99" in found[1][1]["html"]
+
+
+def test_text_queued_for_a_call_never_shows_after_its_discard() -> None:
+    stream = WebStream()
+    stream.call_started(0)
+    stream.lines("first call")
+    stream.tool_round()
+    stream.lines("second call")
+    found = run_events(stream, [], "finished")
+    texts = [data["html"] for name, data in found if name == "text"]
+    assert names(found) == ["start", "discard", "text", "done"] and "second call" in texts[0]
+
+
+def test_the_streamed_fragments_skip_the_whole_page_queries(
+    client: TestClient, provider: FakeProvider, model: FakeModel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    furnish(client, provider)
+    as_who(client, provider, "kim")
+    asked: list[str] = []
+
+    def counted(name: str) -> Any:
+        async def query(_request: Any) -> Any:
+            asked.append(name)
+            return None
+
+        return query
+
+    for name in ("_assistant_link", "_web_app", "_fun_scene"):
+        monkeypatch.setattr(render_module, name, counted(name))
+    model.script = [answer(LONG)]
+    token = csrf_from(client)  # a whole page, which asks
+    asked.clear()
+    response = client.post("/assistant", data={"message": "Ideas?", "csrf_token": token}, headers=STREAM)
+    assert names(parsed(response.text)) == ["start", "text", "done"] and asked == []

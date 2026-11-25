@@ -10,8 +10,9 @@ Each form works without JavaScript. With HTMX, sending a message appends the exc
 conversation (or replaces it, at Conversation hours 0, when nothing is kept), and Confirm or
 Cancel swaps the draft's card for its result. Where the browser can read a response as it
 arrives, ``app.js`` asks for the reply as it's written instead (``web.assistant_stream``, #370).
-A catalog draft's Confirm always loads the add-only import preview as a whole page. Reply text
-is plain text: the template escapes it, and nothing turns it into HTML or links.
+A catalog draft's Confirm always loads the add-only import preview as a whole page. A reply shows
+a small, safe subset of Markdown (``web.reply_markdown``, #284): escaped first, never linked,
+never HTML. The member's own messages stay plain text.
 """
 
 from __future__ import annotations
@@ -183,7 +184,7 @@ async def _streamed(
     if not text:
         return Response(status_code=204)
     before = await web_history.web_conversation(db, assistant.config, member, context.clock())
-    pending = await render(request, "_assistant_pending.html", {"t": Shown(True, text)})
+    pending = await render(request, "_assistant_pending.html", {"t": Shown(True, text)}, fragment=True)
     # The answer gets its own session, and the request's holds nothing while the reply streams.
     await db.close()
     stream = assistant_stream.WebStream()
@@ -199,11 +200,12 @@ async def _streamed(
     async def done(result: tuple[Reply, Sequence[DraftView]]) -> str:
         reply, cards = result
         shown = await render(
-            request, "_assistant_exchange.html", {"turns": (Shown(False, reply.text),), "drafts": cards}
+            request, "_assistant_exchange.html", {"turns": (Shown(False, reply.text),), "drafts": cards}, fragment=True
         )
         return bytes(shown.body).decode()
 
-    task = assistant_stream.start(answer(), stream, member.id)
+    answers: assistant_stream.Answers = request.app.state.web_answers
+    task = answers.start(answer(), stream, member.id)
     body = assistant_stream.events(
         stream, task, bytes(pending.body).decode(), replace=not before.keeps_history, done=done
     )
