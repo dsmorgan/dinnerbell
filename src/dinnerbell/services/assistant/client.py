@@ -103,5 +103,5 @@ class ModelClient(Protocol):
         instead of any client error, and never retry: each request has its own reservation.
         ``time_left`` is the seconds left of the message's deadline (``conversation``), which
         also cancels the call when they run out. ``events``, when given, hears the reply's
-        text as it's written; ``conversation`` passes it only to show a reply in Slack."""
+        text as it's written; ``conversation`` passes it only to show a reply as it's written."""
         ...

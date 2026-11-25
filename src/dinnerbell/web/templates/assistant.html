@@ -24,7 +24,7 @@
 
   <form id="ask" method="post" action="/assistant" class="card stack assistant-form"
         hx-post="/assistant" hx-target="#assistant-log" hx-swap="beforeend" hx-disabled-elt="find button"
-        hx-request='{"timeout": {{ send_timeout }}}' data-reset-on-success>
+        hx-request='{"timeout": {{ send_timeout }}}' data-reset-on-success data-stream-timeout="{{ send_timeout }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <label class="field">
       <span>Message</span>

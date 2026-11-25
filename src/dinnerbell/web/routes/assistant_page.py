@@ -8,18 +8,20 @@ as on every member page.
 
 Each form works without JavaScript. With HTMX, sending a message appends the exchange to the
 conversation (or replaces it, at Conversation hours 0, when nothing is kept), and Confirm or
-Cancel swaps the draft's card for its result. A catalog draft's Confirm always loads the
-add-only import preview as a whole page. Reply text is plain text: the template escapes it, and
-nothing turns it into HTML or links.
+Cancel swaps the draft's card for its result. Where the browser can read a response as it
+arrives, ``app.js`` asks for the reply as it's written instead (``web.assistant_stream``, #370).
+A catalog draft's Confirm always loads the add-only import preview as a whole page. Reply text
+is plain text: the template escapes it, and nothing turns it into HTML or links.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Form, Request
-from starlette.responses import Response
+from starlette.responses import Response, StreamingResponse
 
 from dinnerbell.domain.assistant import web_key
 from dinnerbell.domain.assistant_drafts import PROPOSAL_CONFIRMED, day_words, offer_confirmed_text
@@ -41,6 +43,7 @@ from dinnerbell.services.assistant.history import NOT_HERE, Shown, WebConversati
 from dinnerbell.services.assistant.runtime import available
 from dinnerbell.services.errors import Forbidden, NotFound
 from dinnerbell.services.variety import household_today
+from dinnerbell.web import assistant_stream
 from dinnerbell.web.auth import Context, CSRFChecked, Database, Principal, SignedIn
 from dinnerbell.web.context import AppContext
 from dinnerbell.web.forms import RowId
@@ -148,6 +151,8 @@ async def send(
     assistant = await _require(request, db, principal)
     member = principal.member
     text = _normalized(message).strip()
+    if assistant_stream.wants_stream(request):
+        return await _streamed(request, context, db, principal, assistant, text)
     before = await web_history.web_conversation(db, assistant.config, member, context.clock())
     reply = await converse(db, assistant, member, web_key(member.id), private=True, text=text)
     if reply is None:
@@ -167,6 +172,42 @@ async def send(
     if before.keeps_history and _kept(after, text, reply):
         return local_redirect("/assistant#ask")
     return await _page(request, context, db, principal, conversation=before, latest=exchange)
+
+
+async def _streamed(
+    request: Request, context: AppContext, db: Database, principal: Principal, assistant: Assistant, text: str
+) -> Response:
+    """``send``, with the reply shown as the model writes it (``web.assistant_stream``). What's
+    stored, and the exchange and cards it ends with, are what the HTMX response would have."""
+    member = principal.member
+    if not text:
+        return Response(status_code=204)
+    before = await web_history.web_conversation(db, assistant.config, member, context.clock())
+    pending = await render(request, "_assistant_pending.html", {"t": Shown(True, text)})
+    # The answer gets its own session, and the request's holds nothing while the reply streams.
+    await db.close()
+    stream = assistant_stream.WebStream()
+
+    async def answer() -> tuple[Reply, Sequence[DraftView]] | None:
+        async with context.sessionmaker() as own:
+            reply = await converse(own, assistant, member, web_key(member.id), private=True, text=text, stream=stream)
+            if reply is None or before.keeps_history:
+                return None if reply is None else (reply, reply.drafts)
+            # The exchange replaces what's shown, so keep the waiting cards.
+            return reply, await drafts.waiting(own, member, web_key(member.id), context.clock())
+
+    async def done(result: tuple[Reply, Sequence[DraftView]]) -> str:
+        reply, cards = result
+        shown = await render(
+            request, "_assistant_exchange.html", {"turns": (Shown(False, reply.text),), "drafts": cards}
+        )
+        return bytes(shown.body).decode()
+
+    task = assistant_stream.start(answer(), stream, member.id)
+    body = assistant_stream.events(
+        stream, task, bytes(pending.body).decode(), replace=not before.keeps_history, done=done
+    )
+    return StreamingResponse(body, media_type=assistant_stream.STREAM_TYPE, headers=assistant_stream.STREAM_HEADERS)
 
 
 @router.post("/start-over")

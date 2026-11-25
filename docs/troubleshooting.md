@@ -40,6 +40,18 @@ After you fix a setting, recreate the service: `podman-compose down && podman-co
 | Badges show as text, and the log says `badge art not available` with `missing_scope` | The Slack app lacks `files:write`. | Paste the current manifest and reinstall the app (see [Upgrade](backup-and-upgrade.md#upgrade)). |
 | Badges show as text, and the log says `slack refused badge art` | Slack refused the art. | Report the line, with its `slack_error`, on the issue tracker. |
 | Members message or mention Dinnerbell and get no reply | The assistant is off, or the Slack app still has the default manifest, which doesn't deliver those messages. | Check both conditions in [The assistant](configuration.md#the-assistant), and apply the assistant manifest ([Talk to it in Slack](configuration.md#talk-to-it-in-slack)). |
+| On the **Assistant** page, a reply appears all at once when it's done, instead of as it's written | A proxy between the browser and Dinnerbell buffers or compresses the reply's stream. | See [Let the Assistant's replies stream](#let-the-assistants-replies-stream). |
+
+## Let the Assistant's replies stream
+
+On the **Assistant** page, a reply shows while the model writes it: the page reads the response to its message as it arrives (`Content-Type: text/event-stream`). Every proxy on the way must pass each piece on as it comes, without buffering or compressing the response. If one doesn't, the reply still arrives, all at once when it's done, as before.
+
+- **Pangolin or Traefik:** Traefik flushes an event stream as it comes, with no setting. Don't attach a `compress` middleware to Dinnerbell's router, or add `text/event-stream` to its `excludedContentTypes`.
+- **Cloudflare Tunnel:** `cloudflared` and Cloudflare pass an event stream on as it comes. If you set **Response Body Buffering** in a configuration rule, leave it at **None** for Dinnerbell's hostname.
+- **nginx:** Dinnerbell sends `X-Accel-Buffering: no`, which turns off nginx's buffering for the reply. Don't add `gzip` for `text/event-stream`.
+- **Any other proxy:** turn off response buffering and compression for `text/event-stream`, and allow at least 20 seconds between bytes: Dinnerbell sends a keep-alive line every 15 seconds while the model thinks.
+
+To check, open the Assistant page on your proxy's hostname and ask for something long, such as "Suggest five dinners and say why." The reply should grow in pieces before the draft cards show.
 
 ## Get an admin back in
 
