@@ -155,6 +155,21 @@ class ContributionRepository:
         )
         return {(member_id, Kind(kind)): n for member_id, kind, n in rows}
 
+    async def gave_feedback(self, household_id: int, member_id: int, meal_id: int) -> bool:
+        """Whether the member's feedback on ``meal_id`` has counted already, so saving it again
+        counts nothing new (``contributions.record_feedback``)."""
+        found = await self._session.scalar(
+            select(ContributionRow.id)
+            .where(
+                ContributionRow.household_id == household_id,
+                ContributionRow.member_id == member_id,
+                ContributionRow.kind == Kind.GAVE_FEEDBACK.value,
+                ContributionRow.meal_id == meal_id,
+            )
+            .limit(1)
+        )
+        return found is not None
+
     async def clear_feedback(self, household_id: int) -> int:
         """Delete the household's ``gave_feedback`` counts, for ``scrub-test``: they say who gave
         feedback, as the feedback rows do. Returns how many rows."""

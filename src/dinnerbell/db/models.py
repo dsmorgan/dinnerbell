@@ -858,7 +858,8 @@ class AssistantDraftRow(Base):
     against, where there is one: a plain column, so discarding a call never waits on a draft,
     and a draft whose call is gone gets the service's own refusal. The scheduler deletes drafts
     once they expire. IDs are AUTOINCREMENT, never reused once the
-    purge empties the table, so an old Slack card or web tab can never confirm a newer draft."""
+    purge empties the table, so an old Slack card or web tab can never confirm a newer draft.
+    A direct action (#374) is stored the same way, ``direct``, and used at once."""
 
     __tablename__ = "assistant_draft"
     __table_args__ = (
@@ -887,6 +888,11 @@ class AssistantDraftRow(Base):
     expires_at: Mapped[datetime] = mapped_column(UTCDateTime())
     used_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     confirmed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    direct: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    """A direct action's record (#374): its action used it at once, in a private conversation,
+    and ``payload["undo"]`` holds what **Undo** puts back, or None when nothing can."""
+    undone_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    """When **Undo** used a direct action's record; None while it hasn't."""
 
 
 class LocalWeatherRow(Base):

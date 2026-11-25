@@ -445,10 +445,14 @@ class Turn:
     """For a reply in a channel thread that only one member saw (``only_to_member``), their
     label; None for a reply everyone in the conversation saw, as every reply stored before #366
     reads."""
+    record: int | None = None
+    """For a direct action's entry (#374), its record's ID, so the page shows the record's card,
+    with **Undo** while it works, where the entry is."""
 
-    def to_json(self) -> dict[str, str]:
-        found = {"role": self.role, "text": self.text}
+    def to_json(self) -> dict[str, Any]:
+        found: dict[str, Any] = {"role": self.role, "text": self.text}
         found |= {"author": self.author} if self.author is not None else {}
+        found |= {"record": self.record} if self.record is not None else {}
         return found | ({"shown_to": self.shown_to} if self.shown_to is not None else {})
 
     @classmethod
@@ -458,11 +462,13 @@ class Turn:
         role, text, author, shown_to = (raw.get(k) for k in ("role", "text", "author", "shown_to"))
         if role not in (USER, ASSISTANT, DRAFT) or not isinstance(text, str):
             return None
+        record = raw.get("record")
         return cls(
             str(role),
             text,
             author if isinstance(author, str) else None,
             shown_to if role == ASSISTANT and isinstance(shown_to, str) else None,
+            record if role == DRAFT and isinstance(record, int) and not isinstance(record, bool) else None,
         )
 
     @property
@@ -551,19 +557,21 @@ def long_day(day: date) -> str:
     return f"{DAY_NAMES[day.weekday()]}, {MONTH_NAMES[day.month - 1]} {day.day}"
 
 
-def used_draft_text(title: str, *, confirmed: bool, day: date, outcome: str = "") -> str:
+def used_draft_text(title: str, *, confirmed: bool, day: date, outcome: str = "", verb: str | None = None) -> str:
     """The entry a conversation records when its member uses a draft (#363), in the words the card
     shows, with the household's ``day`` it happened, since the title and result say "today":
     "Confirmed on Tuesday, November 24: Start a lunch call for today. The lunch call for today is
     started." or "Cancelled on Tuesday, November 24: Start a lunch call for today". ``outcome``
     is Confirm's result. Its leading "Confirmed." is dropped, since the entry starts with it, and
-    a "Partly confirmed:" result starts the entry so instead."""
+    a "Partly confirmed:" result starts the entry so instead. ``verb`` starts it otherwise, as
+    "Done" and "Undone" do for a direct action (#374), and a leading word the same is dropped."""
     rest = outcome.strip()
-    verb = "Confirmed" if confirmed else "Cancelled"
-    if rest.startswith(PARTLY):
-        verb, rest = "Partly confirmed", rest.removeprefix(PARTLY).strip()
-        rest = rest[:1].upper() + rest[1:]
-    rest = rest.removeprefix("Confirmed.").strip()
+    if verb is None:
+        verb = "Confirmed" if confirmed else "Cancelled"
+        if rest.startswith(PARTLY):
+            verb, rest = "Partly confirmed", rest.removeprefix(PARTLY).strip()
+            rest = rest[:1].upper() + rest[1:]
+    rest = rest.removeprefix("Confirmed.").removeprefix(f"{verb}.").strip()
     entry = f"{verb} on {long_day(day)}: {title.strip()}"
     if not rest:
         return entry

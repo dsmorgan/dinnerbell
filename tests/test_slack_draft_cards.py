@@ -927,3 +927,79 @@ def test_an_offer_result_naming_a_domain_isnt_a_link() -> None:
     done = OfferConfirmed(Posted(OfferPath.ATTACH, 1, Slot.DINNER, date(2026, 10, 22), "noodles.example"))
     text = slack_assistant.confirmed_text(done)
     assert "noodles[.]example is a proposal on it now" in text and "noodles.example" not in text
+
+
+# Records of what the assistant did at once (#374) ---------------------------------------------------
+
+
+def test_a_record_card_says_done_and_carries_undo_whose_value_is_the_record_id() -> None:
+    view = DraftView(7, "answer", "Answer <!here> evil.example", ("You pinged @channel.",), record=True, undo=True)
+    card = slack_assistant.record_card(view)
+    section, buttons = card["blocks"]
+    assert card["text"] == "Done: Answer &lt;!here&gt; evil[.]example"
+    assert section["text"]["text"] == (
+        f"*Done: Answer &lt;!here&gt; evil[.]example*\n• You pinged @{WORD_JOINER}channel."
+    )
+    [undo] = buttons["elements"]
+    assert (undo["action_id"], undo["value"]) == (ids.DRAFT_UNDO, "7") and "style" not in undo
+    closed = slack_assistant.record_card(DraftView(7, "answer", "Answer", (), record=True, undone=True), "Undone.")
+    assert closed["text"] == "Undone: Answer" and [b["type"] for b in closed["blocks"]] == ["section", "section"]
+
+
+async def test_in_a_dm_an_answer_done_at_once_comes_as_a_record_and_undo_updates_it(
+    house: House, model: FakeModel, slack: Slack
+) -> None:
+    """#374: in Kim's DM, "make me a maybe" answers at once; the record is an ordinary message in
+    the thread, and Undo puts her answer back and replaces the card with ``chat.update``, once.
+    Lee's tap on it, in his own DM, finds nothing of his."""
+    house.clock.now = OPENS
+    await house.tick()
+    event_id = await dinner_id(house)
+    async with house.sessionmaker() as db:
+        await calls.respond(db, house["Kim"], event_id, Status.IN, now=house.clock())
+    model.script = [tool_call("draft_answer", {"slot": "", "day": "", "answer": "maybe"}), answer("Done.")]
+    await slack.dm("Kim", "Make me a maybe")
+    reply, card = posts(slack)
+    assert reply["text"] == "Done." and card["thread_ts"] == reply["thread_ts"]
+    assert card_text(card) == "*Done: Answer Maybe for today's dinner call*\n• You're a maybe for today's dinner call."
+    [record] = await draft_rows(house)
+    assert record.direct and card_values(card) == {ids.DRAFT_UNDO: str(record.id)}
+    slack.fake.clear()
+    await tap_dm(slack, "Lee", ids.DRAFT_UNDO, card)
+    [refused] = updated(slack)
+    assert refused["channel"] == "D04LEE" and "That's gone." in refused["text"]
+    slack.fake.clear()
+    await tap_dm(slack, "Kim", ids.DRAFT_UNDO, card)
+    [update] = updated(slack)
+    assert (update["channel"], update["ts"]) == ("D03KIM", CARD_TS)
+    assert update["text"] == "Undone: Answer Maybe for today's dinner call"
+    assert "Undone. You're in for today's dinner call again." in card_text(update)
+    assert "actions" not in [b["type"] for b in update["blocks"]]  # no Undo left
+    async with house.sessionmaker() as db:
+        ctx = await calls.load(db, await house.event(event_id))
+    kims = ctx.response_of(house["Kim"].id)
+    assert kims is not None and kims.status is Status.IN
+    slack.fake.clear()
+    await tap_dm(slack, "Kim", ids.DRAFT_UNDO, card)  # a double tap
+    assert updated(slack) == [] and posts(slack) == [] and slack.ephemerals("Kim") == []
+
+
+async def test_an_undo_that_something_moved_keeps_the_record_and_says_why(
+    house: House, model: FakeModel, slack: Slack
+) -> None:
+    house.clock.now = OPENS
+    await house.tick()
+    event_id = await dinner_id(house)
+    async with house.sessionmaker() as db:
+        await calls.respond(db, house["Kim"], event_id, Status.IN, now=house.clock())
+    model.script = [tool_call("draft_answer", {"slot": "", "day": "", "answer": "maybe"}), answer("Done.")]
+    await slack.dm("Kim", "Make me a maybe")
+    _, card = posts(slack)
+    async with house.sessionmaker() as db:
+        await calls.respond(db, house["Kim"], event_id, Status.OUT, now=house.clock())
+    slack.fake.clear()
+    await tap_dm(slack, "Kim", ids.DRAFT_UNDO, card)
+    [update] = updated(slack)
+    assert update["text"] == "Done: Answer Maybe for today's dinner call"
+    assert "changed since the assistant did it" in card_text(update)
+    assert "actions" not in [b["type"] for b in update["blocks"]]

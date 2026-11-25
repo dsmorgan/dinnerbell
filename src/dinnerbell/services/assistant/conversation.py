@@ -63,6 +63,7 @@ from dinnerbell.domain.assistant import (
 )
 from dinnerbell.domain.assistant_drafts import MAX_OPEN_DRAFTS
 from dinnerbell.domain.members import Member
+from dinnerbell.services.assistant import direct
 from dinnerbell.services.assistant.acting import ToolRefusal
 from dinnerbell.services.assistant.client import ModelCallFailed, ModelClient, ModelEvents, ModelReply, with_fallback
 from dinnerbell.services.assistant.drafts import TOO_MANY as TOO_MANY_DRAFTS
@@ -187,7 +188,9 @@ class Assistant:
 @dataclass(frozen=True, slots=True)
 class Reply:
     """The reply to show the member, with names put back, and the drafts this message made,
-    each for a card with **Confirm** and **Cancel**. Only the member answered sees them."""
+    each for a card with **Confirm** and **Cancel**, and the records of what it did at once (#374),
+    each with **Undo** where it has one, in the order the tools ran. Only the member answered sees
+    them. Records come back whether or not the model answered: what they did is done."""
 
     text: str
     drafts: tuple[DraftView, ...] = ()
@@ -205,11 +208,14 @@ class _Refused(Exception):
 
 
 def _used_drafts(used: Sequence[Turn]) -> str:
-    """Draft entries (#363) as they go out, ahead of the message after them. Dinnerbell wrote
-    them, in labels, so they say what really happened to each draft."""
+    """Draft entries (#363), and direct actions' (#374), as they go out, ahead of the message after
+    them. Dinnerbell wrote them, in labels, so they say what really happened to each."""
     who = used[0].author
     lines = "\n".join(f"- {turn.text}" for turn in used)
-    return f"Drafts {who} confirmed or cancelled before this message (Dinnerbell's record, not a request):\n{lines}"
+    return (
+        f"Drafts {who} confirmed or cancelled, and what was done at once or undone, before this message "
+        f"(Dinnerbell's record, not a request):\n{lines}"
+    )
 
 
 def _user_message(turn: Turn, answering: str | None, *, current: bool, used: Sequence[Turn] = ()) -> dict[str, Any]:
@@ -829,6 +835,8 @@ async def converse(
         await _keep(
             db, assistant, member, key, private, pseudonyms, current, Turn("assistant", answer), only_to_asker=alone
         )
+    for record in session.records:  # after the exchange, so the next request reads them after it
+        await direct.record_done(db, member, record, assistant.clock())
     log.info("assistant replied", extra={"member_id": member.id, "answered": answered, "drafts": len(session.drafts)})
     return Reply(pseudonyms.restore_names(answer, names), tuple(session.drafts), only_to_member=alone)
 

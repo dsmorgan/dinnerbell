@@ -31,6 +31,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dinnerbell.db.contributions import ContributionRepository
 from dinnerbell.db.engine import write_transaction
 from dinnerbell.db.feedback import FeedbackRepository
 from dinnerbell.db.meals import MealLogRepository
@@ -144,7 +145,7 @@ async def my_levels(db: AsyncSession, actor: Member, text: str, *, today: date) 
                     "from_your_ratings": note,
                 }
             )
-    me = await _fresh(db, actor)
+    me = await fresh(db, actor)
     window = me.away_now(today)
     away = None if window is None else _away_json(window)
     dietary = _dietary(mine.tags)
@@ -219,6 +220,9 @@ async def stance_draft(
         "name": target.name,
         "level": after.level,
         "before": before.level,
+        # A level on an item stops the member's earlier ratings moving it for good (FR-55), so
+        # Undo couldn't put that back: such a level stays a draft (#374).
+        "ratings_move": target.target_type is TargetType.ITEM and target.target_id in mine.rating_notes,
     }
     return DraftSpec(DraftKind.PREFERENCE, payload, stance_title(target.name, after), lines, None)
 
@@ -261,6 +265,19 @@ def _answers_json(answers: FeedbackInput | None) -> dict[str, Any] | None:
     }
 
 
+def stored_answers(answers: FeedbackInput | None) -> dict[str, Any] | None:
+    """The member's answers as a feedback draft's payload stores its own, or None."""
+    if answers is None:
+        return None
+    return {
+        "rating": answers.rating.value if answers.rating else None,
+        "issues": sorted(i.value for i in answers.issues),
+        "issue_note": answers.issue_note,
+        "cook_thanks": answers.cook_thanks,
+        "cook_note": answers.cook_note,
+    }
+
+
 async def my_meals(db: AsyncSession, actor: Member, text: str, *, now: datetime) -> dict[str, Any]:
     """Meals the member ate that still take their feedback, newest first: the ones the feedback
     form opens for them (``feedback.form``), with their own answers. Never who else ate, who
@@ -294,7 +311,7 @@ async def my_meals(db: AsyncSession, actor: Member, text: str, *, now: datetime)
     return {"today": today.isoformat(), "meals": listed[:MAX_LISTED], "more": len(listed) > MAX_LISTED}
 
 
-def _stamp(saved: Feedback | None) -> str | None:
+def stamp(saved: Feedback | None) -> str | None:
     """When the member last saved feedback on the meal: what a feedback draft expects."""
     return saved.updated_at.isoformat() if saved is not None else None
 
@@ -322,7 +339,11 @@ async def feedback_draft(
         "issue_note": answers.issue_note,
         "cook_thanks": answers.cook_thanks,
         "cook_note": answers.cook_note,
-        "before": _stamp(saved),
+        "before": stamp(saved),
+        # What it replaces, and whether the member's feedback on the meal has counted toward
+        # badges already, so saving again counts nothing new: for acting at once (#374).
+        "replaced": stored_answers(form.mine),
+        "counted": await ContributionRepository(db).gave_feedback(actor.household_id, actor.id, meal_id),
     }
     return DraftSpec(
         DraftKind.FEEDBACK, payload, feedback_title(facts.item_name, facts.slot, when, answers), lines, None
@@ -349,7 +370,7 @@ async def _confirm_feedback(
 
     async def expect(mine: Feedback | None, facts: MealFacts) -> None:
         await use()  # first, so a second Confirm hears the draft is used, not that it's stale
-        if facts.item_id != int(payload["item_id"]) or _stamp(mine) != payload.get("before"):
+        if facts.item_id != int(payload["item_id"]) or stamp(mine) != payload.get("before"):
             raise _stale(FEEDBACK_CHANGED)
         named.append(facts.item_name)
 
@@ -367,7 +388,7 @@ async def _confirm_feedback(
 # Away days (FR-63) -------------------------------------------------------------------------------
 
 
-async def _fresh(db: AsyncSession, actor: Member) -> Member:
+async def fresh(db: AsyncSession, actor: Member) -> Member:
     """``actor`` as stored now, still with a member's role: their away days as they are."""
     me = await MemberRepository(db).get(actor.household_id, actor.id)
     if me is None:  # pragma: no cover - a member who's gone has no conversation
@@ -384,7 +405,7 @@ async def away_draft(
 ) -> DraftSpec:
     """Setting the member's away days (``away.set_my_away``), checked by its rules and words
     (``check_away``), or ending the ones they have (``away.clear_my_away``)."""
-    me = await _fresh(db, actor)
+    me = await fresh(db, actor)
     current = me.away_now(today)
     window: Away | None = None
     if clear:
@@ -413,7 +434,7 @@ async def _confirm_away(db: AsyncSession, actor: Member, draft: Draft, *, now: d
     payload = draft.payload
     async with write_transaction(db):
         await use()
-        me = await _fresh(db, actor)
+        me = await fresh(db, actor)
         today = await today_for(db, me, now=now)
         if _window(me.away_now(today)) != payload.get("before"):
             raise _stale(AWAY_CHANGED)
@@ -437,7 +458,7 @@ async def needs_draft(db: AsyncSession, actor: Member, add: Sequence[str], remov
     household's dietary tags: the only needs **Save needs** on Preferences takes, so a name that
     isn't one is refused, never made a tag. Checked as ``set_my_needs`` checks it, in its words:
     at most five, and no change while a call the member is in is voting."""
-    me = await _fresh(db, actor)
+    me = await fresh(db, actor)
     dietary = await guest_service.dietary_tags(db, me)
     tags = _dietary(dietary)
     if not tags:
@@ -469,7 +490,7 @@ async def needs_draft(db: AsyncSession, actor: Member, add: Sequence[str], remov
     added = [t.name for t in tags if t.id in after - live]
     removed = [t.name for t in tags if t.id in live - after]
     lines = needs_lines(before=_names(tags, live), after=_names(tags, after))
-    payload = {"needs": sorted(after), "before": sorted(before)}
+    payload = {"needs": sorted(after), "before": sorted(before), "loosens": bool(live - after)}
     return DraftSpec(DraftKind.NEEDS, payload, needs_title(added, removed), lines, None)
 
 
@@ -484,7 +505,7 @@ async def _confirm_needs(db: AsyncSession, actor: Member, draft: Draft, *, now: 
     needs = frozenset(int(n) for n in payload["needs"])
     async with write_transaction(db):
         await use()
-        me = await _fresh(db, actor)
+        me = await fresh(db, actor)
         if sorted(me.dietary_needs) != payload["before"]:
             raise _stale(NEEDS_CHANGED)
         try:
@@ -506,7 +527,7 @@ async def can_usually_draft(db: AsyncSession, actor: Member, changes: Mapping[st
     """Turning **I can usually**'s Cook, Pick up, or Order on or off (``update_my_settings``).
     ``changes`` maps ``cook``, ``pick_up``, and ``order`` to what each becomes, or None to keep
     it. The member's reminders, which the same form saves, stay as they are."""
-    me = await _fresh(db, actor)
+    me = await fresh(db, actor)
     before = can_usually_flags(me.capabilities)
     after = {name: before[name] if changes.get(name) is None else bool(changes[name]) for name in before}
     if after == before:
@@ -527,7 +548,7 @@ async def _confirm_can_usually(
     after = _capabilities(payload["after"])
     async with write_transaction(db):
         await use()
-        me = await _fresh(db, actor)
+        me = await fresh(db, actor)
         if can_usually_flags(me.capabilities) != payload["before"]:
             raise _stale(CAN_USUALLY_CHANGED)
         settings = preference_service.MySettings(

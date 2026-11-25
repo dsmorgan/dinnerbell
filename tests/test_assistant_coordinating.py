@@ -309,7 +309,8 @@ async def test_lock_the_taco_place_member_2_picks_it_up_in_a_dm_drafts_then_conf
     # The next request says what Confirm did (#363), naming Sam by his label.
     [*_, asked] = model.requests[0]["messages"]
     assert asked["content"].startswith(
-        "Drafts Member 1 confirmed or cancelled before this message (Dinnerbell's record, not a request):\n"
+        "Drafts Member 1 confirmed or cancelled, and what was done at once or undone, before this message "
+        "(Dinnerbell's record, not a request):\n"
         "- Confirmed on Thursday, October 22: Lock Taqueria (pickup). "
         "Today's dinner call is decided on Taqueria. Member 2 picks it up.\n\n"
         "From Member 1, the member you're answering."

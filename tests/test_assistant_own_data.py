@@ -47,7 +47,7 @@ from dinnerbell.domain.meals import MealInput, Slot
 from dinnerbell.domain.members import Capabilities, Member
 from dinnerbell.domain.preferences import MINUS, Stance, TargetType
 from dinnerbell.services import away, calls, coordinator, feedback, guests, meals, preferences
-from dinnerbell.services.assistant import admin, call_drafts, drafts, own_drafts, tools
+from dinnerbell.services.assistant import admin, call_drafts, direct, drafts, own_drafts, tools
 from dinnerbell.services.assistant.call_drafts import ActionConfirmed
 from dinnerbell.services.assistant.conversation import (
     AT_CAP,
@@ -62,6 +62,7 @@ from dinnerbell.services.assistant.runtime import AssistantConfig
 from dinnerbell.services.assistant.tools import ToolContext, ToolResult, ToolSession
 from dinnerbell.services.database import Database, open_database
 from dinnerbell.services.errors import NotFound
+from tests.support.assistant import drafting
 from tests.support.calls import DONE_AT, OPENS, RESPOND_BY, House, dinner_id, furnish, household_members, make_house
 from tests.support.clock import FakeClock
 from tests.support.fake_model import FakeModel, answer, tool_call
@@ -153,8 +154,10 @@ async def act(house: House, use_case: Any, *args: Any, **kwargs: Any) -> Any:
 
 
 async def tool(house: House, name: str, args: dict[str, Any], *, who: str = "Kim", private: bool = True) -> ToolResult:
+    """The tool, as a message that acted at once all it may (#374), so it drafts:
+    ``test_assistant_direct`` covers acting at once."""
     member = house[who]
-    session = ToolSession(key=web_key(member.id), pseudonyms=Pseudonyms().with_member(member.id))
+    session = drafting(ToolSession(key=web_key(member.id), pseudonyms=Pseudonyms().with_member(member.id)))
     async with house.sessionmaker() as db:
         return await tools.run_tool(
             name, args, db=db, member=member, private=private, now=house.clock(), session=session
@@ -171,6 +174,11 @@ async def draft(house: House, draft_id: int) -> AssistantDraftRow:
         row = await db.get(AssistantDraftRow, draft_id)
     assert row is not None
     return row
+
+
+async def undo(house: House, who: str, record_id: int) -> direct.Undone:
+    async with house.sessionmaker() as db:
+        return await direct.undo(db, house.clock, CONFIGURED, house[who], record_id)
 
 
 async def confirm(house: House, who: str | Member, draft_id: int) -> Any:
@@ -282,40 +290,36 @@ async def test_rate_last_nights_dinner_drafts_feedback_and_confirm_saves_it_thro
         await confirm(house, "Kim", card.id)  # once only
 
 
-async def test_veto_mushrooms_drafts_a_preference_change_and_confirm_saves_it_on_preferences(
+async def test_veto_mushrooms_sets_the_level_at_once_through_preferences_and_undo_lifts_it(
     house: House, helper: Assistant, model: FakeModel, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """ "Veto mushrooms" drafts a level for the tag Mushrooms; Confirm runs ``set_my_preference``,
-    the Preferences page's use case, never the admin's ``set_member_preference``."""
-    kim = house["Kim"]
-    model.script = [
-        tool_call("draft_preference", {"what": "", "name": "mushrooms", "level": "veto"}),
-        answer("Drafted."),
-    ]
-    async with house.sessionmaker() as db:
-        reply = await converse(db, helper, kim, web_key(kim.id), private=True, text="Veto mushrooms")
-    assert reply is not None
-    [card] = reply.drafts
-    assert (card.kind, card.title) == ("preference", "Veto Mushrooms")
-    assert card.confirm_lines == (
-        "Your level for the tag Mushrooms on Preferences goes from 0 to Veto.",
-        "Ranking leaves out everything with that tag on every call you're in.",
-    )
-    assert await level(house, "Kim", TargetType.TAG, "Mushrooms") == Stance()
+    """ "Veto mushrooms" on the web tightens Kim's level, so it acts at once (#374) through
+    ``set_my_preference``, the Preferences page's use case, never the admin's
+    ``set_member_preference``; the record's Undo puts the level back the same way."""
 
     async def never(*args: Any, **kwargs: Any) -> Any:
         raise AssertionError("the admin's path to someone else's preferences")
 
     monkeypatch.setattr(preferences, "set_member_preference", never)
     monkeypatch.setattr(preferences, "member_for_admin", never)
-    done = await confirm(house, "Kim", card.id)
-    assert done == ActionConfirmed(
-        None, "Confirmed. Your level for Mushrooms is Veto now.", link=own_drafts.PREFERENCES
-    )
+    kim = house["Kim"]
+    model.script = [
+        tool_call("draft_preference", {"what": "", "name": "mushrooms", "level": "veto"}),
+        answer("Done."),
+    ]
+    async with house.sessionmaker() as db:
+        reply = await converse(db, helper, kim, web_key(kim.id), private=True, text="Veto mushrooms")
+    assert reply is not None
+    [card] = reply.drafts
+    assert (card.kind, card.title, card.record, card.undo) == ("preference", "Veto Mushrooms", True, True)
+    assert card.confirm_lines == ("Your level for Mushrooms is Veto now.",)
     assert await level(house, "Kim", TargetType.TAG, "Mushrooms") == Stance(veto=True)
     assert await level(house, "Sam", TargetType.TAG, "Mushrooms") == Stance()
-    with pytest.raises(DraftUnavailable):
-        await confirm(house, "Kim", card.id)  # once only
+    with pytest.raises(NotFound):
+        await confirm(house, "Kim", card.id)  # a record has no Confirm
+    undone = await undo(house, "Kim", card.id)
+    assert (undone.text, undone.link) == ("Undone. Your level for Mushrooms is 0 now.", own_drafts.PREFERENCES)
+    assert await level(house, "Kim", TargetType.TAG, "Mushrooms") == Stance()
 
 
 # Private only ------------------------------------------------------------------------------------
@@ -960,71 +964,60 @@ async def save_needs(house: House, who: str, *names: str) -> None:
     await act(house, guests.set_my_needs, house[who], frozenset(house.tags[n].id for n in names))
 
 
-async def test_turn_off_pick_up_drafts_a_card_and_confirm_saves_it_through_the_preferences_form(
+async def test_turn_off_pick_up_acts_at_once_through_the_preferences_form_and_undo_turns_it_on(
     house: House, helper: Assistant, model: FakeModel, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Done when (#278): "Turn off pick up for me" drafts a card; Confirm runs
+    """Done when (#278), as #374 makes it: "Turn off pick up for me" acts at once through
     ``update_my_settings``, the use case Preferences' **You** form runs, never the admin's, and
-    keeps her reminders as they are."""
+    keeps her reminders as they are; Undo turns it back on, keeping them still."""
     await save_settings(house, "Kim", Capabilities(can_pickup=True, can_order=True), mute=True)
-    kim = house["Kim"]
-    model.script = [tool_call("draft_can_usually", NO_CHANGE | {"pick_up": "off"}), answer("Drafted.")]
-    async with house.sessionmaker() as db:
-        reply = await converse(db, helper, kim, web_key(kim.id), private=True, text="Turn off pick up for me")
-    assert reply is not None
-    [card] = reply.drafts
-    assert (card.kind, card.title) == ("can_usually", "Turn off Pick up")
-    assert card.confirm_lines == (
-        'On Preferences, "I can usually" goes from Pick up and Order to Order.',
-        "When you answer In on a call, these turn on your offers to cook, pick up, or order. You can turn any off "
-        "for that call.",
-    )
-    assert (await house.refresh("Kim")).capabilities == Capabilities(can_pickup=True, can_order=True)
 
     async def never(*args: Any, **kwargs: Any) -> Any:
         raise AssertionError("the admin's path to someone else's settings")
 
     monkeypatch.setattr(preferences, "update_member_settings", never)
     monkeypatch.setattr(preferences, "member_for_admin", never)
-    done = await confirm(house, "Kim", card.id)
-    assert done == ActionConfirmed(
-        None, 'Confirmed. On Preferences, "I can usually" is Order now.', link=own_drafts.PREFERENCES
-    )
+    kim = house["Kim"]
+    model.script = [tool_call("draft_can_usually", NO_CHANGE | {"pick_up": "off"}), answer("Done.")]
+    async with house.sessionmaker() as db:
+        reply = await converse(db, helper, kim, web_key(kim.id), private=True, text="Turn off pick up for me")
+    assert reply is not None
+    [card] = reply.drafts
+    assert (card.kind, card.title, card.record) == ("can_usually", "Turn off Pick up", True)
+    assert card.confirm_lines == ('On Preferences, "I can usually" is Order now.',)
     kim = await house.refresh("Kim")
     assert kim.capabilities == Capabilities(can_order=True) and kim.mute_dm_reminders
     assert (await house.refresh("Sam")).capabilities == Capabilities()
-    with pytest.raises(DraftUnavailable):
-        await confirm(house, "Kim", card.id)  # once only
+    undone = await undo(house, "Kim", card.id)
+    assert undone.text == 'Undone. On Preferences, "I can usually" is Pick up and Order now.'
+    kim = await house.refresh("Kim")
+    assert kim.capabilities == Capabilities(can_pickup=True, can_order=True) and kim.mute_dm_reminders
 
 
-async def test_add_vegetarian_drafts_needs_and_confirm_saves_them_through_save_needs(
+async def test_add_vegetarian_acts_at_once_through_save_needs(
     house: House, helper: Assistant, model: FakeModel, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """ "Add vegetarian to my needs" drafts the needs by the dietary tag's name; Confirm runs
-    ``guests.set_my_needs``, what **Save needs** runs, never the admin's ``set_member_needs``."""
-    kim = house["Kim"]
-    model.script = [tool_call("draft_dietary_needs", {"add": ["vegetarian"], "remove": []}), answer("Drafted.")]
-    async with house.sessionmaker() as db:
-        reply = await converse(db, helper, kim, web_key(kim.id), private=True, text="Add vegetarian to my needs")
-    assert reply is not None
-    [card] = reply.drafts
-    assert (card.kind, card.title) == ("needs", "Add Vegetarian to your dietary needs")
-    assert card.confirm_lines == (
-        "Your dietary needs on Preferences go from none to Vegetarian.",
-        "Every meal you're in or maybe for fits these, as a guest's needs do. Only the needs show, never whose.",
-    )
-    assert (await house.refresh("Kim")).dietary_needs == frozenset()
+    """ "Add vegetarian to my needs" tightens them, so it acts at once (#374) through
+    ``guests.set_my_needs``, what **Save needs** runs, never the admin's ``set_member_needs``,
+    and Undo takes it off the same way."""
 
     async def never(*args: Any, **kwargs: Any) -> Any:
         raise AssertionError("the admin's path to someone else's needs")
 
     monkeypatch.setattr(guests, "set_member_needs", never)
-    done = await confirm(house, "Kim", card.id)
-    assert done == ActionConfirmed(
-        None, "Confirmed. Your dietary needs are Vegetarian now.", link=own_drafts.NEEDS_PAGE
-    )
+    kim = house["Kim"]
+    model.script = [tool_call("draft_dietary_needs", {"add": ["vegetarian"], "remove": []}), answer("Done.")]
+    async with house.sessionmaker() as db:
+        reply = await converse(db, helper, kim, web_key(kim.id), private=True, text="Add vegetarian to my needs")
+    assert reply is not None
+    [card] = reply.drafts
+    assert (card.kind, card.title, card.record) == ("needs", "Add Vegetarian to your dietary needs", True)
+    assert card.confirm_lines == ("Your dietary needs are Vegetarian now.",)
     assert (await house.refresh("Kim")).dietary_needs == {house.tags["Vegetarian"].id}
     assert (await house.refresh("Sam")).dietary_needs == frozenset()
+    undone = await undo(house, "Kim", card.id)
+    assert (undone.text, undone.link) == ("Undone. You have no dietary needs now.", own_drafts.NEEDS_PAGE)
+    assert (await house.refresh("Kim")).dietary_needs == frozenset()
 
 
 async def test_taking_needs_off_says_what_they_become_and_none_left_says_so(house: House) -> None:
@@ -1216,6 +1209,6 @@ async def test_a_need_that_is_no_longer_a_dietary_tag_is_dropped_not_refused(hou
     row = await draft(house, draft_id(await tool(house, "draft_dietary_needs", SAMPLES["draft_dietary_needs"])))
     assert row.title == "Add Vegetarian to your dietary needs"
     assert row.lines[0] == "Your dietary needs on Preferences go from none to Vegetarian."
-    assert row.payload == {"needs": [house.tags["Vegetarian"].id], "before": sorted(stale)}
+    assert row.payload == {"needs": [house.tags["Vegetarian"].id], "before": sorted(stale), "loosens": False}
     await confirm(house, "Kim", row.id)
     assert (await house.refresh("Kim")).dietary_needs == {house.tags["Vegetarian"].id}

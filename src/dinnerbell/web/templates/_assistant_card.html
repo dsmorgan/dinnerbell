@@ -1,0 +1,3 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{#- Expects: d, a DraftView: a draft's card, or a direct action's record (#374) when d.record, which never shows the page's outcome. -#}
+{%- if d.record %}{% with r = d, outcome = none %}{% include "_assistant_record.html" %}{% endwith %}{% else %}{% include "_assistant_draft.html" %}{% endif %}

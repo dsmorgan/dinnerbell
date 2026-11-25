@@ -38,13 +38,23 @@ from dinnerbell.services.variety import household_today
 
 
 async def record_use(
-    db: AsyncSession, member: Member, draft: Draft, *, confirmed: bool, outcome: str = "", now: datetime
+    db: AsyncSession,
+    member: Member,
+    draft: Draft,
+    *,
+    confirmed: bool,
+    outcome: str = "",
+    now: datetime,
+    verb: str | None = None,
 ) -> bool:
     """Add ``draft``'s entry to its conversation, once ``member`` has confirmed or cancelled it.
     ``outcome`` is Confirm's result, with each person as ``assistant_coordinating.person`` of
     their member ID, never a name. Returns whether the conversation kept it: nothing is added to
     a conversation that's gone, expired, or another member's, or while nothing is kept. The
-    conversation's last message stays when it was, so the entry never makes it last longer."""
+    conversation's last message stays when it was, so the entry never makes it last longer.
+
+    A direct action's record (#374) adds "Done" and "Undone" entries, by ``verb``; "Done" carries
+    the record's ID, for the page to show its card there."""
     household_id = member.household_id
     repo = AssistantRepository(db)
     async with write_transaction(db):
@@ -68,8 +78,9 @@ async def record_use(
         if household is None:  # pragma: no cover - members cascade with their household
             return False
         day = household_today(household, now)
-        text = used_draft_text(told(draft.title), confirmed=confirmed, day=day, outcome=told(outcome))
-        entry = Turn(DRAFT, text, pseudonyms.label(member.id))
+        text = used_draft_text(told(draft.title), confirmed=confirmed, day=day, outcome=told(outcome), verb=verb)
+        record = draft.id if draft.direct and verb == "Done" else None
+        entry = Turn(DRAFT, text, pseudonyms.label(member.id), record=record)
         kept = Conversation(
             key=stored.key,
             private=stored.private,

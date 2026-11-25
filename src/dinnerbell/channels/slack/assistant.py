@@ -31,7 +31,10 @@ thread, and an ordinary message in a DM. A card has the draft's title, what **Co
 channel, and member checks) and hands it to ``draft_tap``, which calls ``confirm_draft`` or
 ``cancel_draft`` as the tapper: the service checks that the draft is theirs. The card is then
 replaced with what happened, through the tap's ``response_url`` for an ephemeral and with
-``chat.update`` in a DM, so a result never shows in the channel. A catalog draft's Confirm leaves
+``chat.update`` in a DM, so a result never shows in the channel. In a DM, something the assistant
+did at once (#374) comes as a record card instead: **Done:**, its title, what it did, and **Undo**
+while it works, whose tap ``draft_tap`` hands to ``direct.undo``, and whose card ``chat.update``
+replaces with what Undo did. A catalog draft's Confirm leaves
 **Review the import**, a link Dinnerbell builds from its own base URL (``import_link``) to the
 web's add-only import preview: the one clickable link the assistant's messages have.
 
@@ -53,7 +56,7 @@ import logging
 import re
 import unicodedata
 from collections.abc import Awaitable, Callable, Coroutine, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from slack_bolt.async_app import AsyncApp
@@ -84,6 +87,7 @@ from dinnerbell.domain.members import Member
 from dinnerbell.domain.notifications import MessageRef, PermanentDeliveryError
 from dinnerbell.logs import member_id_var
 from dinnerbell.services import activity, outbox, slack_members
+from dinnerbell.services.assistant import direct
 from dinnerbell.services.assistant.call_drafts import ActionConfirmed
 from dinnerbell.services.assistant.conversation import (
     FAILED,
@@ -335,6 +339,31 @@ def draft_card(draft: DraftView) -> dict[str, Any]:
         block_id=f"draft_{draft.id}",
     )
     return {"text": title, "blocks": [*(section("\n".join(part)) for part in sections), buttons]}
+
+
+DONE = "Done:"
+UNDONE_LABEL = "Undone:"
+
+
+def record_card(record: DraftView, note: str | None = None) -> dict[str, Any]:
+    """A direct action's record (#374): **Done:** and its title, what it did, through
+    ``safe_reply`` as a draft card's lines are, and **Undo** while it works, whose value is the
+    record's ID and nothing else. ``note``, safe already, is what Undo did or why it didn't."""
+    title = safe_reply(record.title, MAX_DRAFT_TITLE) or ELLIPSIS
+    head = f"*{UNDONE_LABEL if record.undone else DONE} {title}*"
+    lines = [f"• {safe_reply(line, MAX_DRAFT_LINE)}" for line in record.confirm_lines]
+    blocks: list[Block] = [section("\n".join([head, *lines])[:MAX_SECTION])]
+    if note:
+        blocks.append(section(note))
+    if record.undo:
+        value = ids.draft_value(record.id)
+        blocks.append(actions(button("Undo", ids.DRAFT_UNDO, value), block_id=f"record_{record.id}"))
+    return {"text": f"{DONE} {title}" if not record.undone else f"{UNDONE_LABEL} {title}", "blocks": blocks}
+
+
+def card_for(view: DraftView) -> dict[str, Any]:
+    """A draft's card, or a direct action's record (#374)."""
+    return record_card(view) if view.record else draft_card(view)
 
 
 def result_card(text: str, *blocks: Block) -> dict[str, Any]:
@@ -967,7 +996,7 @@ class SlackAssistant:
         member when it carries drafts in a channel thread. When ``stream``, a DM's, showed some
         of it, the stream ends with the rest, and only what the member hasn't seen is posted."""
         shown = reply.text
-        cards = [draft_card(draft) for draft in reply.drafts]
+        cards = [card_for(draft) for draft in reply.drafts]
         # Drafts, and the reply on them, go only to their member. ``converse`` decides; should a
         # reply ever come with drafts but no flag, cards in the channel still never go public.
         private = reply.only_to_member or (bool(cards) and not incoming.private)
@@ -1104,6 +1133,8 @@ class SlackAssistant:
         if source.channel_id == self.channel_id and not tap.ephemeral:
             raise ids.BadValue("a draft card in the channel is only ever an ephemeral")
         settled = f"{member.id}:{draft_id}"
+        if action_id == ids.DRAFT_UNDO:
+            return await self._undo_tap(member, source, draft_id, tap, settled)
         async with self.draft_lock:
             async with self.sessionmaker() as db:
                 if not await available(db, self.assistant.config, member):
@@ -1132,6 +1163,37 @@ class SlackAssistant:
             replaced, fallback = await self._replace_card(source, tap, card, member)
             if replaced and refusal is None:
                 self.settled.add(settled)  # only once the card itself shows what happened
+            return fallback
+
+    async def _undo_tap(self, member: Member, source: Source, record_id: int, tap: Tap, settled: str) -> Mrkdwn | None:
+        """**Undo** on a record card (#374), in the tapper's DM: ``direct.undo`` checks the record
+        is theirs and still undoable. The card stays a record, without **Undo** once it's used,
+        with what Undo did or its refusal under it, through ``chat.update``. A double tap's
+        second finds the first's card in place and leaves it."""
+        async with self.draft_lock:
+            async with self.sessionmaker() as db:
+                if not await available(db, self.assistant.config, member):
+                    return Mrkdwn(ASSISTANT_OFF)
+                if source.channel_id == self.channel_id:
+                    raise ids.BadValue("a record card is only ever in a DM")
+                refusal: Exception | None = None
+                try:
+                    done = await direct.undo(db, self.assistant.clock, self.assistant.config, member, record_id)
+                    shown = record_card(done.record, safe_reply(done.text))
+                except SHOWN_ERRORS as exc:
+                    refusal = exc
+                except IllegalTransition as exc:
+                    refusal = friendly(exc)
+                if refusal is not None:
+                    if str(refusal) == direct.UNDONE and settled in self.settled:
+                        return None  # a double tap: the card shows what the first tap did
+                    activity.refused(refusal, str(refusal), member, action=ids.DRAFT_UNDO)
+                    found = await direct.record(db, member, record_id, self.assistant.clock())
+                    note = safe_reply(str(refusal))
+                    shown = record_card(replace(found, undo=False), note) if found else result_card(note)
+            replaced, fallback = await self._replace_card(source, tap, shown, member)
+            if replaced and refusal is None:
+                self.settled.add(settled)
             return fallback
 
     def _import_url(self, draft_id: int, member: Member) -> str:

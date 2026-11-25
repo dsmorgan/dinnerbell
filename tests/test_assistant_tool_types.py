@@ -39,6 +39,7 @@ from dinnerbell.services.assistant.runtime import AssistantConfig
 from dinnerbell.services.assistant.tools import ToolResult, ToolSession
 from dinnerbell.services.away import set_my_away
 from dinnerbell.services.database import Database, open_database
+from tests.support.assistant import drafting
 from tests.support.calls import MEAL, OPENS, RESPOND_BY, House, dinner_id, furnish, make_house
 from tests.support.clock import FakeClock
 from tests.support.feedback import done_dinner
@@ -332,10 +333,12 @@ BASELINES: dict[str, tuple[Baseline, ...]] = {
 
 async def run(house: House, name: str, raw: Mapping[str, Any]) -> ToolResult:
     member = house[ASKER]
-    session = ToolSession(
-        key=web_key(member.id),
-        pseudonyms=Pseudonyms({house[n].id: number for number, n in enumerate(LABELS, start=1)}),
-        links=StubLinks(),
+    session = drafting(  # so a baseline that acts at once (#374) can run again
+        ToolSession(
+            key=web_key(member.id),
+            pseudonyms=Pseudonyms({house[n].id: number for number, n in enumerate(LABELS, start=1)}),
+            links=StubLinks(),
+        )
     )
     async with house.sessionmaker() as db:
         return await tools.run_tool(name, raw, db=db, member=member, private=True, now=house.clock(), session=session)

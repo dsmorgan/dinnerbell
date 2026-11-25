@@ -127,12 +127,18 @@ class DraftUnavailable(EventRuleViolation):
 @dataclass(frozen=True, slots=True)
 class DraftView:
     """A draft as an entry point shows it, on a card with **Confirm** and **Cancel**. Item
-    names only, never a person's."""
+    names only, never a person's. With ``record``, a direct action's record instead (#374,
+    ``direct.view``): **Done:**, its title, what it did in ``confirm_lines``, and **Undo** while
+    ``undo``."""
 
     id: int
     kind: str
     title: str
     confirm_lines: tuple[str, ...]
+    record: bool = False
+    undo: bool = False
+    """Whether the record's **Undo** still works."""
+    undone: bool = False
 
 
 FORMER_MEMBER = "a former member"
@@ -218,6 +224,11 @@ async def _store(
         await db.commit()
     log.info("assistant drafted", extra={"member_id": actor.id, "kind": kind.value, "draft_id": draft.id})
     return draft
+
+
+async def household_day(db: AsyncSession, household_id: int, now: datetime) -> tuple[date, ZoneInfo]:
+    """The household's day at ``now``, and its time zone."""
+    return await _today(db, household_id, now)
 
 
 async def _today(db: AsyncSession, household_id: int, now: datetime) -> tuple[date, ZoneInfo]:
@@ -497,12 +508,21 @@ async def confirm_draft(
     ``draft_log``), so the page and the model's next request know; a refusal records nothing."""
     now = clock()
     draft = await _mine(db, member, draft_id)
+    if draft.direct:  # a direct action's record (#374): its action used it, and Undo is its own
+        raise NotFound(NO_SUCH_DRAFT)
     _check_usable(draft, now)
     if not await available(db, config, member):
         raise DraftUnavailable(TURNED_OFF)
-    result = await _confirm(db, config, tool_actor(member), draft, now)
+    result = await _confirm(db, config.instance_label, tool_actor(member), draft, now)
     await _record(db, member, draft, result, now)
     return result
+
+
+async def confirm_direct(db: AsyncSession, actor: Member, draft: Draft, now: datetime) -> Confirmed:
+    """Run a direct action's record through its draft's Confirm (#374, ``direct.act``), as
+    ``actor``, ``tool_actor`` of its member: the same use case and checks, using it in that use
+    case's transaction. A refusal leaves it unused, for ``act`` to delete."""
+    return await _confirm(db, "", actor, draft, now)
 
 
 CATALOG_CONFIRMED = "Nothing is added until the items are imported from the preview."
@@ -536,14 +556,15 @@ async def _told(db: AsyncSession, member: Member, result: Confirmed, now: dateti
     return CATALOG_CONFIRMED
 
 
-async def _confirm(db: AsyncSession, config: AssistantConfig, actor: Member, draft: Draft, now: datetime) -> Confirmed:
-    """Run the draft's Confirm as ``actor``, ``tool_actor`` of its member."""
+async def _confirm(db: AsyncSession, instance_label: str, actor: Member, draft: Draft, now: datetime) -> Confirmed:
+    """Run the draft's Confirm as ``actor``, ``tool_actor`` of its member. ``instance_label`` is
+    ``AssistantConfig``'s, for an ad-hoc call's restart rule."""
     if draft.kind is DraftKind.PROPOSAL:
         return await _confirm_proposal(db, actor, draft, now)
     if draft.kind is DraftKind.OFFER:
         return await _confirm_offer(db, actor, draft, now)
     if draft.kind in CALL_ACTIONS:
-        return await _confirm_action(db, actor, draft, now, instance_label=config.instance_label)
+        return await _confirm_action(db, actor, draft, now, instance_label=instance_label)
     if draft.kind in OWN_DATA:
 
         async def use() -> None:
@@ -670,6 +691,8 @@ async def cancel_draft(db: AsyncSession, clock: Clock, member: Member, draft_id:
     is used or expired. Its conversation records it, as Confirm's does."""
     now = clock()
     draft = await _mine(db, member, draft_id)
+    if draft.direct:
+        raise NotFound(NO_SUCH_DRAFT)
     _check_usable(draft, now)
     async with write_transaction(db):
         await _use(db, draft, member, now, confirmed=False)

@@ -1,0 +1,24 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{#- Expects: r, a DraftView with record set (#374): something the assistant did at once, with Undo while r.undo, or one with no title for a record that's gone; outcome (optional) with text, ok, and link, after Undo. -#}
+<article class="card draft draft-record{% if r.undone or not r.title %} draft-done{% endif %}" id="record-{{ r.id }}"{% if r.title %} aria-labelledby="record-{{ r.id }}-title"{% else %} aria-label="Record"{% endif %}>
+  {%- if outcome %}
+  <p class="alert {{ 'ok' if outcome.ok else 'error' }}" role="{{ 'status' if outcome.ok else 'alert' }}">{{ outcome.text }}{% if outcome.link %} <a href="{{ outcome.link[0] }}">{{ outcome.link[1] }}</a>{% endif %}</p>
+  {%- endif %}
+  {%- if r.title %}
+  <p class="draft-label small"><span class="badge status-active">{{ "Undone" if r.undone else "Done" }}</span>{% if not r.undone %} <span class="muted">The assistant did this.{% if r.undo %} You can undo it for 30 minutes.{% endif %}</span>{% endif %}</p>
+  <h3 id="record-{{ r.id }}-title" class="draft-title">{{ r.title }}</h3>
+  <ul class="draft-lines">
+    {%- for line in r.confirm_lines %}
+    <li>{{ line }}</li>
+    {%- endfor %}
+  </ul>
+  {%- endif %}
+  {%- if r.undo %}
+  <div class="button-row">
+    <form method="post" action="/assistant/records/{{ r.id }}/undo" class="inline" hx-post="/assistant/records/{{ r.id }}/undo" hx-target="#record-{{ r.id }}" hx-swap="outerHTML" hx-disabled-elt="find button">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit" class="button" aria-describedby="record-{{ r.id }}-title">Undo</button>
+    </form>
+  </div>
+  {%- endif %}
+</article>

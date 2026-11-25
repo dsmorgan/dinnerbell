@@ -32,7 +32,7 @@ from dinnerbell.domain.catalog import Mode
 from dinnerbell.domain.events import EventRuleViolation, EventState, IllegalTransition, Proposal, ProposalSource
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.offers import OfferPath
-from dinnerbell.services.assistant import draft_log, drafts
+from dinnerbell.services.assistant import direct, draft_log, drafts, tools
 from dinnerbell.services.assistant.call_drafts import ActionConfirmed
 from dinnerbell.services.assistant.conversation import (
     AT_CAP,
@@ -151,6 +151,7 @@ ROUTES = (
     ("post", "/assistant/start-over"),
     ("post", "/assistant/drafts/1/confirm"),
     ("post", "/assistant/drafts/1/cancel"),
+    ("post", "/assistant/records/1/undo"),
 )
 
 
@@ -517,30 +518,49 @@ def test_an_offer_draft_card_confirms_with_htmx(
     assert len(rows(migrated, EventRow)) == 1
 
 
-def test_a_preference_draft_confirms_with_htmx_and_links_to_preferences(
+def record_ids(html: str) -> list[int]:
+    return [int(n) for n in re.findall(r'id="record-(\d+)"', html)]
+
+
+def test_a_level_acts_at_once_with_a_record_whose_undo_survives_a_reload(
     client: TestClient, provider: FakeProvider, model: FakeModel, migrated: Settings
 ) -> None:
-    """#253: the member's own data has no call, so the card links to Preferences instead."""
+    """#374: on the web, "I love Siam Garden" sets the level at once. The record shows Done, the
+    title, what changed, and Undo, and survives a reload where it happened in the log; Undo sets
+    the level back, once, and links to Preferences."""
     furnish(client, provider)
     as_who(client, provider, "kim")
     level = {"what": "", "name": "Siam Garden", "level": "2"}
-    model.script = [tool_call("draft_preference", level), answer("Here's a draft.")]
+    model.script = [tool_call("draft_preference", level), answer("Done, it's +2.")]
     fragment = page(send(client, "I love Siam Garden", **HX))
-    [draft] = draft_ids(fragment)
-    assert "Set Siam Garden to +2" in fragment
-    assert "Your level for the restaurant Siam Garden on Preferences goes from 0 to +2." in fragment
-    confirmed = htmx(client, f"/assistant/drafts/{draft}/confirm", {})
-    assert confirmed.status_code == 200
-    card = page(confirmed)
-    assert "Confirmed. Your level for Siam Garden is +2 now." in card and 'href="/preferences">Open Preferences' in card
-    assert 'value="2" checked' in page(client.get("/preferences"))
+    assert draft_ids(fragment) == []
+    [record] = record_ids(fragment)
+    assert "Set Siam Garden to +2" in fragment and "Your level for Siam Garden is +2 now." in fragment
+    assert '<span class="badge status-active">Done</span>' in fragment
+    assert f'hx-post="/assistant/records/{record}/undo"' in fragment and "Undo</button>" in fragment
+    assert 'value="2" checked' in page(client.get("/preferences"))  # done, before any tap
+    reloaded = page(client.get("/assistant"))
+    assert record_ids(reloaded) == [record] and "Undo</button>" in reloaded
+    assert reloaded.index("Done, it's +2.") < reloaded.index(f'id="record-{record}"')  # where it happened
+    assert "turn-draft" not in reloaded  # its card stands for its entry
+    undone = htmx(client, f"/assistant/records/{record}/undo", {})
+    assert undone.status_code == 200
+    card = page(undone)
+    assert "<html" not in card and f'id="record-{record}"' in card and "Undo</button>" not in card
+    assert "Undone. Your level for Siam Garden is 0 now." in card and 'href="/preferences">Open Preferences' in card
+    assert 'value="0" checked' in page(client.get("/preferences"))
+    again = htmx(client, f"/assistant/records/{record}/undo", {})
+    assert again.status_code == 409 and "That's undone already." in page(again)
+    after = page(client.get("/assistant"))
+    assert '<span class="badge status-active">Undone</span>' in after and "Undo</button>" not in after
+    assert f"Undone on {DAY}: Set Siam Garden to +2. Your level for Siam Garden is 0 now." in after
 
 
-def test_turn_off_pick_up_drafts_a_card_and_confirm_changes_it_on_preferences(
+def test_turn_off_pick_up_acts_at_once_and_undo_keeps_the_reminders(
     client: TestClient, provider: FakeProvider, model: FakeModel, migrated: Settings
 ) -> None:
-    """#278, done when: "Turn off pick up for me" drafts a card, and Confirm changes the setting
-    on Preferences, keeping the reminder Kim set there."""
+    """#278, as #374 makes it: "Turn off pick up for me" changes the setting on Preferences at
+    once, keeping the reminder Kim set there, and Undo turns it back on, keeping it still."""
     furnish(client, provider)
     as_who(client, provider, "kim")
     saved = submit(
@@ -555,39 +575,99 @@ def test_turn_off_pick_up_drafts_a_card_and_confirm_changes_it_on_preferences(
         },
     )
     assert saved.status_code == 303
-    assert 'name="can_pickup" checked' in page(client.get("/preferences"))
-    model.script = [tool_call("draft_can_usually", {"cook": "", "pick_up": "off", "order": ""}), answer("Drafted.")]
+    model.script = [tool_call("draft_can_usually", {"cook": "", "pick_up": "off", "order": ""}), answer("Done.")]
     fragment = page(send(client, "Turn off pick up for me", **HX))
-    [draft] = draft_ids(fragment)
-    assert "Turn off Pick up" in fragment
-    assert 'On Preferences, "I can usually" goes from Pick up and Order to Order.' in fragment
-    assert 'name="can_pickup" checked' in page(client.get("/preferences"))  # nothing until Confirm
-    confirmed = htmx(client, f"/assistant/drafts/{draft}/confirm", {})
-    assert confirmed.status_code == 200
-    card = page(confirmed)
-    assert 'Confirmed. On Preferences, "I can usually" is Order now.' in card
-    assert 'href="/preferences">Open Preferences' in card
+    [record] = record_ids(fragment)
+    assert "Turn off Pick up" in fragment and 'On Preferences, "I can usually" is Order now.' in fragment
     shown = page(client.get("/preferences"))
     assert 'name="can_pickup" checked' not in shown and 'name="can_order" checked' in shown
     assert 'name="feedback_reminder" checked' in shown
+    card = page(htmx(client, f"/assistant/records/{record}/undo", {}))
+    assert 'Undone. On Preferences, "I can usually" is Pick up and Order now.' in card
+    shown = page(client.get("/preferences"))
+    assert 'name="can_pickup" checked' in shown and 'name="feedback_reminder" checked' in shown
 
 
-def test_a_needs_draft_confirms_and_links_to_the_needs_on_preferences(
+def test_adding_a_need_acts_at_once_and_taking_one_off_drafts(
     client: TestClient, provider: FakeProvider, model: FakeModel, migrated: Settings
 ) -> None:
-    """#278: "Add vegetarian to my needs" picks the household's dietary tag, as the chips on
-    Preferences do, and Confirm checks it there."""
+    """#278 and #374: "Add vegetarian to my needs" adds the household's dietary tag at once, as
+    the chips on Preferences do; taking it off loosens a guarantee, so it's a draft to confirm."""
     furnish(client, provider)
     assert add_item(client, "Veg Garden", new_tags="Vegetarian", new_tags_kind="dietary").status_code == 303
     as_who(client, provider, "kim")
-    model.script = [tool_call("draft_dietary_needs", {"add": ["vegetarian"], "remove": []}), answer("Drafted.")]
+    model.script = [tool_call("draft_dietary_needs", {"add": ["vegetarian"], "remove": []}), answer("Done.")]
     fragment = page(send(client, "Add vegetarian to my needs", **HX))
-    [draft] = draft_ids(fragment)
-    assert "Add Vegetarian to your dietary needs" in fragment
-    card = page(htmx(client, f"/assistant/drafts/{draft}/confirm", {}))
-    assert "Confirmed. Your dietary needs are Vegetarian now." in card
-    assert 'href="/preferences#dietary-needs">Open Preferences' in card
+    assert record_ids(fragment) and "Your dietary needs are Vegetarian now." in fragment
+    assert 'href="/preferences#dietary-needs">Open Preferences' not in fragment  # the card has no link until Undo
     assert re.search(r'name="needs" value="\d+" checked><span>Vegetarian', page(client.get("/preferences")))
+    model.script = [tool_call("draft_dietary_needs", {"add": [], "remove": ["vegetarian"]}), answer("Drafted.")]
+    drafted = page(send(client, "Take vegetarian off", **HX))
+    [draft] = draft_ids(drafted)
+    assert "Confirm will:" in drafted
+    assert re.search(r'name="needs" value="\d+" checked><span>Vegetarian', page(client.get("/preferences")))
+    card = page(htmx(client, f"/assistant/drafts/{draft}/confirm", {}))
+    assert "Confirmed. You have no dietary needs now." in card
+
+
+def test_start_over_removes_record_cards_and_keeps_what_was_done(
+    client: TestClient, provider: FakeProvider, model: FakeModel, migrated: Settings
+) -> None:
+    """#374: Start over deletes the conversation and its records, so the page starts empty, and
+    the level the assistant set stays set; the old card's Undo then finds nothing."""
+    furnish(client, provider)
+    as_who(client, provider, "kim")
+    model.script = [tool_call("draft_preference", {"what": "", "name": "Siam Garden", "level": "2"}), answer("Done.")]
+    [record] = record_ids(page(send(client, "I love Siam Garden", **HX)))
+    assert submit(client, "/assistant/start-over").status_code == 303
+    shown = page(client.get("/assistant?notice=cleared"))
+    assert record_ids(shown) == [] and "What the assistant did stays done." in shown
+    assert rows(migrated, AssistantDraftRow) == []
+    assert 'value="2" checked' in page(client.get("/preferences"))
+    gone = htmx(client, f"/assistant/records/{record}/undo", {})
+    assert gone.status_code == 409 and direct.NO_SUCH_RECORD in page(gone)
+
+
+def test_at_hours_zero_a_record_stays_on_the_page_and_undoes(
+    client: TestClient, provider: FakeProvider, model: FakeModel, migrated: Settings, clock: FakeClock
+) -> None:
+    """#374: at Conversation hours 0 nothing is kept, so a record shows after the log on a reload
+    while its Undo works, which needs no model call; 30 minutes on, it's gone from the page."""
+    furnish(client, provider, conversation_hours="0")
+    as_who(client, provider, "kim")
+    model.script = [tool_call("draft_preference", {"what": "", "name": "Siam Garden", "level": "2"}), answer("Done.")]
+    [record] = record_ids(page(send(client, "I love Siam Garden", **HX)))
+    assert rows(migrated, AssistantConversationRow) == []
+    reloaded = page(client.get("/assistant"))
+    assert record_ids(reloaded) == [record] and "Start over" in reloaded
+    asked = len(model.requests)
+    assert "Undone." in page(htmx(client, f"/assistant/records/{record}/undo", {}))
+    assert len(model.requests) == asked
+    assert record_ids(page(client.get("/assistant"))) == []  # its Undo is used, and no entry shows it
+    model.script = [tool_call("draft_preference", {"what": "", "name": "Siam Garden", "level": "1"}), answer("Done.")]
+    [later] = record_ids(page(send(client, "I like Siam Garden", **HX)))
+    clock.advance(timedelta(minutes=30))
+    assert record_ids(page(client.get("/assistant"))) == []
+    closed_undo = htmx(client, f"/assistant/records/{later}/undo", {})
+    assert closed_undo.status_code == 409 and direct.UNDO_CLOSED in page(closed_undo)
+
+
+def test_someone_elses_record_cant_be_undone(
+    client: TestClient, provider: FakeProvider, model: FakeModel, migrated: Settings
+) -> None:
+    furnish(client, provider)
+    as_who(client, provider, "kim")
+    model.script = [tool_call("draft_preference", {"what": "", "name": "Siam Garden", "level": "2"}), answer("Done.")]
+    [record] = record_ids(page(send(client, "I love Siam Garden", **HX)))
+    as_who(client, provider, "jo")
+    theirs = htmx(client, f"/assistant/records/{record}/undo", {})
+    assert theirs.status_code == 409 and direct.NO_SUCH_RECORD in page(theirs)
+    without_htmx = submit(client, f"/assistant/records/{record}/undo")
+    assert without_htmx.status_code == 409 and "<html" in without_htmx.text
+    as_who(client, provider, "kim")
+    assert 'value="2" checked' in page(client.get("/preferences"))
+    done = submit(client, f"/assistant/records/{record}/undo")
+    assert done.status_code == 200 and "Undone." in page(done) and "<html" in done.text
 
 
 def test_cancel_works_with_and_without_htmx(
@@ -609,10 +689,11 @@ def test_cancel_works_with_and_without_htmx(
 
 
 def test_used_drafts_keep_their_title_and_show_in_the_log_after_a_reload(
-    client: TestClient, provider: FakeProvider, model: FakeModel, migrated: Settings
+    client: TestClient, provider: FakeProvider, model: FakeModel, migrated: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """#363: Confirm and Cancel each keep the card's title with the result, and after a reload
     the log shows what happened to each draft where it happened, styled apart from messages."""
+    monkeypatch.setattr(tools, "MAX_DIRECT_ACTIONS", 0)  # the level drafts, as past a message's limit (#374)
     furnish(client, provider)
     as_who(client, provider, "kim")
     level = {"what": "", "name": "Siam Garden", "level": "2"}
