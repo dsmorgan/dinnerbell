@@ -258,6 +258,7 @@ async def events[T](
                 yield sent
             elif item is _Mark.DISCARD:
                 waiting, blocks = None, []
+                ready_at = loop.time()  # the next call's first text never waits for this one's
                 yield event("discard", {})
             else:
                 break

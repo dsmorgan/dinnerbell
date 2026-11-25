@@ -20,6 +20,7 @@ block quotes always show as typed."""
 from __future__ import annotations
 
 import re
+from collections import Counter
 from collections.abc import Iterator
 
 from markupsafe import Markup, escape
@@ -78,7 +79,7 @@ _CLOSERS = ("**", "*", "`", "_", "__", "~~", "***", "``")
 _CODE_SPAN = re.compile(r"<code>.*?</code>")
 _TAG = re.compile(r"<[^>]*>")
 _MARKER = re.compile(r"[*_~`]")
-_EMPTY_SPAN = re.compile(r"<(strong|em|del|code)>(?:<[^>]*>|[\s*_~`])*</")
+_EMPTY_SPAN = re.compile(r"<(?:strong|em|del|code)>(?:<[^>]*>|[\s*_~`])*</")
 """A span with nothing in it but markers or whitespace: a closer made it from markers alone."""
 _JUST_MARKER = re.compile(r"\s{0,3}(?:[-*+•]|\d{1,9}[.)]|#{1,6}|([-*_])\s*\1?|`{3,}.*|~{3,}.*)")
 """A last line that's only what starts a list item, heading, rule, or code block, so far."""
@@ -97,12 +98,17 @@ def _literal_markers(styled: str) -> int:
 def _closed(line: str) -> str:
     """``line``, the last of a reply still being written, with the closer from ``_CLOSERS`` that
     leaves the fewest markers showing as typed outside code, if any leaves fewer. A closer must
-    keep the line the kind of block it is, and make no span of markers alone, so a line that
-    ends in a marker, such as "Rating: ****", gets none. Each try styles the line once, so only
+    keep the line the kind of block it is, and make no span of markers alone that the line
+    doesn't have already, so a line that ends in markers shown as typed, such as "a **", gets
+    none: a closer could only pair them with each other. Each try styles the line once, so only
     closers whose characters the line has are tried, and the first that leaves none wins."""
-    if len(line) > MAX_STYLED or not line or _MARKER.match(line[-1]):
+    if len(line) > MAX_STYLED or not line:
         return line
-    fewest = _literal_markers(inline(line))
+    styled = inline(line)
+    if _MARKER.match(styled[-1]):
+        return line
+    empty = Counter(_EMPTY_SPAN.findall(styled))
+    fewest = _literal_markers(styled)
     best = line
     for closer in _CLOSERS:
         if not fewest:
@@ -113,7 +119,7 @@ def _closed(line: str) -> str:
         if _kind(candidate) != _kind(line):
             continue
         styled = inline(candidate)
-        if _EMPTY_SPAN.search(styled):
+        if Counter(_EMPTY_SPAN.findall(styled)) - empty:
             continue
         shown = _literal_markers(styled)
         if shown < fewest:
