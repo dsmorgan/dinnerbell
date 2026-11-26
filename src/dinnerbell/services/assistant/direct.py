@@ -45,7 +45,7 @@ from dinnerbell.domain.assistant_drafts import (
     expires_at,
     undone_text,
 )
-from dinnerbell.domain.assistant_own import level_label
+from dinnerbell.domain.assistant_own import can_usually_flags, level_label
 from dinnerbell.domain.away import Away
 from dinnerbell.domain.events import (
     Event,
@@ -322,12 +322,18 @@ async def _check(
             undo["edited_by_action"] = now.isoformat()
     elif kind is DraftKind.AWAY:
         after = None if payload.get("clear") else [payload["first"], payload["last"]]
+        # Changed since the draft first, in Confirm's own words, so a stale draft never reads as one
+        # that would close a call.
+        if await _own_state(db, actor, kind, today) != payload.get("before"):
+            raise own_drafts.stale(own_drafts.AWAY_CHANGED)
         if await _closes_a_call(db, actor, window=after, now=now):
             raise DraftInstead(CLOSES_A_CALL)
         undo = {"window": payload.get("before"), "after": after}
     elif kind is DraftKind.NEEDS:
         undo = {"needs": payload["before"], "after": sorted(int(n) for n in payload["needs"])}
     elif kind is DraftKind.CAN_USUALLY:
+        if await _own_state(db, actor, kind, today) != payload["before"]:
+            raise own_drafts.stale(own_drafts.CAN_USUALLY_CHANGED)
         if await _closes_a_call(db, actor, flags=payload["after"], now=now):
             raise DraftInstead(CLOSES_A_CALL)
         undo = {"flags": payload["before"], "after": payload["after"]}
@@ -345,6 +351,14 @@ async def _check(
     await AssistantRepository(db).keep_record(
         actor.household_id, record.id, payload={**payload, "undo": undo}, lines=record.lines
     )
+
+
+async def _own_state(db: AsyncSession, actor: Member, kind: DraftKind, today: date) -> Any:
+    """The member's away days or **I can usually** as they are now, as a draft stores them."""
+    me = await own_drafts.fresh(db, actor)
+    if kind is DraftKind.AWAY:
+        return own_drafts.window_json(me.away_now(today))
+    return can_usually_flags(me.capabilities)
 
 
 _KEEP: Any = object()
@@ -542,8 +556,15 @@ async def _inverse(
             "before": own_drafts.stamp(now_saved),
         }
 
+    today, _ = await drafts.household_day(db, actor.household_id, now)
+
     async def use() -> None:
         await mark()
+        if (
+            kind in (DraftKind.AWAY, DraftKind.CAN_USUALLY)
+            and await _own_state(db, actor, kind, today) != back["after"]
+        ):
+            raise _moved(kind)  # changed since first, before whether putting it back would close a call
         if kind is DraftKind.AWAY and await _closes_a_call(db, actor, window=back.get("window"), now=now):
             raise EventRuleViolation(UNDO_CLOSES_A_CALL, code="undo_closes_early")
         if kind is DraftKind.CAN_USUALLY and await _closes_a_call(db, actor, flags=back["flags"], now=now):
