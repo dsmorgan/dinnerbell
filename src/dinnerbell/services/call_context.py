@@ -853,10 +853,12 @@ async def closes_early_with(
 
 async def own_change_closes_early(db: AsyncSession, before: Member, after: Member, now: datetime) -> bool:
     """Whether changing ``before`` to ``after``, their away days or **I can usually**, would let
-    any call taking answers close them early (``closes_early_with``): the away window answers
-    calls Out, or gives back the ones it answered, as ``away._answer`` does, and **I can
-    usually** counts toward who can order (``coverage``). For the assistant acting at once (#374),
-    in the caller's write transaction."""
+    a call taking answers close them early that wouldn't now (``closes_early_with``): the away
+    window answers calls Out, or gives back the ones it answered, as ``away._answer`` does, and
+    **Order** counts toward who covers a call the member is in (``coverage``); Cook and Pick up
+    count only as offers, so they never do. A call that closes early anyway isn't this change's
+    doing. For the assistant acting at once (#374), in the caller's write transaction."""
+    order_moves = after.capabilities.can_order != before.capabilities.can_order
     events = EventRepository(db)
     for event_id in await events.open_ids(before.household_id):
         event = await events.get(before.household_id, event_id)
@@ -865,8 +867,13 @@ async def own_change_closes_early(db: AsyncSession, before: Member, after: Membe
         responses = await ResponseRepository(db).for_event(before.household_id, event_id)
         mine = next((r for r in responses if r.member_id == before.id), None)
         changed, removed = _away_answer(event, after, mine, now)
-        moved = changed is not None or removed is not None or after.capabilities != before.capabilities
-        if moved and await closes_early_with(db, event, changed, now, removed=removed, member=after):
+        answer = changed if changed is not None else mine
+        counts = order_moves and answer is not None and answer.is_in
+        if changed is None and removed is None and not counts:
+            continue
+        if await closes_early_with(db, event, None, now):
+            continue  # it closes early anyway
+        if await closes_early_with(db, event, changed, now, removed=removed, member=after):
             return True
     return False
 

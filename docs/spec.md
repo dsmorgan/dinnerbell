@@ -466,7 +466,7 @@ The call is the one the member names, then the thread's call, then the only open
 **Acting at once** (#374, [ADR 0009](adr/0009-optional-assistant.md) as amended). In a private conversation, the web page or a DM, a draft whose change moves only the member's own stance and tells nobody new acts at once instead of waiting for **Confirm** (`acts_directly`):
 
 - An answer, a vote, a role, a suggestion, or an answer for a guest the member invited, unless it joins late, is an out that ends the member's coordinating, or leaves every member answered, so the call's answers close early (`closes_early_with`, FR-56) and the scheduler posts what that posts, even when another answer had them so already.
-- Away days and **I can usually**, unless they'd let a call taking answers close them early: away days that answer the member Out where that leaves every member answered, or **Order** that covers a call they're in (`own_change_closes_early`).
+- Away days and **I can usually**, unless they'd let a call taking answers close them early that wouldn't without them: away days that answer the member Out where that leaves every member answered, or **Order** that covers a call they're in (`own_change_closes_early`). Cook and Pick up count only as offers, so they always act. A changed-since refusal comes first, in **Confirm**'s words, and so does Undo's.
 - A level, unless it lifts a veto or is on an item the member has a rating of that counts, since their last level on it, whatever the Feedback setting (`my_ratings_move`): setting one stops those ratings for good (FR-55).
 - Dietary needs that only add.
 - Feedback that replaces the member's own, counted toward badges already, when neither it nor what it replaces thanks the cook or leaves them a note.

@@ -791,3 +791,61 @@ async def test_ordering_that_would_cover_a_call_drafts(house: House) -> None:
     assert (await tool(house, "draft_can_usually", {"cook": "on", "pick_up": "", "order": ""})).content.startswith(
         "Done at once"
     )
+
+
+async def test_i_can_usually_acts_when_it_changes_no_calls_close(house: House) -> None:
+    """Kim and Lee are in, Kim to pick up, and Alex and Sam out: the call closes after its quiet
+    spell whatever Sam usually does, and Cook counts only as an offer, so Cook on acts at once;
+    so does Order on, which counts only on calls Sam is in."""
+    event_id = await collecting(house, "Kim", "Lee")
+    await act(house, calls.offer_role, house["Kim"], event_id, RoleOffer.PICKUP, True)
+    for name in ("Alex", "Sam"):
+        await act(house, calls.respond, house[name], event_id, Status.OUT)
+    cook = await tool(house, "draft_can_usually", {"cook": "on", "pick_up": "", "order": ""})
+    assert cook.content.startswith("Done at once"), cook.content
+    order = await tool(house, "draft_can_usually", {"cook": "", "pick_up": "", "order": "on"})
+    assert order.content.startswith("Done at once"), order.content
+
+
+async def test_away_days_that_close_a_call_anyway_act(house: House) -> None:
+    """Everyone but Sam is out, and Sam is out too: the call closes on the next tick whatever, so
+    away days covering today change nothing about it and act at once."""
+    event_id = await collecting(house)
+    for name in ("Alex", "Kim", "Lee", "Sam"):
+        await act(house, calls.respond, house[name], event_id, Status.OUT)
+    day = (await house.event(event_id)).day
+    window = {"first": day.isoformat(), "last": (day + timedelta(days=1)).isoformat(), "clear": False}
+    assert (await tool(house, "draft_away", window)).content.startswith("Done at once")
+
+
+async def test_away_days_changed_since_read_as_changed_not_as_closing_a_call(house: House) -> None:
+    """The draft for away days covering today was worked out, then Sam set other days on
+    Preferences. The action gets Confirm's own changed-since refusal, not a draft about closing
+    the call, though the days would close it."""
+    event_id = await collecting(house)
+    for name in ("Alex", "Kim", "Lee"):
+        await act(house, calls.respond, house[name], event_id, Status.OUT)
+    day = (await house.event(event_id)).day
+    async with house.sessionmaker() as db:
+        spec = await own_drafts.away_draft(db, house["Sam"], day, day + timedelta(days=1), clear=False, today=day)
+    await act(house, away.set_my_away, house["Sam"], day + timedelta(days=3), day + timedelta(days=4))
+    async with house.sessionmaker() as db:
+        with pytest.raises(EventRuleViolation, match="Your away days changed since the draft"):
+            await direct.act(db, house["Sam"], web_key(house["Sam"].id), spec, now=house.clock())
+    assert await rows(house) == []
+
+
+async def test_an_undo_after_a_change_reads_as_changed_not_as_closing_a_call(house: House) -> None:
+    """Sam clears away days covering today at once; the others answer out; Sam sets other days on
+    Preferences. Putting the cleared days back would close the call, but they changed since, and
+    that's what Undo says."""
+    event_id = await collecting(house)
+    day = (await house.event(event_id)).day
+    await act(house, away.set_my_away, house["Sam"], day, day + timedelta(days=1))
+    assert (await tool(house, "draft_away", {"first": "", "last": "", "clear": True})).content.startswith("Done")
+    [record] = await rows(house)
+    for name in ("Alex", "Kim", "Lee"):
+        await act(house, calls.respond, house[name], event_id, Status.OUT)
+    await act(house, away.set_my_away, await house.refresh("Sam"), day + timedelta(days=3), day + timedelta(days=4))
+    with pytest.raises(EventRuleViolation, match="changed since the assistant did it"):
+        await undo(house, "Sam", record.id)

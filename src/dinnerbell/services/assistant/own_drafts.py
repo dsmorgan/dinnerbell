@@ -113,7 +113,7 @@ NEEDS_PAGE = ("/preferences#dietary-needs", "Open Preferences")
 Use = Callable[[], Awaitable[None]]
 
 
-def _stale(message: str) -> EventRuleViolation:
+def stale(message: str) -> EventRuleViolation:
     return EventRuleViolation(message, code="stale_draft")
 
 
@@ -242,7 +242,7 @@ async def _confirm_stance(db: AsyncSession, actor: Member, draft: Draft, *, now:
             raise NotFound(GONE)
         name, stance = current
         if stance.level != payload["before"]:
-            raise _stale(STANCE_CHANGED.format(name=name, now=level_label(stance)))
+            raise stale(STANCE_CHANGED.format(name=name, now=level_label(stance)))
         try:
             name = await preference_service.set_my_preference(db, actor, target_type, target_id, after, now=now)
         except InvalidPreference as exc:  # pragma: no cover - the draft stores a level Stance parsed
@@ -373,7 +373,7 @@ async def _confirm_feedback(
     async def expect(mine: Feedback | None, facts: MealFacts) -> None:
         await use()  # first, so a second Confirm hears the draft is used, not that it's stale
         if facts.item_id != int(payload["item_id"]) or stamp(mine) != payload.get("before"):
-            raise _stale(FEEDBACK_CHANGED)
+            raise stale(FEEDBACK_CHANGED)
         named.append(facts.item_name)
 
     try:
@@ -398,7 +398,8 @@ async def fresh(db: AsyncSession, actor: Member) -> Member:
     return tool_actor(me)
 
 
-def _window(window: Away | None) -> list[str] | None:
+def window_json(window: Away | None) -> list[str] | None:
+    """Away days as a draft stores them: first and last, or None."""
     return None if window is None else [window.first.isoformat(), window.last.isoformat()]
 
 
@@ -423,7 +424,7 @@ async def away_draft(
         "first": window.first.isoformat() if window else None,
         "last": window.last.isoformat() if window else None,
         "clear": clear,
-        "before": _window(current),
+        "before": window_json(current),
     }
     return DraftSpec(
         DraftKind.AWAY, payload, away_title(window, today), away_lines(away=window, before=current, today=today), None
@@ -438,8 +439,8 @@ async def _confirm_away(db: AsyncSession, actor: Member, draft: Draft, *, now: d
         await use()
         me = await fresh(db, actor)
         today = await today_for(db, me, now=now)
-        if _window(me.away_now(today)) != payload.get("before"):
-            raise _stale(AWAY_CHANGED)
+        if window_json(me.away_now(today)) != payload.get("before"):
+            raise stale(AWAY_CHANGED)
         if payload.get("clear"):
             await away_service.clear_my_away(db, me, now=now)
             text = "Confirmed. Your away days are cleared."
@@ -509,7 +510,7 @@ async def _confirm_needs(db: AsyncSession, actor: Member, draft: Draft, *, now: 
         await use()
         me = await fresh(db, actor)
         if sorted(me.dietary_needs) != payload["before"]:
-            raise _stale(NEEDS_CHANGED)
+            raise stale(NEEDS_CHANGED)
         try:
             await guest_service.set_my_needs(db, me, needs, now=now)
         except InvalidMemberInput as exc:  # such as a dietary tag deleted since: the card shows it
@@ -552,7 +553,7 @@ async def _confirm_can_usually(
         await use()
         me = await fresh(db, actor)
         if can_usually_flags(me.capabilities) != payload["before"]:
-            raise _stale(CAN_USUALLY_CHANGED)
+            raise stale(CAN_USUALLY_CHANGED)
         settings = preference_service.MySettings(
             capabilities=after, mute_dm_reminders=me.mute_dm_reminders, feedback_reminder=me.feedback_reminder
         )
