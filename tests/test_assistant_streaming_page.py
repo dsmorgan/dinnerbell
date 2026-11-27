@@ -745,7 +745,7 @@ def test_a_label_split_across_deltas_never_shows_as_a_label_or_the_wrong_name(de
     for delta in deltas:
         events.text(delta)
         assert ending.startswith(out.joined), out.pieces  # nothing shown that the reply won't show
-    assert out.joined == ending.rstrip(".") or out.joined == ending
+    assert out.joined == ending  # all of it, once the last delta settles the label
 
 
 def test_member_followed_by_other_text_isnt_held() -> None:
