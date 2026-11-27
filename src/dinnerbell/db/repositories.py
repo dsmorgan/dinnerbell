@@ -98,6 +98,22 @@ class HouseholdRepository:
             .execution_options(synchronize_session=False)
         )
 
+    async def set_timezone(self, household_id: int, timezone: str) -> None:
+        await self._session.execute(
+            update(HouseholdRow)
+            .where(HouseholdRow.id == household_id)
+            .values(timezone=timezone)
+            .execution_options(synchronize_session=False)
+        )
+
+    async def rename(self, household_id: int, name: str) -> None:
+        await self._session.execute(
+            update(HouseholdRow)
+            .where(HouseholdRow.id == household_id)
+            .values(name=name)
+            .execution_options(synchronize_session=False)
+        )
+
     async def create(
         self, name: str, timezone: str, now: datetime, settings: dict[str, Any] | None = None
     ) -> Household:

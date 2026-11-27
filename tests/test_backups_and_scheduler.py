@@ -147,6 +147,7 @@ async def test_build_scheduler_schedules_jobs(job_context: runner.JobContext) ->
         "drain_push",
         "purge_pushes",
         "refresh_weather",
+        "follow_zone",
     }
     for name, seconds in (("call_tick", 30), ("drain_outbox", 5), ("drain_push", 5), ("refresh_weather", 300)):
         assert jobs[name].trigger.interval == timedelta(seconds=seconds)

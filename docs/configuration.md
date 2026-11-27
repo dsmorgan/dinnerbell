@@ -37,8 +37,8 @@ These settings are optional:
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `DINNERBELL_HOUSEHOLD_NAME` | `Home` | The household name shown in the app. Read on first start only (see below). |
-| `DINNERBELL_TIMEZONE` | `America/New_York` | The household time zone, as an IANA name such as `America/Chicago`. It sets when calls go out and when the nightly backup runs. Set it before first start: `.env.example` holds a placeholder that Dinnerbell refuses, and the default applies only when the variable is unset. Read on first start only (see below). |
+| `DINNERBELL_HOUSEHOLD_NAME` | `Home` | The household name shown in the app. Read on first start only; to change it later, see [Change the name or time zone](#change-the-name-or-time-zone). |
+| `DINNERBELL_TIMEZONE` | `America/New_York` | The household time zone, as an IANA name such as `America/Chicago`. It sets when calls go out and when the nightly backup runs. Set it before first start: `.env.example` holds a placeholder that Dinnerbell refuses, and the default applies only when the variable is unset. Read on first start only; to change it later, see [Change the name or time zone](#change-the-name-or-time-zone). |
 | `DINNERBELL_TRUSTED_PROXIES` | None | Comma-separated proxy IP addresses whose `X-Forwarded-For` header Dinnerbell trusts for client addresses. Set one proxy address, never a range, and never an address that other clients share, such as a container gateway. Without it, the rate limiter counts all clients behind a proxy as one: see [The sign-in rate limit](#the-sign-in-rate-limit). |
 | `DINNERBELL_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, or `ERROR`. At `DEBUG`, each request logs the peer and client addresses, which shows your proxy's address. |
 | `DINNERBELL_SEED_FILE` | None | A catalog file to import on first start, while the catalog is empty. See [Load a catalog on first start](#load-a-catalog-on-first-start). |
@@ -49,11 +49,25 @@ These settings are optional:
 | `DINNERBELL_ASSISTANT_MODEL` | `claude-sonnet-5-5` | The assistant's model: `claude-sonnet-5-5`, `claude-opus-5-5`, or `claude-haiku-5-5`. Dinnerbell refuses to start on any other, because the monthly cap needs the model's prices. |
 | `DINNERBELL_FEATURES` | None | Comma-separated feature flags to turn on. None exists now: 0.18.0 retired `assistant`. Dinnerbell refuses to start on an unknown name, and ignores a retired one with a warning at startup; remove it when you see one. |
 
-Dinnerbell reads `DINNERBELL_HOUSEHOLD_NAME` and `DINNERBELL_TIMEZONE` on first start only and keeps them in its database; you can't change either after that yet ([#334](https://github.com/dsmorgan/dinnerbell/issues/334)). It ignores a later value, and while one differs, each start logs a warning: the time zone warning names both zones, and the name warning names neither. To stop it, set the variable back to the stored value, the name the app shows or the zone the warning names.
-
 Don't add `DINNERBELL_BUILD` to `.env`: the image sets it on builds from `main`, and even an empty line replaces it. Dinnerbell warns at start about a `DINNERBELL_` variable it doesn't know, most likely a typo, naming the variable but never its value.
 
 To keep the secrets out of `.env`, see [Keep secrets in files](setup.md#keep-secrets-in-files), and for the Anthropic key, [Keep the key in a file](#keep-the-key-in-a-file).
+
+### Change the name or time zone
+
+Dinnerbell reads `DINNERBELL_HOUSEHOLD_NAME` and `DINNERBELL_TIMEZONE` on first start only and keeps them in its database. It ignores a later value, and while one differs, each start logs a warning: the time zone warning names both zones, and the name warning names neither.
+
+To change either after first start, run a command in the running container, then set the variable in `.env` to the same value, so the warning stops:
+
+```sh
+podman-compose exec dinnerbell dinnerbell set-timezone America/Chicago
+podman-compose exec dinnerbell dinnerbell set-household-name "Elm Street"
+```
+
+Each command prints the old and new value, and writes an audit row with no actor. You don't need to restart:
+
+- `set-timezone` takes an IANA time zone name. It refuses while any call is open, including one scheduled for a later day, because the call's times were set in the old zone; let each call it lists finish, or call it off, then run it again. Pages and new Slack messages show times in the new zone at once, calls open in it from the next one, and the running app moves the nightly backup to 03:30 in the new zone within a minute.
+- `set-household-name` takes up to 80 characters. Quote a name with spaces. Pages show it on their next load.
 
 ## The assistant
 

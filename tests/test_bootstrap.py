@@ -119,7 +119,7 @@ async def test_a_changed_time_zone_setting_warns_with_both_zones(
     [warning] = warnings_from(caplog)
     assert "DINNERBELL_TIMEZONE" in warning
     assert "Europe/Berlin" in warning and "America/Chicago" in warning
-    assert "first start" in warning
+    assert "first start" in warning and "run dinnerbell set-timezone ZONE" in warning
 
 
 @pytest.mark.anyio
@@ -132,6 +132,7 @@ async def test_a_changed_household_name_warns_without_either_name(
     await run(migrated, clock, household_name="Place 2")
     [warning] = warnings_from(caplog)
     assert "DINNERBELL_HOUSEHOLD_NAME" in warning and "first start" in warning
+    assert "run dinnerbell set-household-name NAME" in warning
     assert not any("Place" in record.getMessage() for record in caplog.records)
 
 
