@@ -283,41 +283,57 @@ async def roll_up_due(sessionmaker: async_sessionmaker[AsyncSession], assistant:
         households = await HouseholdRepository(db).all()
     changed = 0
     for household in households:
-        async with sessionmaker() as db:
-            changed += await _started_over(db, assistant, household.id)
-            if assistant is None or not assistant.config.configured:
-                continue
-            settings = assistant_settings(await household_settings(db, household.id))
-            if not settings.remembers:
-                continue
-            now = assistant.clock()
-            for conversation in await AssistantRepository(db).conversations(household.id):
-                if conversation.key.startswith(STARTED_OVER) or not due(conversation, now, settings.conversation_hours):
-                    continue
-                last = conversation.expired(now, settings.conversation_hours)
-                result = await roll_up(db, assistant, household.id, conversation.key, last=last)
-                changed += result.changed
-                if result.waiting and conversation.expired(now, settings.conversation_hours):
-                    log.warning("assistant memory messages deleted before the rollup", extra={"count": result.waiting})
+        for run in (_started_over, _due):
+            try:
+                async with sessionmaker() as db:
+                    changed += await run(db, assistant, household.id)
+            except Exception:  # one household's failure never stops the next one's
+                log.exception("assistant memory rollup failed for a household")
+    return changed
+
+
+async def _due(db: AsyncSession, assistant: Assistant | None, household_id: int) -> int:
+    """``roll_up_due`` for one household, but for what members started over."""
+    if assistant is None or not assistant.config.configured:
+        return 0
+    settings = assistant_settings(await household_settings(db, household_id))
+    if not settings.remembers:
+        return 0
+    changed = 0
+    now = assistant.clock()
+    for conversation in await AssistantRepository(db).conversations(household_id):
+        if conversation.key.startswith(STARTED_OVER) or not due(conversation, now, settings.conversation_hours):
+            continue
+        last = conversation.expired(now, settings.conversation_hours)
+        result = await roll_up(db, assistant, household_id, conversation.key, last=last)
+        changed += result.changed
+        if result.waiting and last:
+            log.warning("assistant memory messages deleted before the rollup", extra={"count": result.waiting})
     return changed
 
 
 async def _started_over(db: AsyncSession, assistant: Assistant | None, household_id: int) -> int:
     """**Start over**'s last pass (#367): each conversation a member started over gets one try,
     with a pass's full time, while the assistant and Memory are on, and is then deleted, rolled
-    up or not. Returns how many members' facts it changed."""
+    up or not, even when its pass raises, so a copy never outlives this run. Returns how many
+    members' facts it changed."""
     repo = AssistantRepository(db)
     gone = [c for c in await repo.conversations(household_id) if c.key.startswith(STARTED_OVER)]
     changed = 0
     for conversation in gone:
-        if assistant is not None and assistant.config.configured:
-            result = await roll_up(db, assistant, household_id, conversation.key, last=True)
-            changed += result.changed
-            if result.waiting:
-                log.warning("assistant memory messages deleted before the rollup", extra={"count": result.waiting})
-        async with write_transaction(db):
-            await repo.delete_conversation(household_id, conversation.key)
-            await db.commit()
+        try:
+            if assistant is not None and assistant.config.configured:
+                result = await roll_up(db, assistant, household_id, conversation.key, last=True)
+                changed += result.changed
+                if result.waiting:
+                    log.warning("assistant memory messages deleted before the rollup", extra={"count": result.waiting})
+        except Exception:
+            log.exception("assistant memory pass after Start over failed; the conversation is deleted unrolled")
+            await db.rollback()
+        finally:
+            async with write_transaction(db):
+                await repo.delete_conversation(household_id, conversation.key)
+                await db.commit()
     return changed
 
 
