@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The **Assistant** page's reply shown as the model writes it (#370, #372, spec 6.14): the events
-of ``POST /assistant`` with ``Accept: text/event-stream``, in order; the reply word by word, with
-names put back and half-written Markdown closed; the finished reply replacing what was shown; a
-member leaving mid-reply; and the HTMX and plain form posts left as they were. The model is
-``FakeModel``; the browser is the real test client with HTTPS, CSRF, and Origin."""
+"""The **Assistant** page's reply shown as the model writes it (#370, #372, #377, spec 6.14): the
+events of ``POST /assistant`` with ``Accept: text/event-stream``, in order; the reply delta by
+delta, with names put back and half-written Markdown closed; the finished reply replacing what
+was shown; a member leaving mid-reply; and the HTMX and plain form posts left as they were. The
+model is ``FakeModel``; the browser is the real test client with HTTPS, CSRF, and Origin."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ from dinnerbell.domain.assistant import Pseudonyms
 from dinnerbell.services.assistant import streaming
 from dinnerbell.services.assistant.client import ModelEvents, ModelReply
 from dinnerbell.services.assistant.conversation import FAILED, MAX_MESSAGE_CHARS, TOO_LONG_ANSWER, _reply_text
-from dinnerbell.services.assistant.streaming import WORDS_HOLD_CHARS, CallText, Cut
+from dinnerbell.services.assistant.streaming import CallText, Cut
 from dinnerbell.services.database import Database
 from dinnerbell.web import assistant_stream
 from dinnerbell.web import render as render_module
@@ -52,7 +52,7 @@ LONG = (
     "Noodle Bar is close by and quick on a weeknight.\n"
     "Either one works for the whole household."
 )
-"""A reply long enough to pass the hold (`WORDS_HOLD_CHARS`)."""
+"""A reply of a few lines, with a label."""
 LONG_SHOWN = LONG.replace("Member 1", "Kim")
 
 
@@ -229,8 +229,8 @@ def test_the_reply_streams_in_order_and_ends_as_a_reload_shows_it(
     last = texts[-1]
     assert "Kim" in last and "Member 1" not in last  # names put back as it's written
     assert "<p>" in last  # rendered as the finished reply is
-    # Word by word: the last line shows too, all but the word still being written.
-    assert "Either one works for the whole" in last and "household" not in last
+    # Delta by delta: the last line shows too, to its last character, before done.
+    assert last.endswith("Either one works for the whole household.</p>")
     done = found[-1][1]["html"]
     assert "Either one works for the whole household." in done and "Ideas for tonight?" not in done
     assert len(draft_ids(done)) == 1 and 'hx-post="/assistant/drafts/' in done
@@ -240,13 +240,17 @@ def test_the_reply_streams_in_order_and_ends_as_a_reload_shows_it(
     assert rows(migrated, AssistantConversationRow)
 
 
-def test_a_short_reply_shows_only_when_its_done(client: TestClient, provider: FakeProvider, model: FakeModel) -> None:
+@pytest.mark.usefixtures("unthrottled")
+def test_a_short_reply_streams_from_its_first_delta(
+    client: TestClient, provider: FakeProvider, model: FakeModel
+) -> None:
     furnish(client, provider)
     as_who(client, provider, "kim")
-    model.script = [answer("Siam Garden.")]
-    _, found = streamed(client, "Thai?")
-    assert names(found) == ["start", "done"]  # held: under WORDS_HOLD_CHARS
-    assert "Siam Garden." in found[-1][1]["html"]
+    model.script = [answer("You're in for Thursday.")]  # written in two deltas, cut mid-word
+    _, found = streamed(client, "I'm in")
+    assert names(found) == ["start", "text", "done"]
+    assert shown(found) == ["<p>You&#39;re in f</p>", "<p>You&#39;re in for Thursday.</p>"]
+    assert "You&#39;re in for Thursday." in found[-1][1]["html"]
 
 
 def test_dinnerbells_own_line_replaces_what_was_shown(
@@ -642,13 +646,13 @@ def test_the_streamed_fragments_skip_the_whole_page_queries(
     assert names(parsed(response.text)) == ["start", "text", "done"] and asked == []
 
 
-# Word by word (#372) -----------------------------------------------------------------------------
+# Delta by delta (#377) --------------------------------------------------------------------------
 
 
-class Words:
-    """A ``ReplyStream`` in words that keeps what it's given."""
+class Deltas:
+    """A ``ReplyStream`` in deltas that keeps what it's given."""
 
-    cut = Cut.WORDS
+    cut = Cut.DELTAS
 
     def __init__(self) -> None:
         self.pieces: list[str] = []
@@ -668,8 +672,6 @@ class Words:
         return "".join(self.pieces)
 
 
-PAST_HOLD = "Here is a plan for the week. " * 5
-"""More than ``WORDS_HOLD_CHARS``, ending in whitespace."""
 NAMES = Pseudonyms({7: 1, 8: 2, 9: 12})
 SHOWN_NAMES = {7: "Kim", 8: "Lee", 9: "Ana"}
 
@@ -684,90 +686,96 @@ def feed(events: CallText, deltas: list[str]) -> None:
         events.text(delta)
 
 
-def test_past_the_hold_each_word_shows_as_its_written() -> None:
-    assert len(PAST_HOLD) > WORDS_HOLD_CHARS
-    out = Words()
+def test_a_short_reply_shows_from_its_first_delta_even_mid_word() -> None:
+    out = Deltas()
     events = CallText(out, lambda text: text)
-    feed(events, [PAST_HOLD])
-    assert out.joined == PAST_HOLD.rstrip()
-    shown = len(out.pieces)
-    for word in ["One", " paragraph,", " no", " line", " break"]:
-        events.text(word)
-    # Each word shows once the next one starts: no line break needed, and the last waits.
-    assert out.pieces[shown:] == [" One", " paragraph,", " no", " line"]
-    for piece in out.pieces[1:]:
-        assert piece[0].isspace() and not piece[-1].isspace()
+    feed(events, ["Do", "ne, I vo", "ted for the ta", "cos."])
+    assert out.pieces == ["Do", "ne, I vo", "ted for the ta", "cos."]
 
 
-def test_a_short_preface_and_then_a_tool_call_shows_nothing() -> None:
-    out = Words()
+def test_whitespace_at_a_deltas_end_waits_for_what_follows() -> None:
+    """The reply strips a text block's ends, so whitespace shows only once text follows it."""
+    out = Deltas()
     events = CallText(out, lambda text: text)
-    feed(events, ["Let me check ", "this week's plan ", "for you."])
+    feed(events, ["\n\nYou're ", "in", " for\n\n", "\n"])
+    assert out.pieces == ["You're", " in", " for"]
+    feed(events, ["  Thursday.  "])  # the next text block, after a blank line
+    assert out.joined == "You're in for\n\nThursday."
+
+
+def test_a_tool_call_before_any_text_shows_nothing() -> None:
+    out = Deltas()
+    events = CallText(out, lambda text: text)
     events.tool_started()
+    feed(events, ["After the tool call."])  # a later call's, not this one's
+    assert out.pieces == [] and out.tool_rounds == 0
+    other = CallText(out, lambda text: text)
+    feed(other, ["\n\n", " "])  # only whitespace: nothing shows, so nothing to take back
+    other.tool_started()
     assert out.pieces == [] and out.tool_rounds == 0
 
 
-def test_a_tool_call_after_the_hold_takes_the_text_back() -> None:
-    out = Words()
+def test_text_and_then_a_tool_call_is_taken_back() -> None:
+    out = Deltas()
     events = CallText(out, lambda text: text)
-    feed(events, [PAST_HOLD, "and more"])
+    feed(events, ["Let me check ", "this week's plan."])
     events.tool_started()
     events.text(" after the tool call ")
-    assert out.joined == PAST_HOLD + "and" and out.tool_rounds == 1
+    events.tool_started()  # told once
+    assert out.joined == "Let me check this week's plan." and out.tool_rounds == 1
 
 
 @pytest.mark.parametrize(
-    ("deltas", "name", "ending"),
+    ("deltas", "ending"),
     [
-        (["Ask Mem", "ber 1 ", "tonight. "], "Kim", " Ask Kim tonight."),  # two deltas, and a third after
-        (["Ask Member", " 1", "2 tonight. "], "Ana", " Ask Ana tonight."),  # three: Member 1, then Member 12
-        (["Ask Member 1", "2", " tonight. "], "Ana", " Ask Ana tonight."),
-        (["Ask M", "ember ", "2 tonight. "], "Lee", " Ask Lee tonight."),
-        (["Ask (Member", " 2) tonight. "], "Lee", " Ask (Lee) tonight."),
+        (["Ask Mem", "ber 1 ", "tonight."], "Ask Kim tonight."),  # two deltas, and a third after
+        (["Ask Member", " 1", "2 tonight."], "Ask Ana tonight."),  # three: Member 1, then Member 12
+        (["Ask Member 1", "2", " tonight."], "Ask Ana tonight."),
+        (["Ask M", "ember ", "2", ", tonight."], "Ask Lee, tonight."),
+        (["Ask (Member", " 2) tonight."], "Ask (Lee) tonight."),
+        (["Ask Member 1", "x."], "Ask Member 1x."),  # no label after all
+        (["Ask x", "Member 1 now."], "Ask xMember 1 now."),  # nor here: it starts mid-word
+        (["Ask Member 1", "234", "5 now."], "Ask Member 12345 now."),
     ],
 )
-def test_a_label_split_across_deltas_never_shows_as_a_label_or_the_wrong_name(
-    deltas: list[str], name: str, ending: str
-) -> None:
-    out = Words()
+def test_a_label_split_across_deltas_never_shows_as_a_label_or_the_wrong_name(deltas: list[str], ending: str) -> None:
+    out = Deltas()
     events = CallText(out, restore)
-    feed(events, [PAST_HOLD])
-    before = len(out.pieces)
+    events.text_started()
     for delta in deltas:
         events.text(delta)
-        later = "".join(out.pieces[before:])
-        assert "M" not in later  # nothing of the label, or a name in place of part of it
-        assert not [other for other in SHOWN_NAMES.values() if other != name and other in later]
-    assert "".join(out.pieces[before:]) == ending
+        assert ending.startswith(out.joined), out.pieces  # nothing shown that the reply won't show
+    assert out.joined == ending.rstrip(".") or out.joined == ending
 
 
 def test_member_followed_by_other_text_isnt_held() -> None:
-    out = Words()
+    out = Deltas()
     events = CallText(out, restore)
-    feed(events, [PAST_HOLD, "Ask Member Services ", "now"])
-    assert out.joined.endswith("Ask Member Services")
+    feed(events, ["Ask Member Services ", "now"])
+    assert out.joined == "Ask Member Services now"
 
 
 ALPHABET = [
-    *["Member", "Member ", "Mem", "ber", "Members", "MemberX", " ", "  ", "\t", "\n", "\n\n"],
-    *["1", "2", "12", "123", "1234", "12345", "x", "word", "(", ")", ".", ",", "-", "*", "`"],
+    *["Member", "Member ", "Mem", "ber", "Members", "MemberX", "M", " ", "  ", "\t", "\n", "\n\n"],
+    *["1", "2", "12", "123", "1234", "12345", "x", "_", "word", "(", ")", ".", ",", "-", "*", "`"],
     "\u0661",  # ARABIC-INDIC DIGIT ONE: a digit to ``\\d``, so it can make a label
     "\u00a0",  # NO-BREAK SPACE: whitespace to ``str.isspace``, but never a label's space
     "\u3000",  # IDEOGRAPHIC SPACE
+    "\u00e9",  # a letter to ``\\w``
 ]
 
 
 @pytest.mark.parametrize("seed", range(4))
 def test_whatever_the_deltas_the_shown_text_is_a_prefix_of_the_reply_with_names(seed: int) -> None:
-    """Property: after every delta, the words shown, names put back piece by piece, are a
-    prefix of the whole reply with names put back once, across several text blocks."""
+    """Property: after every delta, the text shown, names put back piece by piece, is a prefix
+    of the whole reply with names put back once, across several text blocks, and all that's
+    held back is whitespace at the end and the start of a label."""
     rng = random.Random(seed)  # noqa: S311 - reproducible test data, not a secret
     for _ in range(300):
-        texts = [PAST_HOLD, "".join(rng.choice(ALPHABET) for _ in range(rng.randint(0, 60)))]
+        texts = ["".join(rng.choice(ALPHABET) for _ in range(rng.randint(0, 60)))]
         texts += ["".join(rng.choice(ALPHABET) for _ in range(rng.randint(0, 40))) for _ in range(rng.randint(0, 2))]
-        blocks = [{"type": "text", "text": text} for text in texts]
-        whole = restore(_reply_text(blocks))
-        out = Words()
+        whole = restore(_reply_text([{"type": "text", "text": text} for text in texts]))
+        out = Deltas()
         events = CallText(out, restore)
         for text in texts:
             events.text_started()
@@ -777,35 +785,41 @@ def test_whatever_the_deltas_the_shown_text_is_a_prefix_of_the_reply_with_names(
                 events.text(text[at : at + step])
                 at += step
                 assert whole.startswith(out.joined), (texts, out.pieces)
-        for n, piece in enumerate(out.pieces):
+                held = events._joined_open()[events._sent :].strip()
+                assert held == "" or (held.startswith("M") and len(held) <= len("Member 1234")), (texts, held)
+        for piece in out.pieces:
             assert piece and not piece[-1].isspace()
-            assert n == 0 or piece[0].isspace()
 
 
 @pytest.mark.parametrize(
     ("cut", "text"),
     [
         (Cut.LINES, "intro line\nsecond line here\n" + "word " * 3200),  # one long paragraph
-        (Cut.WORDS, "x " * 70 + "-" * 16_000),  # no whitespace at all
-        (Cut.WORDS, "x" * 200 + " " * 16_000 + "y "),  # only whitespace
-        (Cut.WORDS, "x " * 70 + "Member " * 3000),  # each "Member" held a while
+        (Cut.DELTAS, "-" * 16_000),  # no whitespace at all
+        (Cut.DELTAS, "x" * 200 + " " * 16_000 + "y "),  # only whitespace
+        (Cut.DELTAS, "x " * 70 + "Member " * 3000),  # each "Member" held a while
         (Cut.LINES, "x\n" * 100 + "\n" * 16_000 + "y\n"),
     ],
 )
 def test_looking_for_where_to_cut_costs_about_the_texts_length(
     monkeypatch: pytest.MonkeyPatch, cut: Cut, text: str
 ) -> None:
-    """Each delta looks for a break only in what's new, so the text searched in all adds up to
-    about the reply's length, not its square, whatever it holds."""
+    """Each delta looks for a break, or for where its whitespace ends, only in what's new, so the
+    text searched in all adds up to about the reply's length, not its square, whatever it holds."""
     searched = []
-    look = streaming._last_break
+    look, ink = streaming._last_break, streaming._ink
 
-    def counted(text: str, start: int, stop: int, *, words: bool) -> int:
+    def counted_break(text: str, start: int, stop: int) -> int:
         searched.append(max(0, stop - start))
-        return look(text, start, stop, words=words)
+        return look(text, start, stop)
 
-    monkeypatch.setattr(streaming, "_last_break", counted)
-    out = Words()
+    def counted_ink(text: str, start: int) -> int:
+        searched.append(len(text) - start)
+        return ink(text, start)
+
+    monkeypatch.setattr(streaming, "_last_break", counted_break)
+    monkeypatch.setattr(streaming, "_ink", counted_ink)
+    out = Deltas()
     out.cut = cut  # type: ignore[misc]
     events = CallText(out, lambda text: text)
     events.text_started()
@@ -922,20 +936,33 @@ def test_a_big_text_event_holds_the_next_one_back_longer() -> None:
     assert next_text_at(10.0, big) == 11.0
 
 
-def test_a_short_preface_before_a_tool_call_never_shows_on_the_page(
-    client: TestClient, provider: FakeProvider, model: FakeModel
+def test_a_short_preface_before_a_tool_call_shows_and_then_goes(
+    client: TestClient, provider: FakeProvider, model: GatedModel, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Nothing is held, so a call that writes a line before its tool call shows it, and the
+    ``discard`` takes it back (the page brings the thinking indicator back)."""
     furnish(client, provider)
     as_who(client, provider, "kim")
-    model.script = [with_text_and_tool("Let me look at this week's plan."), answer(LONG)]
+    model.before_tool = asyncio.Event()
+    send_event = assistant_stream.event
+
+    def sent(name: str, data: dict[str, Any]) -> str:
+        if name == "text" and model.before_tool is not None:
+            model.before_tool.set()
+        return send_event(name, data)
+
+    monkeypatch.setattr(assistant_stream, "event", sent)
+    model.script = [with_text_and_tool("Let me look."), answer(LONG)]
     _, found = streamed(client, "Ideas for tonight?")
-    assert names(found) == ["start", "text", "done"]  # no discard: nothing of the preface showed
-    assert not [text for text in shown(found) if "Let me look" in text]
-    assert "Kim" in shown(found)[-1]
+    assert names(found) == ["start", "text", "discard", "text", "done"]
+    texts = shown(found)
+    assert texts[0].startswith("<p>Let me")  # from its first delta
+    assert not [text for text in texts[texts.index("") :] if "Let me" in text]  # and gone
+    assert "Kim" in texts[-1]
 
 
 @pytest.mark.usefixtures("unthrottled")
-def test_a_one_paragraph_reply_streams_word_by_word(
+def test_a_one_paragraph_reply_streams_as_its_written(
     client: TestClient, provider: FakeProvider, model: FakeModel
 ) -> None:
     furnish(client, provider)
@@ -944,5 +971,5 @@ def test_a_one_paragraph_reply_streams_word_by_word(
     model.script = [answer(one)]
     _, found = streamed(client, "Thai?")
     texts = shown(found)
-    assert texts and all("<br>" not in text for text in texts)
-    assert texts[-1].endswith("close</p>")  # all but the last word, before done
+    assert len(texts) == 2 and all("<br>" not in text for text in texts)
+    assert texts[-1].endswith("close by.</p>")  # all of it, before done

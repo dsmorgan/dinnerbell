@@ -4,6 +4,8 @@ bound, the month key, pseudonyms, conversation keys, and the history cap."""
 
 from __future__ import annotations
 
+import random
+import re
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -34,7 +36,7 @@ from dinnerbell.domain.assistant import (
     dollars,
     fallback_prices,
     format_dollars,
-    label_may_span,
+    label_across,
     long_day,
     month_key,
     recent_turns,
@@ -265,23 +267,60 @@ def test_names_come_back_only_for_labels_the_conversation_gave() -> None:
 
 
 @pytest.mark.parametrize(
-    ("before", "after", "spans"),
+    ("before", "after", "start"),
     [
-        ("Ask Member", "", True),  # nothing after it yet
-        ("Ask Member", " ", True),
-        ("Ask Member", " 1", True),  # Member 1, or Member 12 once more comes
-        ("Ask Member", " 12 now", True),
-        ("(Member", " 2)", True),
-        ("Ask Member", " Services", False),
-        ("Ask Member", "  1", False),  # two spaces: never a label
-        ("Ask Member", "\n1", False),
-        ("AskMember", " 1", False),  # not the word "Member"
-        ("Ask Members", " 1", False),
-        ("Ask Member 1", " now", False),  # a whole label, already followed by whitespace
+        ("Ask Member", "", 4),  # nothing after it yet
+        ("Ask Member", " ", 4),
+        ("Ask Member", " 1", 4),  # Member 1, or Member 12 once more comes
+        ("Ask Member", " 12 now", 4),
+        ("(Member", " 2)", 1),
+        ("Ask M", "", 4),  # any start of the word could still be a label's
+        ("Ask Mem", "b", 4),
+        ("Ask Member ", "", 4),
+        ("Ask Member 1", "", 4),
+        ("Ask Member 1", "2", 4),  # Member 12
+        ("Ask Member 1234", "", 4),  # Member 12345 is no label, so this one may not be either
+        ("Ask Member 1", "x", 4),  # only the first part would be a label
+        ("Ask Member 12", "34 now", 4),
+        ("Ask Member", " Services", None),
+        ("Ask Mem", "o", None),
+        ("Ask Member", "  1", None),  # two spaces: never a label
+        ("Ask Member", "\n1", None),
+        ("AskMember", " 1", None),  # not at a word's start
+        ("Ask Members", " 1", None),
+        ("Ask Member 1", " now", None),  # a whole label, already followed by whitespace
+        ("Ask Member 1", ", now", None),
+        ("Ask Member 1234", "5", 4),  # Member 12345 is no label, but the side before would be
+        ("Ask", "", None),
+        ("Ask Kim", "", None),
     ],
 )
-def test_a_label_may_span_a_cut_only_after_the_word_member(before: str, after: str, spans: bool) -> None:
-    assert label_may_span(before + after, len(before)) is spans
+def test_a_cut_breaks_a_label_only_where_names_put_back_apart_would_differ(
+    before: str, after: str, start: int | None
+) -> None:
+    assert label_across(before + after, len(before)) == start
+
+
+def test_a_cut_never_breaks_a_label_whatever_follows() -> None:
+    """Property: wherever ``label_across`` says a cut is safe, names put back into the two sides
+    apart, the second read after a word character when the first ends in one, are the names the
+    whole gets, for every way the text could go on."""
+    names = Pseudonyms({7: 1, 8: 12, 9: 123})
+    shown = {7: "Kim", 8: "Lee", 9: "Ana"}
+
+    def restore(text: str) -> str:
+        return names.restore_names(text, shown)
+
+    pieces = ["Member", "Mem", "ber", " ", "1", "2", "3", "x", "(", ")", "\n", "Members", "M", "_", "4"]
+    rng = random.Random(1)  # noqa: S311 - reproducible test data, not a secret
+    for _ in range(3000):
+        text = "".join(rng.choice(pieces) for _ in range(rng.randint(1, 8)))
+        for end in range(1, len(text) + 1):
+            if label_across(text[:end], end) is not None:
+                continue
+            tail = text[end:]
+            lead = "_" if re.match(r"\w", text[end - 1]) else ""
+            assert restore(text[:end]) + restore(lead + tail)[len(lead) :] == restore(text), (text, end)
 
 
 # Conversations ---------------------------------------------------------------------------------
