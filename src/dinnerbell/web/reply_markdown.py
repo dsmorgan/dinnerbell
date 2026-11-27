@@ -17,9 +17,8 @@ shows styled while the model writes it, not as the characters typed. What the ne
 could still make something else waits for them: markers at the line's end that show as typed, a
 backslash, a last line that's only a list, heading, rule, or code block's marker so far (or a
 number, which could be a numbered item's), a rule until its line ends, and the start of a code
-block's closing fence. A
-``[``, ``>``, ``|``, or ``&`` needs nothing: links, block quotes, tables, and entities always show
-as typed, so a half-written one is just the text so far."""
+block's closing fence. A ``[``, ``>``, ``|``, or ``&`` needs nothing: links, block quotes, tables,
+and entities always show as typed, so a half-written one is just the text so far."""
 
 from __future__ import annotations
 
@@ -99,7 +98,19 @@ could be: a number could be a numbered item's."""
 _TRAILING_MARKERS = re.compile(r"[\s*_~`]+\Z")
 _OPENER = re.compile(r"(?<![\\\w])[*_~]+(?=[^\s*_~`])|(?<=\w)(?:\*\*|~~)(?=[^\s*_~`])")
 """Markers that could open bold, italics, or strikethrough: not after a backslash, and after a
-word character only if they're not a single ``*`` or ``_``, as in "2*3" or "snake_case"."""
+word character only if they're not a single ``*`` or ``_``, as in "2*3" or "snake_case". Each
+run of one marker must also be as long as some closer of it in ``_CLOSERS`` (``_could_close``):
+a single ``~``, as in "~20 minutes", opens nothing."""
+_SHORTEST_CLOSER = {marker: min(len(c) for c in _CLOSERS if c[0] == marker) for marker in "*_~"}
+_MARKER_RUN = re.compile(r"\*+|_+|~+")
+_LONG_LINE = 500
+"""A longer last line still being written gets one closer and nothing more (``_closed``): the
+other tries style it a few more times each, and each costs about its length."""
+
+
+def _could_close(opener: re.Match[str]) -> bool:
+    """Whether a closer in ``_CLOSERS`` could pair with every marker of ``opener``."""
+    return all(len(run) >= _SHORTEST_CLOSER[run[0]] for run in _MARKER_RUN.findall(opener.group()))
 
 
 def _kind(line: str) -> tuple[bool, ...]:
@@ -183,13 +194,15 @@ def _closed(line: str) -> str:
     together, innermost first. When markers still show as typed after that, the line ends
     instead before the last marker that opens a span that doesn't close, if that shows fewer
     and cuts off no code: that span shows once it closes. Markers that open nothing, as in
-    "john_doe" or "2*3", never cut it."""
+    "john_doe", "2*3", or "~20", never cut it. A line longer than ``_LONG_LINE`` gets only the
+    one closer, so it costs a few times its length at most."""
     if len(line) > MAX_STYLED or not line:
         return line
     best, fewest = _best_closer(line)
-    if not fewest:
+    if not fewest or len(line) > _LONG_LINE:
         return best
-    openers = list(_OPENER.finditer(line))[-_OPENERS_TRIED:][::-1]  # the last first
+    openers = [opener for opener in _OPENER.finditer(line) if _could_close(opener)]
+    openers = openers[-_OPENERS_TRIED:][::-1]  # the last first
     typed = _literal_markers(_inline_once(line))
     unclosed = [opener for opener in openers if _shown_as_typed(line, opener, typed)]
     if len(unclosed) > 1:
