@@ -289,13 +289,13 @@ def test_closing_a_line_styles_it_only_as_often_as_it_needs(monkeypatch: pytest.
     assert markdown_module._closed("Tonight: **Siam") == "Tonight: **Siam**"
     assert len(calls) == 2  # the line, then ** leaves none
     calls.clear()
-    # Nothing closes it all: as many tries for a long line as for a short one.
+    # Nothing closes it all: a long line gets no more tries than a short one.
     markdown_module._closed("*a " * 600 + "*a")
     long = len(calls)
     calls.clear()
     markdown_module._inline_once.cache_clear()
     markdown_module._closed("*a " * 6 + "*a")
-    assert long == len(calls) < 20
+    assert long <= len(calls) < 20
 
 
 @pytest.mark.parametrize("tail", ["\\ *", "\\ *\\ _", "\\* *", "a\\ ~~"])
@@ -319,7 +319,7 @@ def test_a_last_line_still_being_written_is_styled_a_fixed_number_of_times(
         markdown_module._inline_once.cache_clear()
         reply_blocks("x" + tail * repeat, unfinished=True)
         counts.append(len(calls))
-    assert counts[0] == counts[1] < 30
+    assert counts[1] <= counts[0] < 30  # a long line gets only the closers (``_LONG_LINE``)
 
 
 REPLIES = [
@@ -339,6 +339,10 @@ REPLIES = [
     "Thursday: **tacos** won, and john_doe cooks at 6pm. Everyone else is in.",
     "Use 2*3 and **six** or a_b ok, and **1.5 _the a_b_c_** then.",
     "Plan:\n3. tacos\n4. \\* pizza \\\n\nb\n-- - x\n\n**bold _and italic_** - 5 \\* *x*",
+    "It takes ~20 minutes, so start at 5 and eat by 6.",
+    "Kim: ~3 people are in, and dinner is at 6.",
+    "Tacos are ~$12 each, so **bring cash** tonight.",
+    "The c~d mix and x~y swap stay as typed, then ~~struck text for a while~~ and the rest.",
 ]
 
 
@@ -352,10 +356,13 @@ def test_a_reply_cut_at_any_character_shows_only_what_it_will_show(text: str) ->
     renderer's tags only, the blocks the finished reply shows before its last, never more blocks
     than it, and in the last block a prefix of the finished block's text: no stray marker, half a
     closing fence, or a backslash that's about to escape something. And each shows all the text
-    the one before it showed: nothing shown goes away again."""
+    the one before it showed: nothing shown goes away again. Nor does a line stall: while the
+    finished reply's text grows, what's shown grows within a few characters."""
     done = reply_blocks(text)
     count = 0
     before = ""
+    stalled = 0
+    finished_before = ""
     for cut in range(1, len(text) + 1):
         if text[cut - 1].isspace():
             continue
@@ -370,9 +377,47 @@ def test_a_reply_cut_at_any_character_shows_only_what_it_will_show(text: str) ->
             assert _visible(done[last]).startswith(_visible(shown[last])), text[:cut]
         now = _visible("".join(shown))
         assert now.startswith(before), (text[:cut], before, now)
-        before = now
+        finished = _visible("".join(reply_blocks(text[:cut])))
+        stalled = stalled + 1 if now == before and len(finished) > len(finished_before) else 0
+        assert stalled < 12, text[:cut]  # a word or so, a label, or a code block's first line
+        before, finished_before = now, finished
 
 
 def test_a_long_last_line_still_being_written_shows_as_text() -> None:
     line = "**a " * 600 + "\\"
     assert reply_blocks(line, unfinished=True) == reply_blocks(line)
+
+
+def test_a_long_last_line_gets_one_closer_and_nothing_more(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Past ``_LONG_LINE``, the tries that style the line a few more times each are skipped, so
+    a crafted line costs no more than the closers."""
+    calls = []
+    styled = markdown_module.inline
+
+    def counted(text: str) -> str:
+        calls.append(text)
+        return styled(text)
+
+    monkeypatch.setattr(markdown_module, "inline", counted)
+    markdown_module._inline_once.cache_clear()
+    line = ("*a _b ~~c **d " * 150)[: markdown_module.MAX_STYLED]
+    assert len(line) > markdown_module._LONG_LINE
+    reply_blocks(line, unfinished=True)
+    assert len(calls) <= 11  # held, the line, its closers, and the render
+
+
+def test_a_last_line_is_styled_once_per_try(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``_held`` and ``_best_closer`` share the line's styling, and only closers for markers
+    that show as typed are tried: here, ``_`` but not the ``**`` or backtick the line also has."""
+    calls = []
+    styled = markdown_module.inline
+
+    def counted(text: str) -> str:
+        calls.append(text)
+        return styled(text)
+
+    monkeypatch.setattr(markdown_module, "inline", counted)
+    markdown_module._inline_once.cache_clear()
+    text = "**a** and `b` then _c"
+    assert reply_blocks(text, unfinished=True) == ["<p><strong>a</strong> and <code>b</code> then <em>c</em></p>"]
+    assert calls == [text, text + "_", text + "_"]  # held, the closer, and the render
