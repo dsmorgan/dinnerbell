@@ -660,8 +660,9 @@
   // tapped one and keeps it there, and HTMX keeps that focus across the swap, so the card would
   // never refresh. A card skipped while focus is in it refreshes as soon as focus leaves, if
   // nothing else holds it. A refresh that brings the card unchanged swaps nothing into it (below).
-  // A save swaps in a new card, whose fields start unchanged; a closed form's changes are
-  // dropped. Skip hidden tabs.
+  // A save swaps in a new card, whose fields start unchanged. A closed form's changes don't hold
+  // the card: a refresh that brings a changed card drops them, and one that brings it unchanged
+  // keeps them. Skip hidden tabs.
   //
   // The card is the poll's source, so it shares the card's hx-sync: a tap replaces a poll in
   // flight, and its answer can't overwrite the tap's. A poll never starts while a save is in
@@ -769,9 +770,8 @@
   document.addEventListener(
     "pointerdown",
     function (event) {
-      pressing = event.target;
+      pressing = event.target; // a press holds the card while it lasts; the click is the tap
       pointerAt = Date.now();
-      noteUse(event);
     },
     true
   );
@@ -795,8 +795,8 @@
     },
     true
   );
-  // VoiceOver and TalkBack activate a control with a click and no pointer, and so do Enter and
-  // Space on a button.
+  // A tap ends in a click, and VoiceOver and TalkBack activate a control with a click and no
+  // pointer, as do Enter and Space on a button. A press that ends in a menu isn't a tap.
   document.addEventListener("click", noteUse, true);
   document.addEventListener(
     "focusin",
