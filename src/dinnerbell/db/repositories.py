@@ -42,6 +42,18 @@ class DeviceSession:
     last_seen: datetime
 
 
+@dataclass(frozen=True, slots=True)
+class AuditEntry:
+    """An audit row as Admin > Health lists it (#339): who did what to what, and when. Never
+    the payload, which can hold emails, Slack IDs, or a stranger's sign-in details."""
+
+    id: int
+    actor_member_id: int | None
+    action: str
+    target: str | None
+    created_at: datetime
+
+
 def _household(row: HouseholdRow) -> Household:
     return Household(id=row.id, name=row.name, timezone=row.timezone)
 
@@ -499,6 +511,17 @@ class AuditRepository:
                 changed += 1
         await self._session.flush()
         return changed
+
+    async def recent(self, household_id: int, limit: int) -> list[AuditEntry]:
+        """The household's newest ``limit`` rows, newest first, without their payloads. The
+        ``(household_id, created_at)`` index orders them, so the cost doesn't grow with the table."""
+        found = await self._session.execute(
+            select(AuditRow.id, AuditRow.actor_member_id, AuditRow.action, AuditRow.target, AuditRow.created_at)
+            .where(AuditRow.household_id == household_id)
+            .order_by(AuditRow.created_at.desc(), AuditRow.id.desc())
+            .limit(limit)
+        )
+        return [AuditEntry(*row) for row in found]
 
     async def latest(self, household_id: int, target: str) -> tuple[str, dict[str, Any]] | None:
         """The newest audit row about ``target``, as (action, payload), or None."""

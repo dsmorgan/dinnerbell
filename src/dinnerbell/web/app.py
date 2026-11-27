@@ -90,6 +90,7 @@ def build_app(settings: Settings, lifespan: Lifespan) -> FastAPI:
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     for router in (
         health.router,
+        health.admin_router,
         pages.router,
         auth.router,
         sign_in_code.router,

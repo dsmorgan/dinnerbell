@@ -2,27 +2,26 @@
 """GET /healthz for Uptime Kuma and the container health check. No secrets, emails, or member
 data; the only counts are the outbox's, the push queue's while the web app is on, stuck calls
 (never which ones), and, on a labeled instance, dropped direct messages. A labeled instance
-adds its label, never a channel ID."""
+adds its label, never a channel ID.
+
+Admin > Health (#339) shows the same report in words, with the failed notifications and the
+audit log, which name people and so stay behind the admin check."""
 
 from __future__ import annotations
 
-from datetime import timedelta
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
+from starlette.responses import Response
 
-from dinnerbell.services.health import (
-    STALE_OUTBOX,
-    STALE_PUSH,
-    database_reachable,
-    outbox_backlog,
-    outbox_oldest_age,
-    push_backlog,
-)
-from dinnerbell.web.auth import Context
+from dinnerbell.services.admin_health import health_details
+from dinnerbell.services.health import BACKUP_STALE_AFTER, check_health
+from dinnerbell.web.auth import AdminPrincipal, Context, Database
+from dinnerbell.web.render import render
 
 router = APIRouter()
+admin_router = APIRouter(prefix="/admin")
 
 
 def _iso(value: Any) -> str | None:
@@ -31,56 +30,28 @@ def _iso(value: Any) -> str | None:
 
 @router.api_route("/healthz", methods=["GET", "HEAD"])
 async def healthz(context: Context) -> JSONResponse:
-    """503 when the database is unreachable or the scheduler has stopped ticking, so the
-    container health check and Uptime Kuma both catch a dead scheduler.
-
-    A notification waiting over an hour also reports "degraded": the outbox is stuck. So does a
-    push waiting over an hour while the web app is on: the push services can't be reached or
-    refuse it. So does a stuck call (#142), one that has owed the scheduler a step for over an
-    hour, or a check for them that failed or is out of date (the call tick hung): restarting
-    can't fix a failing step, and the admin calls the call off from its page.
-    Slack problems alone report "degraded" with a 200. Restarting the container can't invite
-    the bot or fix a token, the outbox keeps every notification until Slack is back, and the
-    web app must stay up so the admin can sign in and fix things."""
-    database_ok = await database_reachable(context.sessionmaker)
-    backlog = await outbox_backlog(context.sessionmaker) if database_ok else None
-    oldest = await outbox_oldest_age(context.sessionmaker, context.clock()) if backlog is not None else None
-    pushes = await push_backlog(context.sessionmaker, context.clock()) if database_ok else None
-    state = context.scheduler_state
-    scheduler = state.scheduler_status(context.clock())
-    current = state.current_stuck(context.clock())  # the latest tick's check, never a query here
-    stuck = None if current is None else len(current)
-    slack = await context.slack_state.status()
-    healthy = database_ok and scheduler != "stopped"
-    if not healthy:
-        status = "error"
-    elif (
-        scheduler == "ok"
-        and slack in {"connected", "not_configured"}
-        and (oldest or timedelta(0)) <= STALE_OUTBOX
-        and (pushes is None or (pushes.oldest or timedelta(0)) <= STALE_PUSH)
-        and not state.backup_failing
-        and stuck == 0
-    ):
-        status = "ok"
-    else:
-        status = "degraded"
+    """503 when the database is unreachable or the scheduler has stopped ticking; "degraded"
+    with a 200 when something needs attention (``services.health.check_health`` says what).
+    Admin > Health shows the same report in words."""
+    report = await check_health(context.sessionmaker, context.scheduler_state, context.slack_state, context.clock())
+    outbox = report.outbox
     body: dict[str, Any] = {
-        "status": status,
+        "status": report.status,
         "version": context.settings.version_label,
-        "database": "ok" if database_ok else "unreachable",
-        "scheduler": {"status": scheduler, "last_tick": _iso(state.last_tick)},
-        "slack": slack,
+        "database": "ok" if report.database_ok else "unreachable",
+        "scheduler": {"status": report.scheduler, "last_tick": _iso(report.last_tick)},
+        "slack": report.slack,
         "outbox": None
-        if backlog is None
+        if outbox is None
         else {
-            "backlog": backlog[0],
-            "failed": backlog[1],
-            "oldest_pending_age": None if oldest is None else int(oldest.total_seconds()),
+            "backlog": outbox.waiting,
+            "failed": outbox.failed,
+            "oldest_pending_age": None if outbox.oldest is None else int(outbox.oldest.total_seconds()),
         },
-        "backup": {"last_success": _iso(state.last_backup), "failing": state.backup_failing},
-        "stuck_calls": stuck,
+        "backup": {"last_success": _iso(report.last_backup), "failing": report.backup_failing},
+        "stuck_calls": report.stuck_calls,
     }
+    pushes = report.push
     if pushes is not None:  # only while the web app is on, so a Slack-only install's body is unchanged
         age = None if pushes.oldest is None else int(pushes.oldest.total_seconds())
         body["push"] = {"backlog": pushes.waiting, "oldest_pending_age": age}
@@ -89,4 +60,23 @@ async def healthz(context: Context) -> JSONResponse:
     dropped = context.slack_state.dms_dropped
     if dropped is not None:  # only while the notification guard is on, so production's body is unchanged
         body["slack_dms_dropped"] = dropped
-    return JSONResponse(body, status_code=200 if healthy else 503)
+    return JSONResponse(body, status_code=200 if report.healthy else 503)
+
+
+@admin_router.get("/health")
+async def admin_health(request: Request, principal: AdminPrincipal, context: Context, db: Database) -> Response:
+    """Admin > Health: read only, so no form and no audit row."""
+    now = context.clock()
+    report = await check_health(context.sessionmaker, context.scheduler_state, context.slack_state, now)
+    details = await health_details(db, principal.member)
+    page = {
+        "report": report,
+        "now": now,
+        "version": context.settings.version_label,
+        "backup_stale": report.backup_stale(now),
+        "backup_stale_hours": int(BACKUP_STALE_AFTER.total_seconds() // 3600),
+        "dms_dropped": context.slack_state.dms_dropped,
+        "failed": details.failed,
+        "audit": details.audit,
+    }
+    return await render(request, "admin_health.html", page)

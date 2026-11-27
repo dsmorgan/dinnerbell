@@ -43,6 +43,8 @@ class SchedulerState:
     started_at: datetime | None = None
     last_tick: datetime | None = None
     last_backup: datetime | None = None
+    last_backup_file: str | None = None
+    """The newest nightly backup's file name, beside ``last_backup``: Admin > Health shows it."""
     backup_failing: bool = False
     """The newest nightly backup failed, or failed its check and was deleted. /healthz reports
     "degraded" until one succeeds."""
@@ -174,6 +176,103 @@ async def database_reachable(sessionmaker: async_sessionmaker[AsyncSession]) -> 
         log.warning("database health check failed", exc_info=True)
         return False
     return True
+
+
+BACKUP_STALE_AFTER = timedelta(hours=36)
+"""A nightly backup older than this means at least one night's was missed: Admin > Health warns.
+/healthz reports only ``failing``, so its status doesn't change for this."""
+
+
+@dataclass(frozen=True, slots=True)
+class OutboxHealth:
+    waiting: int
+    failed: int
+    """Notifications that gave up for good."""
+    oldest: timedelta | None
+    """How long the oldest waiting notification has waited, or None if none waits."""
+
+
+@dataclass(frozen=True, slots=True)
+class HealthReport:
+    """What /healthz reports, and Admin > Health shows in words (#339). Both read it from
+    ``check_health``, so they can't disagree."""
+
+    status: str
+    """``ok``, ``degraded`` (something needs attention), or ``error`` (/healthz answers 503)."""
+    database_ok: bool
+    scheduler: str
+    """``SchedulerState.scheduler_status``."""
+    last_tick: datetime | None
+    slack: str
+    """``SlackState.status``."""
+    outbox: OutboxHealth | None
+    """None while the database or the outbox is unreadable."""
+    push: PushBacklog | None
+    """None while the web app is off, or the push queue is unreadable."""
+    last_backup: datetime | None
+    last_backup_file: str | None
+    backup_failing: bool
+    stuck_calls: int | None
+    """How many calls are stuck, or None if the check failed or is out of date."""
+
+    @property
+    def healthy(self) -> bool:
+        return self.status != "error"
+
+    def backup_stale(self, now: datetime) -> bool:
+        """No nightly backup, or none for over ``BACKUP_STALE_AFTER``."""
+        return self.last_backup is None or now - self.last_backup > BACKUP_STALE_AFTER
+
+
+async def check_health(
+    sessionmaker: async_sessionmaker[AsyncSession], scheduler: SchedulerState, slack: SlackState, now: datetime
+) -> HealthReport:
+    """Check everything /healthz reports. ``error`` when the database is unreachable or the
+    scheduler has stopped ticking, so the container health check and Uptime Kuma both catch a
+    dead scheduler.
+
+    A notification waiting over an hour also reports "degraded": the outbox is stuck. So does a
+    push waiting over an hour while the web app is on: the push services can't be reached or
+    refuse it. So does a stuck call (#142), one that has owed the scheduler a step for over an
+    hour, or a check for them that failed or is out of date (the call tick hung): restarting
+    can't fix a failing step, and the admin calls the call off from its page.
+    Slack problems alone report "degraded", not "error". Restarting the container can't invite
+    the bot or fix a token, the outbox keeps every notification until Slack is back, and the
+    web app must stay up so the admin can sign in and fix things."""
+    database_ok = await database_reachable(sessionmaker)
+    backlog = await outbox_backlog(sessionmaker) if database_ok else None
+    oldest = await outbox_oldest_age(sessionmaker, now) if backlog is not None else None
+    pushes = await push_backlog(sessionmaker, now) if database_ok else None
+    scheduler_status = scheduler.scheduler_status(now)
+    current = scheduler.current_stuck(now)  # the latest tick's check, never a query here
+    stuck = None if current is None else len(current)
+    slack_status = await slack.status()
+    if not database_ok or scheduler_status == "stopped":
+        status = "error"
+    elif (
+        scheduler_status == "ok"
+        and slack_status in {"connected", "not_configured"}
+        and (oldest or timedelta(0)) <= STALE_OUTBOX
+        and (pushes is None or (pushes.oldest or timedelta(0)) <= STALE_PUSH)
+        and not scheduler.backup_failing
+        and stuck == 0
+    ):
+        status = "ok"
+    else:
+        status = "degraded"
+    return HealthReport(
+        status=status,
+        database_ok=database_ok,
+        scheduler=scheduler_status,
+        last_tick=scheduler.last_tick,
+        slack=slack_status,
+        outbox=None if backlog is None else OutboxHealth(backlog[0], backlog[1], oldest),
+        push=pushes,
+        last_backup=scheduler.last_backup,
+        last_backup_file=scheduler.last_backup_file,
+        backup_failing=scheduler.backup_failing,
+        stuck_calls=stuck,
+    )
 
 
 def schema_revision() -> str:

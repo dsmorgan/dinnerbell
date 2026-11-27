@@ -138,7 +138,14 @@ async def nightly_backup(ctx: JobContext) -> None:
         ctx.state.backup_failing = True
         return
     ctx.state.backup_failing = False
-    ctx.state.last_backup = backups.last_backup_time(ctx.backup_dir)
+    _note_newest_backup(ctx)
+
+
+def _note_newest_backup(ctx: JobContext) -> None:
+    """Record the newest nightly backup's time and file, for /healthz and Admin > Health."""
+    newest = backups.newest_backup(ctx.backup_dir)
+    ctx.state.last_backup = None if newest is None else newest.at
+    ctx.state.last_backup_file = None if newest is None else newest.name
 
 
 def _backup_trigger(zone: ZoneInfo) -> CronTrigger:
@@ -349,7 +356,7 @@ def build_scheduler(ctx: JobContext) -> AsyncIOScheduler:
     # allows backs up when it wakes (coalesced to one run) instead of skipping the night. Where
     # 03:30 doesn't exist one night (a spring-forward gap), APScheduler runs it once, an hour
     # later on the wall clock; where it happens twice, the second run finds the day's copy.
-    ctx.state.last_backup = backups.last_backup_time(ctx.backup_dir)
+    _note_newest_backup(ctx)
     catch_up = ctx.state.last_backup is None or ctx.clock() - ctx.state.last_backup > BACKUP_CATCH_UP_AFTER
     scheduler.add_job(
         _tracked(nightly_backup),

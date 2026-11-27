@@ -64,6 +64,18 @@ class DiscardedRows:
     """A deleted row was in a live drainer's hands, so its delivery may still land."""
 
 
+@dataclass(frozen=True, slots=True)
+class FailedEntry:
+    """A notification that gave up for good, as Admin > Health lists it (#339)."""
+
+    id: int
+    event_id: int | None
+    kind: str
+    payload: dict[str, Any]
+    failed_at: datetime
+    reason: str | None
+
+
 def _entry(row: OutboxRow) -> OutboxEntry:
     return OutboxEntry(
         id=row.id,
@@ -444,6 +456,31 @@ class OutboxRepository:
             select(func.count()).select_from(OutboxRow).where(OutboxRow.failed_at.is_not(None))
         )
         return int(waiting or 0), int(failed or 0)
+
+    async def recent_failures(self, household_id: int, limit: int) -> list[FailedEntry]:
+        """The household's newest ``limit`` notifications that gave up, newest first. A row that
+        gave up was never delivered, so ``ix_outbox_pending`` finds and orders them."""
+        found = await self._session.execute(
+            select(
+                OutboxRow.id,
+                OutboxRow.event_id,
+                OutboxRow.kind,
+                OutboxRow.payload,
+                OutboxRow.failed_at,
+                OutboxRow.last_error,
+            )
+            .where(
+                OutboxRow.delivered_at.is_(None),
+                OutboxRow.failed_at.is_not(None),
+                OutboxRow.household_id == household_id,
+            )
+            .order_by(OutboxRow.failed_at.desc(), OutboxRow.id.desc())
+            .limit(limit)
+        )
+        return [
+            FailedEntry(row.id, row.event_id, row.kind, dict(row.payload), row.failed_at, row.last_error)
+            for row in found
+        ]
 
     async def oldest_pending(self) -> datetime | None:
         """When the oldest row still waiting for delivery was queued, or None if none waits."""

@@ -48,6 +48,18 @@ class QueuedPush:
     target: PushTarget
 
 
+@dataclass(frozen=True, slots=True)
+class ClosedPush:
+    """A push that closed unsent, as Admin > Health lists it (#339)."""
+
+    id: int
+    member_id: int
+    kind: str
+    event_id: int | None
+    closed_at: datetime
+    reason: str | None
+
+
 def _subscription(row: PushSubscriptionRow) -> Subscription:
     target = PushTarget(row.id, row.endpoint, row.p256dh, row.auth)
     return Subscription(row.id, row.household_id, row.member_id, target, row.created_at, row.last_success_at)
@@ -251,6 +263,32 @@ class PushRepository:
             select(func.count()).select_from(PushRow).where(PushRow.household_id == household_id, _pending())
         )
         return int(devices or 0), int(waiting or 0)
+
+    async def recent_closed(
+        self, household_id: int, limit: int, *, except_reasons: tuple[str, ...]
+    ) -> list[ClosedPush]:
+        """The household's newest ``limit`` pushes that closed unsent, newest first, leaving out
+        those whose reason starts with one of ``except_reasons``. The queue keeps only a week
+        (``services.push.PURGE_AFTER``), so sorting what it holds for the household stays cheap."""
+        routine = [PushRow.last_error.startswith(prefix, autoescape=True) for prefix in except_reasons]
+        found = await self._session.execute(
+            select(
+                PushRow.id, PushRow.member_id, OutboxRow.kind, OutboxRow.event_id, PushRow.closed_at, PushRow.last_error
+            )
+            .join(OutboxRow, OutboxRow.id == PushRow.outbox_id)
+            .where(
+                PushRow.closed_at.is_not(None),
+                PushRow.household_id == household_id,
+                *(~condition | PushRow.last_error.is_(None) for condition in routine),
+            )
+            .order_by(PushRow.closed_at.desc())
+            .limit(limit)
+        )
+        return [
+            ClosedPush(row.id, row.member_id, row.kind, row.event_id, row.closed_at, row.last_error)
+            for row in found
+            if row.closed_at is not None  # always, by the filter: this narrows the type
+        ]
 
     # The queue --------------------------------------------------------------------------------
 

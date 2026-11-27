@@ -56,6 +56,9 @@ UNKNOWN_SERVICE = "refused: not a known push service"
 NOT_THEIR_DEVICE = "skipped: the device belongs to someone else now"
 GAVE_UP = "gave up: its claims kept running out"
 GUESTS_DONT = "Guests can't turn on notifications."
+ROUTINE_CLOSES = ("skipped", "superseded")
+"""How the reasons start when a push closes unsent with nothing wrong: the member doesn't want
+it now, or the call moved on. Admin > Health leaves these out of its failed notifications."""
 
 
 # Devices ----------------------------------------------------------------------------------------
