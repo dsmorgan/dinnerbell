@@ -5,7 +5,8 @@ facts from each member's own messages, what each member sees of their own, and t
 **The rollup.** While **Memory** is on, each member message a conversation keeps waits for the
 rollup (``Turn.pending``). The purge job rolls a conversation up 15 minutes before its oldest
 waiting message reaches Conversation hours, once 24,000 bytes wait, or as a last try once it's
-past them (``domain.assistant_memory.due``); **Start over** rolls up first, too. A pass makes
+past them (``domain.assistant_memory.due``). **Start over** moves a conversation with messages
+waiting aside, and the purge job's next run gives it a last pass and deletes it. A pass makes
 one model call for each member whose messages it takes, with **Admin > Assistant**'s rollup
 model. That call sends the member's facts, what their Preferences hold, and their own messages,
 in a private conversation with the replies around them as context only: never anyone else's
@@ -43,6 +44,7 @@ from dinnerbell.domain.assistant import Conversation, Turn, assistant_settings, 
 from dinnerbell.domain.assistant_memory import (
     ROLLUP_PROMPT,
     ROLLUP_SCHEMA,
+    STARTED_OVER,
     Change,
     Fact,
     check_changes,
@@ -53,7 +55,6 @@ from dinnerbell.domain.assistant_memory import (
     plan,
     rolled,
     taken,
-    waiting,
 )
 from dinnerbell.domain.members import Member
 from dinnerbell.services.assistant import housemates
@@ -70,8 +71,6 @@ log = logging.getLogger(__name__)
 
 ROLLUP_SECONDS = 60.0
 """The most one member's rollup call runs, from the purge job."""
-START_OVER_SECONDS = 10.0
-"""The most **Start over**'s rollup call runs, since the member's page waits for it."""
 ROLLUP_MAX_TOKENS = 4_000
 """Each rollup call's ``max_tokens``: room for 20 facts' changes, and any thinking."""
 NOT_HERE = "That page doesn't exist."
@@ -166,7 +165,7 @@ async def _one(
     part = pass_input(stored.turns, author, mine, facts, held, replies=stored.private)
     request = rollup_request(model, part.text)
     if not await _room(db, assistant, member, zone, request):
-        log.info("assistant memory waits for room under the cap", extra={"member_id": member.id})
+        log.debug("assistant memory waits for room under the cap", extra={"member_id": member.id})
         return False
     reply = await call_outside_message(db, assistant, member, zone, request, seconds=seconds)
     if reply is None or reply.stop_reason not in ("end_turn", "stop_sequence"):
@@ -179,6 +178,8 @@ async def _one(
     done = await _done(db, household_id, stored.key, mine, member, facts, checked.changes, assistant.clock())
     if done:
         log.info("assistant memory rolled up", extra={"member_id": member.id, "changes": len(checked.changes)})
+    else:  # a Remove or another pass meanwhile: the call is paid, so it counts as a try
+        await _failed(db, household_id, stored.key, mine, member, assistant.clock())
     return done
 
 
@@ -275,21 +276,23 @@ async def _failed(
 async def roll_up_due(sessionmaker: async_sessionmaker[AsyncSession], assistant: Assistant | None) -> int:
     """For the purge job, before it deletes anything: roll up every conversation that's due
     (``domain.assistant_memory.due``), in every household with **Memory** on. A conversation past
-    Conversation hours gets this one last try and is deleted after it either way. Idempotent.
-    Returns how many members' facts it changed."""
-    if assistant is None or not assistant.config.configured:
-        return 0
+    Conversation hours gets this one last try and is deleted after it either way. A conversation
+    a member started over (``STARTED_OVER``) gets its last try now and is deleted, in every
+    household, Memory on or off. Idempotent. Returns how many members' facts it changed."""
     async with sessionmaker() as db:
         households = await HouseholdRepository(db).all()
     changed = 0
     for household in households:
         async with sessionmaker() as db:
+            changed += await _started_over(db, assistant, household.id)
+            if assistant is None or not assistant.config.configured:
+                continue
             settings = assistant_settings(await household_settings(db, household.id))
             if not settings.remembers:
                 continue
             now = assistant.clock()
             for conversation in await AssistantRepository(db).conversations(household.id):
-                if not due(conversation, now, settings.conversation_hours):
+                if conversation.key.startswith(STARTED_OVER) or not due(conversation, now, settings.conversation_hours):
                     continue
                 last = conversation.expired(now, settings.conversation_hours)
                 result = await roll_up(db, assistant, household.id, conversation.key, last=last)
@@ -299,17 +302,23 @@ async def roll_up_due(sessionmaker: async_sessionmaker[AsyncSession], assistant:
     return changed
 
 
-async def roll_up_before_start_over(db: AsyncSession, assistant: Assistant, member: Member, key: str) -> None:
-    """**Start over** saves to memory first (#367): roll up the member's waiting messages in
-    ``key``, when Memory is on and any wait. A failure is logged, and the conversation is
-    deleted anyway."""
-    stored = await AssistantRepository(db).conversation(member.household_id, key)
-    settings = assistant_settings(await household_settings(db, member.household_id))
-    if stored is None or not settings.remembers or not waiting(stored):
-        return
-    result = await roll_up(db, assistant, member.household_id, key, last=True, seconds=START_OVER_SECONDS)
-    if result.waiting:
-        log.warning("assistant memory messages deleted before the rollup", extra={"count": result.waiting})
+async def _started_over(db: AsyncSession, assistant: Assistant | None, household_id: int) -> int:
+    """**Start over**'s last pass (#367): each conversation a member started over gets one try,
+    with a pass's full time, while the assistant and Memory are on, and is then deleted, rolled
+    up or not. Returns how many members' facts it changed."""
+    repo = AssistantRepository(db)
+    gone = [c for c in await repo.conversations(household_id) if c.key.startswith(STARTED_OVER)]
+    changed = 0
+    for conversation in gone:
+        if assistant is not None and assistant.config.configured:
+            result = await roll_up(db, assistant, household_id, conversation.key, last=True)
+            changed += result.changed
+            if result.waiting:
+                log.warning("assistant memory messages deleted before the rollup", extra={"count": result.waiting})
+        async with write_transaction(db):
+            await repo.delete_conversation(household_id, conversation.key)
+            await db.commit()
+    return changed
 
 
 async def purge_expired_facts(sessionmaker: async_sessionmaker[AsyncSession], now: datetime) -> int:

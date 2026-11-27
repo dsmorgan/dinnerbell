@@ -64,7 +64,7 @@
 <form method="post" action="/assistant/start-over" class="card stack">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <h2>Start over</h2>
-  <p class="small muted">Deletes this conversation and cancels its drafts. What the assistant did stays done.{% if memory.on %} Memory keeps notes from it first.{% endif %} Your next message starts fresh.</p>
+  <p class="small muted">Deletes this conversation and cancels its drafts. What the assistant did stays done.{% if memory.on %} It's gone from here at once; Memory keeps notes from it within about 5 minutes.{% endif %} Your next message starts fresh.</p>
   <div class="button-row"><button type="submit" class="button danger">Start over</button></div>
 </form>
 {% endif %}

@@ -23,7 +23,7 @@
     <label class="check"><input type="checkbox" name="memory" aria-describedby="memory-help"{% if values['memory'] %} checked{% endif %}> Turn on Memory</label>
     <p class="small muted" id="memory-help">Before a conversation is deleted, a rollup keeps short notes from each member's own messages about their tastes and habits, up to 20 each, and the assistant reads every member's notes when it answers anyone, in direct messages, on the Assistant page, and in channel threads. It also reads housemates' Preferences (levels, vetoes, dietary needs, and I can usually) when a member asks in private. Memory never changes ranking or filters. Each member sees and removes their own notes on the Assistant page. It adds API cost, and needs Conversation hours above 0. Turning it off stops new notes and sends none; the notes it kept stay until you clear them below.</p>
     <label class="field"><span>Rollup model</span><select name="rollup_model" aria-describedby="rollup-help">{% for m in models %}<option value="{{ m }}"{% if m == values['rollup_model'] %} selected{% endif %}>{{ m }}</option>{% endfor %}</select></label>
-    <p class="small muted" id="rollup-help">The model that writes Memory's notes. Each rollup call counts toward the monthly cap, under the member whose messages it reads.</p>
+    <p class="small muted" id="rollup-help">The model that writes Memory's notes; claude-haiku-5-5 is recommended. Each rollup call counts toward the monthly cap, under the member whose messages it reads, and a failed try keeps its whole reservation, about $0.80 with claude-opus-5-5.</p>
     <button type="submit" class="button admin block">{{ key_icon() }}Save assistant settings</button>
   </fieldset>
 </form>

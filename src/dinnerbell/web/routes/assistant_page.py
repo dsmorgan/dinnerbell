@@ -242,7 +242,7 @@ async def _streamed(
 @router.post("/start-over")
 async def start_over(request: Request, principal: CSRFChecked, context: Context, db: Database) -> Response:
     assistant = await _require(request, db, principal)
-    await web_history.start_over(db, assistant.config, principal.member, context.clock(), assistant=assistant)
+    await web_history.start_over(db, assistant.config, principal.member, context.clock())
     return local_redirect("/assistant?notice=cleared")
 
 

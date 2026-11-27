@@ -21,9 +21,8 @@ from dinnerbell.db.engine import write_transaction
 from dinnerbell.db.meals import household_settings
 from dinnerbell.db.repositories import MemberRepository
 from dinnerbell.domain.assistant import DRAFT, USER, Conversation, Turn, assistant_settings, web_key
+from dinnerbell.domain.assistant_memory import started_over_key, waiting
 from dinnerbell.domain.members import Member
-from dinnerbell.services.assistant import memory
-from dinnerbell.services.assistant.conversation import Assistant
 from dinnerbell.services.assistant.runtime import AssistantConfig, available
 from dinnerbell.services.errors import NotFound
 
@@ -89,26 +88,29 @@ def _shown(turn: Turn, restore: Callable[[str, Mapping[int, str]], str], names: 
     return Shown(False, restore(turn.text, names), draft=turn.role == DRAFT, record=turn.record)
 
 
-async def start_over(
-    db: AsyncSession, config: AssistantConfig, member: Member, now: datetime, *, assistant: Assistant | None = None
-) -> int:
-    """**Start over**: delete ``member``'s web conversation, cancel the drafts still waiting in
+async def start_over(db: AsyncSession, config: AssistantConfig, member: Member, now: datetime) -> int:
+    """**Start over**: remove ``member``'s web conversation, cancel the drafts still waiting in
     it, and delete the records of what the assistant did at once (#374), so the page starts
     empty. What it did stays done. Returns how many drafts it cancelled.
 
-    With ``assistant`` and **Memory** on, it rolls the conversation up first (#367), so what the
-    member said is kept in memory; the conversation is deleted whether or not that works."""
+    With **Memory** on and messages waiting for the rollup (#367), the conversation moves to a
+    ``STARTED_OVER`` key instead of going at once: nothing reads it there but the purge job, which
+    rolls it up on its next run, with a pass's full time, and then deletes it, rolled up or not.
+    So the page never waits for a model call."""
     await _require(db, config, member)
     key = web_key(member.id)
-    if assistant is not None:
-        await memory.roll_up_before_start_over(db, assistant, member, key)
     repo = AssistantRepository(db)
     async with write_transaction(db):
         cancelled = 0
         for draft in await repo.drafts_waiting(member.household_id, member.id, key, now):
             cancelled += await repo.use_draft(member.household_id, draft.id, member.id, now)
         await repo.delete_records(member.household_id, member.id, key)
-        await repo.delete_conversation(member.household_id, key)
+        stored = await repo.conversation(member.household_id, key)
+        settings = assistant_settings(await household_settings(db, member.household_id))
+        if stored is not None and settings.remembers and waiting(stored):
+            await repo.move_conversation(member.household_id, key, started_over_key(key, now))
+        else:
+            await repo.delete_conversation(member.household_id, key)
         await db.commit()
     log.info("assistant conversation started over", extra={"member_id": member.id, "drafts_cancelled": cancelled})
     return cancelled
