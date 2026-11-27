@@ -158,6 +158,15 @@ class AssistantRepository:
         row.last_message_at = conversation.last_message_at
         await self._session.flush()
 
+    async def move_conversation(self, household_id: int, key: str, new_key: str) -> None:
+        """Give the conversation ``key`` the key ``new_key``, for **Start over**'s last pass (#367)."""
+        await self._session.execute(
+            update(AssistantConversationRow)
+            .where(AssistantConversationRow.household_id == household_id, AssistantConversationRow.key == key)
+            .values(key=new_key)
+            .execution_options(synchronize_session=False)
+        )
+
     async def delete_conversation(self, household_id: int, key: str) -> None:
         await self._session.execute(
             delete(AssistantConversationRow).where(

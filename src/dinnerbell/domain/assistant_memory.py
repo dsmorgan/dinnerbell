@@ -85,10 +85,31 @@ def expiry(kind: str, now: datetime) -> datetime | None:
 
 _LABELISH = re.compile(r"\bmembers?\b", re.IGNORECASE)
 """A fact is about its own member, so it never needs the word: "Member 2", "member two"."""
-_LINK = re.compile(r"://|\bwww\.|@|\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}\b|\b[a-z][a-z0-9+.-]*:\S", re.IGNORECASE)
+_LINK = re.compile(
+    r"://|\bwww\.|@|\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}\b"
+    r"|\b(?:javascript|vbscript|data|file|mailto|tel|sms|ftp|https?|blob|intent)\s*:",
+    re.IGNORECASE,
+)
 _DOTS = str.maketrans({0x3002: ".", 0xFF0E: ".", 0xFF61: ".", 0x2024: ".", 0xFE52: "."})
 _MARKUP = re.compile(r"[<>\[\]{}*_`#|\\~\x00-\x1f\x7f]")
-_SCRIPTS = {"LATIN", "CYRILLIC", "GREEK", "ARMENIAN", "HEBREW", "ARABIC", "CHEROKEE", "COPTIC"}
+_COUNTED = re.compile(r"#(?=\d)|(?<=\d)\*|\*(?=\d)|~(?=\d)")
+"""Markup characters an ordinary fact uses with a number: "#1 favorite", "5*", "~2 tacos"."""
+_COMPOSED = {"LATIN", "CYRILLIC", "GREEK", "ARMENIAN"}
+"""Scripts whose ordinary accents NFKC composes into one character, such as "é": a combining
+mark left after one of their letters is a trick, as a combining low line inside "everyone" is."""
+_LOOKALIKE_SCRIPTS = _COMPOSED | {"CHEROKEE", "COPTIC", "LISU"}
+"""Scripts with letters that pass for Latin ones: a word mixing any of them with another script
+is a trick."""
+REFUSED_SCRIPTS = frozenset({"CHEROKEE", "COPTIC"})
+"""Scripts a fact may not use at all: many of their letters pass for Latin ones, the lookalike
+fold doesn't cover them, and a household rarely writes in them. A narrower choice (#367)."""
+_IGNORABLE = frozenset(
+    {*range(0xFE00, 0xFE10), *range(0xE0100, 0xE01F0), *range(0x180B, 0x1810)}
+    | {0x034F, 0x115F, 0x1160, 0x17B4, 0x17B5, 0x2800, 0x3164, 0xFFA0}
+)
+"""Default-ignorable code points outside Unicode's format category: variation selectors, the
+combining grapheme joiner, Mongolian variation selectors, Hangul and Khmer fillers, and the
+blank Braille pattern. They show as nothing and split a word in two."""
 
 
 def clean(text: str) -> str:
@@ -97,19 +118,59 @@ def clean(text: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", text).split())
 
 
-def _script(char: str) -> str | None:
-    first = unicodedata.name(char, "").split(" ", 1)[0]
-    return first if first in _SCRIPTS else None
+def _script(char: str) -> str:
+    """A letter's script, by the first word of its Unicode name, such as "LATIN" or "THAI"."""
+    return unicodedata.name(char, "").split(" ", 1)[0]
+
+
+def _scripts(text: str) -> set[str]:
+    return {_script(char) for char in text if char.isalpha()}
 
 
 def _mixes_scripts(text: str) -> bool:
-    """Whether any word mixes letters of two scripts, as a Cyrillic letter that looks like "e"
-    does inside "everyone"."""
-    for word in re.findall(r"\w+", text):
-        scripts = {found for char in word if char.isalpha() and (found := _script(char)) is not None}
-        if len(scripts) > 1:
+    """Whether any word mixes a letter of a script with lookalikes (``_LOOKALIKE_SCRIPTS``) with a
+    letter of another script, as a Cyrillic letter that looks like "e" does inside "everyone".
+    Words that mix other scripts, as Japanese mixes kanji and kana, are ordinary."""
+    for word in _tokens(text):
+        scripts = _scripts(word)
+        if len(scripts) > 1 and scripts & _LOOKALIKE_SCRIPTS:
             return True
     return False
+
+
+def _hidden(char: str) -> bool:
+    return unicodedata.category(char) in ("Cf", "Co", "Cs", "Cn") or ord(char) in _IGNORABLE
+
+
+def _stray_mark(text: str) -> bool:
+    """Whether a combining mark follows anything but a letter of a script that needs marks: after
+    NFKC, a mark on a Latin, Cyrillic, Greek, or Armenian letter, or on no letter at all, is left
+    only by a trick, while Devanagari, Thai, or Hebrew points are ordinary writing."""
+    base = ""
+    for char in text:
+        if not unicodedata.category(char).startswith("M"):
+            base = char
+            continue
+        if not base.isalpha() or _script(base) in _COMPOSED:
+            return True
+    return False
+
+
+def _tokens(text: str) -> list[str]:
+    """The words of ``text``: runs of letters, digits, and the combining marks on them, in any
+    script, with an apostrophe inside a word kept, so a mark never splits a word in two."""
+    found: list[str] = []
+    word: list[str] = []
+    for char in text:
+        if char.isalnum() or unicodedata.category(char).startswith("M") or (char == "'" and word):
+            word.append(char)
+            continue
+        if word:
+            found.append("".join(word).strip("'"))
+            word = []
+    if word:
+        found.append("".join(word).strip("'"))
+    return [w for w in found if w]
 
 
 def text_problem(text: str) -> str | None:
@@ -123,15 +184,19 @@ def text_problem(text: str) -> str | None:
         return "empty"
     if len(text) > MAX_FACT_CHARS:
         return "too long"
-    if any(unicodedata.category(char) in ("Cf", "Co", "Cs", "Cn") for char in text):
+    if any(_hidden(char) for char in text):
         return "hidden character"
+    if _stray_mark(text):
+        return "stray mark"
+    if _scripts(text) & REFUSED_SCRIPTS:
+        return "lookalike script"
     if _mixes_scripts(text):
         return "mixed scripts"
     if _LABELISH.search(skeleton(text)):
         return "member label"
     if _LINK.search(skeleton(text.translate(_DOTS))):
         return "link"
-    if _MARKUP.search(text):
+    if _MARKUP.search(_COUNTED.sub("", text)):
         return "markup"
     return None
 
@@ -141,19 +206,20 @@ _STRAIGHT = str.maketrans({0x2018: "'", 0x2019: "'", 0x201C: '"', 0x201D: '"'})
 
 def _folded(text: str) -> str:
     """For the quote check: case, spacing, and curly quotes don't matter."""
-    straight = "".join(c for c in clean(text) if unicodedata.category(c) != "Cf").translate(_STRAIGHT)
+    straight = "".join(c for c in clean(text) if not _hidden(c)).translate(_STRAIGHT)
     return clean(straight).casefold()
 
 
 def quotes(quote: str, message: str) -> bool:
     """Whether ``quote`` is the member's own words: at least ``MIN_QUOTE_CHARS`` long, at least
-    ``MIN_QUOTE_WORDS`` words, and in ``message`` as written, apart from case and spacing."""
+    ``MIN_QUOTE_WORDS`` words (or, in a script written without spaces, at least 6 characters),
+    and in ``message`` as written, apart from case and spacing."""
     wanted = _folded(quote)
-    return len(wanted) >= MIN_QUOTE_CHARS and len(wanted.split()) >= MIN_QUOTE_WORDS and wanted in _folded(message)
+    words = _tokens(wanted)
+    enough = len(words) >= MIN_QUOTE_WORDS or (bool(words) and all(_unspaced(w) for w in words) and len(wanted) >= 6)
+    return len(wanted) >= MIN_QUOTE_CHARS and enough and wanted in _folded(message)
 
 
-_WORD = re.compile(r"[^\W_]+(?:'[^\W_]+)?")
-"""A word: letters and digits of any script, so a fact's words in Cyrillic or Greek count too."""
 _LOOKALIKES = {
     "a": "\u0430\u03b1\u0251",
     "b": "\u0432\u03b2",
@@ -179,7 +245,63 @@ _LOOKALIKES = {
     "x": "\u0445\u03c7",
     "y": "\u0443\u03b3",
 }
-_SKELETON = str.maketrans({char: latin for latin, chars in _LOOKALIKES.items() for char in chars})
+_SMALL_CAPITALS = {
+    "a": "\u1d00",
+    "b": "\u0299",
+    "c": "\u1d04",
+    "d": "\u1d05",
+    "e": "\u1d07",
+    "f": "\ua730",
+    "g": "\u0262",
+    "h": "\u029c",
+    "i": "\u026a",
+    "j": "\u1d0a",
+    "k": "\u1d0b",
+    "l": "\u029f",
+    "m": "\u1d0d",
+    "n": "\u0274",
+    "o": "\u1d0f",
+    "p": "\u1d18",
+    "r": "\u0280",
+    "s": "\ua731",
+    "t": "\u1d1b",
+    "u": "\u1d1c",
+    "v": "\u1d20",
+    "w": "\u1d21",
+    "y": "\u028f",
+    "z": "\u1d22",
+}
+"""Latin small capitals: Latin letters by name, so never mixed, and NFKC keeps them."""
+_LISU = {
+    "a": "\ua4ee",
+    "b": "\ua4d0",
+    "c": "\ua4da",
+    "d": "\ua4d3",
+    "e": "\ua4f0",
+    "g": "\ua4d6",
+    "h": "\ua4e7",
+    "i": "\ua4f2",
+    "j": "\ua4d9",
+    "k": "\ua4d7",
+    "l": "\ua4e1",
+    "m": "\ua4df",
+    "n": "\ua4e0",
+    "o": "\ua4f3",
+    "p": "\ua4d1",
+    "r": "\ua4e3",
+    "s": "\ua4e2",
+    "t": "\ua4d4",
+    "u": "\ua4f4",
+    "v": "\ua4e6",
+    "w": "\ua4ea",
+    "x": "\ua4eb",
+    "y": "\ua4ec",
+}
+"""Lisu letters shaped like Latin capitals. Cherokee and Coptic are refused outright
+(``REFUSED_SCRIPTS``)."""
+_SKELETON = str.maketrans(
+    {char: latin for table in (_LOOKALIKES, _SMALL_CAPITALS, _LISU) for latin, chars in table.items() for char in chars}
+)
 """Common Cyrillic, Greek, and Armenian letters that look like Latin ones, folded to those, so
 a word spelled all in lookalikes still reads as the word it imitates."""
 _LIGHT_WORDS = """a an the and or but of to in on at for with without from by about as than then is are was were be been
@@ -216,13 +338,18 @@ def _stem(word: str) -> str:
 
 
 def _words(text: str) -> list[str]:
-    return [w.removesuffix("'s") for w in _WORD.findall(_folded(text))]
+    """``_tokens`` of the folded text, without a possessive "'s": words in any script count."""
+    return [w.removesuffix("'s") for w in _tokens(_folded(text))]
 
 
 def skeleton(text: str) -> str:
-    """``text`` folded for the word lists and the label and link checks: as ``_folded``, with
-    each lookalike letter as the Latin one it imitates (``_LOOKALIKES``)."""
-    return _folded(text).translate(_SKELETON)
+    """``text`` folded for the word lists and the label and link checks: as ``_folded``,
+    decomposed (NFKD) without its nonspacing marks, so an accented "wife" or "everyone" reads as
+    the plain word, and with each lookalike letter as the Latin one it imitates
+    (``_LOOKALIKES``, ``_SMALL_CAPITALS``, ``_LISU``). Only the checks read it: a fact is stored
+    in NFKC, with its accents."""
+    bare = "".join(c for c in unicodedata.normalize("NFKD", _folded(text)) if unicodedata.category(c) != "Mn")
+    return bare.translate(_SKELETON)
 
 
 def grounded(text: str, message: str) -> bool:
@@ -233,13 +360,43 @@ def grounded(text: str, message: str) -> bool:
     citing a harmless quote."""
     content = {_stem(w) for w in _words(text) if w not in _LIGHT}
     said = {_stem(w) for w in _words(message)}
-    return bool(content) and len(content & said) * 2 > len(content)
+    whole = _folded(message)
+    found = {w for w in content if w in said or (_unspaced(w) and w in whole)}
+    return bool(content) and len(found) * 2 > len(content)
+
+
+def _unspaced(word: str) -> bool:
+    """Whether ``word`` is in a script that may run words together, as Thai, Lao, Khmer, and
+    Chinese and Japanese do: there a fact's word counts when the message holds it inside a longer
+    run. Never for a script with lookalikes."""
+    scripts = _scripts(word)
+    return bool(scripts) and scripts <= _UNSPACED and len(word) >= 2
+
+
+_UNSPACED = frozenset({"THAI", "LAO", "KHMER", "MYANMAR", "CJK", "HIRAGANA", "KATAKANA", "KATAKANA-HIRAGANA"})
+"""Scripts written without spaces between words."""
+
+
+_OWNERS = frozenset({"my", "our", "his", "her", "their", "the", "your", "a", "an"})
 
 
 def about_others(text: str) -> bool:
-    """Whether a fact's text names someone else or the house (``OTHERS_WORDS``), even spelled in
-    lookalike letters."""
-    return any(w in OTHERS_WORDS for w in _words(skeleton(text)))
+    """Whether a fact's text names someone else or the house: a word of ``OTHERS_WORDS`` right
+    after a possessive or an article ("my wife", "the kids", "the household"), even spelled in
+    lookalike letters. The bare word is ordinary in food: "family-style", "mom-and-pop",
+    "Sister Pie", "Father's Day"."""
+    words = _words(skeleton(text))
+    for n, word in enumerate(words):
+        owned = n > 0 and words[n - 1] in _OWNERS
+        if word in OTHERS_WORDS and owned and (n + 1 == len(words) or words[n + 1] not in _SIZES):
+            return True
+    return False
+
+
+_SIZES = frozenset(
+    {"menu", "menus", "meal", "meals", "portion", "portions", "size", "sizes", "style", "special", "plate"}
+)
+"""Words after "kids" or "family" that make it a kind of food, not people: "the kids menu"."""
 
 
 def instruction_like(text: str) -> bool:
@@ -317,6 +474,8 @@ def check_changes(raw: object, messages: Mapping[int, str], facts: Sequence[Fact
             problem = "about others"
         if problem is None and not grounded(text, messages[message]):
             problem = "not what the member said"
+        if problem is None and (_scripts(text) - {"LATIN"}) - _scripts(clean(messages[message])):
+            problem = "script not in message"
         if problem is not None:
             drop(problem)
             continue
@@ -418,8 +577,10 @@ usually. Those live on Preferences, not in notes.
 
 Write each note as one short phrase without a subject, in the member's own words lightly \
 reworded, such as "avoids raw fish" from "no raw fish for me", at most 160 characters, with no \
-names, member labels, links, or email addresses. Replace rather than add a \
-note that says nearly the same. When nothing qualifies, answer with no changes."""
+names, member labels, links, or email addresses. Dinnerbell throws away a note with markup \
+characters such as * _ # [ ] < > | or ~, the word "member", a link, words such as "everyone", \
+"recommend", or "vote", or a remark about someone else such as "my wife" or "the kids", so never \
+write one. Replace rather than add a note that says nearly the same. When nothing qualifies, answer with no changes."""
 
 ROLLUP_SCHEMA: Mapping[str, Any] = {
     "type": "object",
@@ -504,6 +665,16 @@ def pass_input(
 
 
 # When a conversation is rolled up ------------------------------------------------------------------
+
+
+STARTED_OVER = "over:"
+"""The key prefix of a conversation a member started over with messages waiting (#367): hidden
+from the page, the model, and the history, and deleted by the purge job after one last pass."""
+
+
+def started_over_key(key: str, now: datetime) -> str:
+    """Where **Start over** moves the conversation ``key`` for its last pass."""
+    return f"{STARTED_OVER}{now:%Y%m%dT%H%M%S%f}:{key}"
 
 
 def waiting(conversation: Conversation) -> tuple[Turn, ...]:
