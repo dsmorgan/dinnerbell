@@ -450,10 +450,14 @@ class OutboxRepository:
         return found
 
     async def backlog(self) -> tuple[int, int]:
-        """(rows waiting for delivery, rows that failed for good)."""
+        """(rows waiting for delivery, rows that failed for good). A row that gave up was never
+        delivered, so ``delivered_at IS NULL`` changes no count and lets ``ix_outbox_pending``
+        count the failed rows without reading the whole table."""
         waiting = await self._session.scalar(select(func.count()).select_from(OutboxRow).where(_pending()))
         failed = await self._session.scalar(
-            select(func.count()).select_from(OutboxRow).where(OutboxRow.failed_at.is_not(None))
+            select(func.count())
+            .select_from(OutboxRow)
+            .where(OutboxRow.delivered_at.is_(None), OutboxRow.failed_at.is_not(None))
         )
         return int(waiting or 0), int(failed or 0)
 
