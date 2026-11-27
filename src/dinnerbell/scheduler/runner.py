@@ -37,6 +37,10 @@ log = logging.getLogger(__name__)
 BACKUP_HOUR = 3
 BACKUP_MINUTE = 30
 BACKUP_CATCH_UP_AFTER = timedelta(hours=24)
+PRUNE_HOUR = 4
+PRUNE_MINUTE = 15
+"""When the nightly outbox prune runs, household time: after the backup, so last night's copy
+still has what it deletes."""
 SHUTDOWN_GRACE_SECONDS = 10.0
 CANCEL_UNWIND_SECONDS = 1.0
 """How long shutdown waits for a job it cancelled to finish cleaning up."""
@@ -279,6 +283,17 @@ async def purge_pushes(ctx: JobContext) -> None:
         log.info("old pushes removed", extra={"count": removed})
 
 
+async def prune_outbox(ctx: JobContext) -> None:
+    """Delete old delivered and failed notifications (#340), nightly. Logs counts only."""
+    try:
+        removed = await outbox.prune(ctx.sessionmaker, ctx.clock())
+    except Exception:
+        log.exception("outbox prune failed")
+        return
+    if removed:
+        log.info("old notifications removed", extra={"count": removed})
+
+
 async def stop_scheduler(
     scheduler: AsyncIOScheduler, ctx: JobContext, *, grace: float = SHUTDOWN_GRACE_SECONDS
 ) -> None:
@@ -371,6 +386,14 @@ def build_scheduler(ctx: JobContext) -> AsyncIOScheduler:
     )
     scheduler.add_job(
         _tracked(purge_pushes), IntervalTrigger(hours=1), args=[ctx], id="purge_pushes", next_run_time=start
+    )
+    # No misfire grace, as for the backup: a host asleep at 04:15 prunes when it wakes.
+    scheduler.add_job(
+        _tracked(prune_outbox),
+        CronTrigger(hour=PRUNE_HOUR, minute=PRUNE_MINUTE, timezone=ctx.zone),
+        args=[ctx],
+        id="prune_outbox",
+        misfire_grace_time=None,
     )
     scheduler.add_job(
         _tracked(refresh_weather),

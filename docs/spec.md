@@ -843,7 +843,7 @@ One container, one Python process, one asyncio event loop running the web server
 | `db` | SQLAlchemy models, Alembic migrations, repositories. | domain |
 | `channels` | `Channel` protocol plus `channels/slack`. Renders notification events to Slack blocks, maps interactions back to service calls. | services |
 | `web` | FastAPI routes, Jinja templates, HTMX fragments, auth. | services |
-| `scheduler` | Cron-style and interval jobs: the heartbeat; the call tick, which opens calls, closes windows, marks events done, and posts the monthly recap; the outbox drainer; the push drainer and the push purge; the session purge; the conversation purge; the weather refresh; and the nightly backup. | services |
+| `scheduler` | Cron-style and interval jobs: the heartbeat; the call tick, which opens calls, closes windows, marks events done, and posts the monthly recap; the outbox drainer and the nightly outbox prune; the push drainer and the push purge; the session purge; the conversation purge; the weather refresh; and the nightly backup. | services |
 
 The rule that keeps this maintainable: `domain` imports nothing from the other layers, and only `services` writes to the database.
 
@@ -873,7 +873,7 @@ Every table carries `household_id`. Timestamps are UTC; the household time zone 
 | feedback | meal_log (deleting the meal deletes its feedback), member, rating (hated, disliked, fine, liked, loved, null), rating_saved_at (when the rating last changed, FR-55), place_issues (JSON), issue_note (what "other" was, nullable), cook_thanks (bool), cook_note, and a snapshot of the meal when saved, whose item, item name, item kind, and mode an admin's correction of the place moves (#220): item, item name, item kind, mode (null for a logged meal), cook_member and cook name (nullable), participants (JSON); created_at, updated_at. One per member per meal |
 | contribution | member, kind, day, event or meal (exactly one: a call for most kinds, a meal for feedback), item (added_item only), created_at. Unique per member, kind, and source, and per kind and item, so counting twice counts once. Deleted with its call or meal |
 | badge_award | member, badge_key, tier, event (cleared if the call is deleted), awarded_at, announcement (pending, announced, or skipped), announced_at. Unique per member, badge, and tier |
-| outbox | event, notification type, payload (JSON), idempotency_key, message_key, thread_key, available_at, claim_token, claimed_until, attempts, last_error, delivered_at, failed_at, and the delivered message's reference |
+| outbox | event, notification type, payload (JSON), idempotency_key, message_key, thread_key, available_at, claim_token, claimed_until, attempts, last_error, delivered_at, failed_at, and the delivered message's reference. A nightly job deletes delivered and failed rows 90 days after their call finished (its last change once done, abandoned, or called off), and rows about no call 90 days after they were delivered or failed (#340). It keeps rows still waiting, every row of a call with one waiting, each delivered post that created a channel's message (the record of where it landed, which later edits, threads, and the assistant read), and each delivered `link_needed` message, whose key keeps the hourly Slack match from asking the admins again. The audit log is never pruned |
 | session | id (the token's SHA-256 hash), member, created_at, expires_at, last_seen, public_id (random, what pages name it by, never the hash), device (a short label from the browser, such as "iPhone · Safari"; never the User-Agent) |
 | sign_in_code | member (one per member: a new code replaces the old), code_hash (HMAC-SHA256 with a key from the secret key; never the code), created_by, created_at, expires_at (15 minutes later), used_at (6.15) |
 | push_subscription | member, session (deleting the session deletes it), endpoint (unique per household), p256dh, auth, created_at, last_success_at, auth_failures and auth_failed_at (401 and 403 answers within 24 hours): one row per device that gets web pushes (6.15) |
@@ -964,7 +964,7 @@ Household-level settings that change over time (slot schedule, weights, threshol
 
 ### 13.9 Observability
 
-- `/healthz` returns the version (with the build stamp on `main` builds), database reachability, scheduler last tick, Slack socket connection state, outbox backlog, last backup time, and the number of stuck calls: open calls whose next scheduler step has been due for more than an hour (#142). While the web app is on, it also reports the push queue's backlog and its oldest push's age (6.15). Uptime Kuma polls it.
+- `/healthz` returns the version (with the build stamp on `main` builds), database reachability, scheduler last tick, Slack socket connection state, outbox backlog and failures (failed rows leave the count once the nightly prune deletes them, section 13.3), last backup time, and the number of stuck calls: open calls whose next scheduler step has been due for more than an hour (#142). While the web app is on, it also reports the push queue's backlog and its oldest push's age (6.15). Uptime Kuma polls it.
 - Structured JSON logs to stdout with request ID, member ID, and event ID fields.
 
 ### 13.10 Testing

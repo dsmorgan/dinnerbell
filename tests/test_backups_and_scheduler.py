@@ -146,6 +146,7 @@ async def test_build_scheduler_schedules_jobs(job_context: runner.JobContext) ->
         "drain_outbox",
         "drain_push",
         "purge_pushes",
+        "prune_outbox",
         "refresh_weather",
         "follow_zone",
     }
@@ -157,6 +158,9 @@ async def test_build_scheduler_schedules_jobs(job_context: runner.JobContext) ->
     assert "hour='3'" in str(backup.trigger) and "minute='30'" in str(backup.trigger)
     assert backup.max_instances == 1
     assert backup.next_run_time - datetime.now(UTC) < timedelta(minutes=1)
+    prune = jobs["prune_outbox"]  # nightly, after the backup, and run on wake if the host slept (#340)
+    assert "hour='4'" in str(prune.trigger) and "minute='15'" in str(prune.trigger)
+    assert prune.misfire_grace_time is None and prune.max_instances == 1
 
 
 @pytest.mark.anyio
@@ -408,6 +412,28 @@ def test_stale_partials_go_even_when_the_backup_then_fails(migrated: Settings, m
     with pytest.raises(OSError, match="disk full"):
         backups.run_backup(migrated.database_path, migrated.backup_dir, date(2026, 10, 22), now=NOW)
     assert not stale.exists()
+
+
+@pytest.mark.anyio
+async def test_prune_outbox_job(
+    job_context: runner.JobContext, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level("INFO")
+    await runner.prune_outbox(job_context)  # nothing to prune; must not fail or log
+    assert "old notifications removed" not in caplog.text
+
+    async def removed(*_args: object) -> int:
+        return 3
+
+    async def broken(*_args: object) -> int:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(runner.outbox, "prune", removed)
+    await runner.prune_outbox(job_context)
+    assert any(r.message == "old notifications removed" and r.__dict__["count"] == 3 for r in caplog.records)
+    monkeypatch.setattr(runner.outbox, "prune", broken)
+    await runner.prune_outbox(job_context)  # logged, never raised
+    assert "outbox prune failed" in caplog.text
 
 
 @pytest.mark.anyio

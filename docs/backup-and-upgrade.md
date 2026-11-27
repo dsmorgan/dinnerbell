@@ -24,6 +24,15 @@ After each nightly backup, Dinnerbell keeps the 14 newest nightly copies, the ne
 
 Retention settings, such as the assistant's **Conversation hours** and the 30 days for refused sign-ins, delete rows from the live database only. A copy keeps what it held until the copy is deleted.
 
+### What Dinnerbell deletes
+
+Most of the database grows with the household's history: calls, meals, feedback, and the audit log, which Dinnerbell keeps for good. The notification queue would grow too, by a row for every Slack message and edit, so every night at 04:15 household time, after the backup, Dinnerbell deletes old notifications:
+
+- A call's sent and failed notifications, 90 days after the call ended: done, abandoned, or called off. The posts that made the call's channel messages stay, so Dinnerbell can still find and edit them.
+- Other notifications, such as schedule changes, badge posts, and monthly recaps, 90 days after they were sent or failed. A sent message asking an admin to link a Slack account stays, so Dinnerbell doesn't ask again.
+
+`/healthz`'s `outbox.failed` count falls as old failures go. Pushes to the web app go 7 days after they're sent or closed. The log line `old notifications removed` gives the count.
+
 ### What else to back up
 
 To run Dinnerbell on another host, also back up these files from your clone or bundle directory:

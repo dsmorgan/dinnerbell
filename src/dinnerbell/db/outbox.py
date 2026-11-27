@@ -7,13 +7,21 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import and_, delete, exists, func, select, update
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dinnerbell.db.models import OutboxRow
+from dinnerbell.db.models import EventRow, OutboxRow
 from dinnerbell.db.push import queue_pushes
-from dinnerbell.domain.notifications import NULL_CHANNEL_ID, UPDATE_KINDS, MessageRef, Notification, to_payload
+from dinnerbell.domain.events import OPEN_STATES
+from dinnerbell.domain.notifications import (
+    NULL_CHANNEL_ID,
+    UPDATE_KINDS,
+    LinkNeeded,
+    MessageRef,
+    Notification,
+    to_payload,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +88,25 @@ def _rowcount(result: Any) -> int:
 
 def _pending() -> Any:
     return OutboxRow.delivered_at.is_(None) & OutboxRow.failed_at.is_(None)
+
+
+def _landed() -> tuple[Any, ...]:
+    """A delivered post that created a channel's message: the record of where it landed, which
+    later updates, threads, and ``event_for_message`` read."""
+    return (
+        OutboxRow.message_key.is_not(None),
+        OutboxRow.kind.not_in(UPDATE_KINDS),
+        OutboxRow.delivered_at.is_not(None),
+        OutboxRow.ref_message.is_not(None),
+        OutboxRow.ref_channel.is_not(None),
+        OutboxRow.ref_channel != NULL_CHANNEL_ID,
+    )
+
+
+def _prunable() -> Any:
+    """A row the nightly prune may delete once it's old enough: delivered or failed, and not a
+    landed post (``_landed``)."""
+    return ~_pending() & ~and_(*_landed())
 
 
 def _untried() -> tuple[Any, ...]:
@@ -453,14 +480,7 @@ class OutboxRepository:
         then finds no row to record, and ``DiscardedRows.in_flight`` says it may still land.
         """
         mine = (OutboxRow.household_id == household_id, OutboxRow.event_id == event_id)
-        landed = (
-            OutboxRow.message_key.is_not(None),
-            OutboxRow.kind.not_in(UPDATE_KINDS),
-            OutboxRow.delivered_at.is_not(None),
-            OutboxRow.ref_message.is_not(None),
-            OutboxRow.ref_channel.is_not(None),
-            OutboxRow.ref_channel != NULL_CHANNEL_ID,
-        )
+        landed = _landed()
         kept = list(
             await self._session.scalars(select(OutboxRow.message_key).where(*mine, *landed).order_by(OutboxRow.id))
         )
@@ -480,6 +500,62 @@ class OutboxRepository:
             message_keys=[key for key in dict.fromkeys(kept) if key is not None],
             in_flight=bool(held),
         )
+
+    # Pruning (#340) ------------------------------------------------------------------------------
+
+    def _finished_calls(self, before: datetime) -> Any:
+        """Events that finished (done, abandoned, or called off) and last changed before
+        ``before``, with a row to prune and none waiting. A waiting row keeps every row of its
+        event: an update's key counts the updates to its message stored before it."""
+        mine = OutboxRow.event_id == EventRow.id
+        return select(EventRow.id).where(
+            EventRow.state.not_in([state.value for state in OPEN_STATES]),
+            EventRow.updated_at < before,
+            exists().where(mine, _prunable()),
+            ~exists().where(mine, _pending()),
+        )
+
+    def _loose_rows(self, before: datetime) -> Any:
+        """Rows about no event, delivered or failed before ``before``, and not a landed post. A
+        delivered ``link_needed`` message stays: its key is what keeps the hourly Slack match
+        from asking the admins again (``guests.ask_admins``)."""
+        return select(OutboxRow.id).where(
+            OutboxRow.event_id.is_(None),
+            _prunable(),
+            func.coalesce(OutboxRow.delivered_at, OutboxRow.failed_at) < before,
+            ~((OutboxRow.kind == LinkNeeded.kind) & OutboxRow.delivered_at.is_not(None)),
+        )
+
+    async def anything_to_prune(self, before: datetime) -> bool:
+        """Whether ``prune_calls`` or ``prune_loose`` would delete anything: a read, so a night
+        with nothing to prune takes no write lock."""
+        found = await self._session.scalar(self._finished_calls(before).limit(1))
+        if found is None:
+            found = await self._session.scalar(self._loose_rows(before).limit(1))
+        return found is not None
+
+    async def prune_calls(self, before: datetime, limit: int) -> tuple[int, int]:
+        """Delete the delivered and failed rows of up to ``limit`` calls that finished before
+        ``before``, keeping their landed posts. Every row of a call goes in one statement, so
+        no call is left with some of its updates. Returns (calls pruned, rows deleted)."""
+        events = list(await self._session.scalars(self._finished_calls(before).order_by(EventRow.id).limit(limit)))
+        if not events:
+            return 0, 0
+        result = await self._session.execute(
+            delete(OutboxRow)
+            .where(OutboxRow.event_id.in_(events), _prunable())
+            .execution_options(synchronize_session=False)
+        )
+        return len(events), _rowcount(result)
+
+    async def prune_loose(self, before: datetime, limit: int) -> int:
+        """Delete up to ``limit`` rows about no event (``_loose_rows``). Returns how many."""
+        result = await self._session.execute(
+            delete(OutboxRow)
+            .where(OutboxRow.id.in_(self._loose_rows(before).order_by(OutboxRow.id).limit(limit)))
+            .execution_options(synchronize_session=False)
+        )
+        return _rowcount(result)
 
     async def for_household(self, household_id: int) -> list[OutboxEntry]:
         rows = await self._session.scalars(

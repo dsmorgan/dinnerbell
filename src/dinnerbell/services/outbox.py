@@ -18,6 +18,10 @@ or the member can't be read, the message goes to the channel as if it were off.
 A row is claimed and committed before the channel is called, and no transaction is held open
 during the call, so two drainers never deliver the same row and a slow channel never blocks
 writers.
+
+Every night, ``prune`` deletes delivered and failed rows 90 days after their call finished, or,
+for a row about no call, 90 days after it was delivered or failed (#340). It keeps each post
+that created a channel's message, which later edits, threads, and the assistant read.
 """
 
 from __future__ import annotations
@@ -29,6 +33,7 @@ from datetime import datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from dinnerbell.db.engine import write_transaction
 from dinnerbell.db.events import AssignmentRepository, EventRepository
 from dinnerbell.db.outbox import OutboxEntry, OutboxRepository
 from dinnerbell.db.repositories import MemberRepository
@@ -85,6 +90,13 @@ MIN_HOLD = timedelta(seconds=5)
 SUPERSEDED = "superseded by a newer update"
 TAKEN_BACK = "superseded: every badge in it was taken back"
 SKIPPED_WEB_APP = "skipped: the member gets the web app, not Slack"
+KEEP_FOR = timedelta(days=90)
+"""How long delivered and failed rows stay after their call finished, or, for a row about no
+call, after it was delivered or failed (#340)."""
+PRUNE_CALLS = 20
+"""Calls pruned in one transaction: each has tens of rows, so a batch holds the write lock briefly."""
+PRUNE_ROWS = 500
+"""Rows about no call deleted in one transaction."""
 
 
 async def picks_posts(db: AsyncSession, household_id: int, events: list[EventInfo]) -> dict[int, MessageRef]:
@@ -104,6 +116,41 @@ async def call_for_post(db: AsyncSession, household_id: int, ref: MessageRef) ->
     """The call a delivered Dinnerbell post at ``ref`` is about, such as a call message or a
     reminder, or None. The assistant uses it as a Slack thread's default call (spec 6.14)."""
     return await OutboxRepository(db).event_for_message(household_id, ref)
+
+
+async def prune(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    now: datetime,
+    *,
+    calls_per_batch: int = PRUNE_CALLS,
+    rows_per_batch: int = PRUNE_ROWS,
+) -> int:
+    """Delete delivered and failed rows ``KEEP_FOR`` after their call finished (done, abandoned,
+    or called off), and rows about no call ``KEEP_FOR`` after they were delivered or failed.
+    Each post that created a channel's message stays, so its message can still be edited, and
+    so does a delivered ``link_needed`` message, so the admins aren't asked twice. Rows waiting
+    for delivery always stay, and so does every row of a call that has one. Idempotent; each
+    batch is its own short transaction. Returns how many rows it deleted."""
+    before = now - KEEP_FOR
+    async with sessionmaker() as db:
+        if not await OutboxRepository(db).anything_to_prune(before):
+            return 0  # the usual night: no write lock for nothing
+    removed = 0
+    while True:
+        async with sessionmaker() as db, write_transaction(db):
+            calls, rows = await OutboxRepository(db).prune_calls(before, calls_per_batch)
+            await db.commit()
+        removed += rows
+        if calls < calls_per_batch:
+            break
+    while True:
+        async with sessionmaker() as db, write_transaction(db):
+            rows = await OutboxRepository(db).prune_loose(before, rows_per_batch)
+            await db.commit()
+        removed += rows
+        if rows < rows_per_batch:
+            break
+    return removed
 
 
 def retry_delay(attempts: int) -> timedelta:
