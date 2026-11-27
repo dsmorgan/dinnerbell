@@ -228,11 +228,15 @@ async def answer_for(
         activity.action(db, "answer_for", event, actor, guest_id=guest.id, guest=guest.display_name, **what)
 
 
-async def drop_from_call(db: AsyncSession, event: Event, member_id: int, now: datetime, *, by: Member) -> None:
+async def drop_from_call(
+    db: AsyncSession, event: Event, member_id: int, now: datetime, *, by: Member | None = None
+) -> None:
     """Take someone out of a call they no longer belong to: a guest removed or uninvited, or a
     member an admin deactivated (#331). Their answer is out, any vote they cast while voting
     is gone, and any role they had is nobody's. Updates the call's messages, and tells whoever
-    can reassign a role that's left, other than ``by``, who took them off and knows."""
+    can reassign a role that's left. ``by`` is someone who took them off on the call itself
+    (``uninvite``), who knows and isn't told. Deactivating or removing someone happens away
+    from the call, so whoever did it may not know about the role, and is told like anyone."""
     ctx = await load(db, event)
     current = ctx.response_of(member_id)
     if current is not None and current.status is not Status.OUT:
@@ -254,14 +258,16 @@ async def drop_from_call(db: AsyncSession, event: Event, member_id: int, now: da
         around = [m for m in admins if not m.away_on(ctx.event.day)]
         deciders = [coordinator] if coordinator is not None and coordinator.active else (around or admins)
         info, left = cc.event_info(ctx), ctx.person(member_id)
-        told = [note.RoleVacated(info, ctx.person(m.id), left, vacated, now) for m in deciders if m.id != by.id]
+        told = [
+            note.RoleVacated(info, ctx.person(m.id), left, vacated, now)
+            for m in deciders
+            if by is None or m.id != by.id
+        ]
     tally = [cc.proposals_updated(ctx)] if voted else []
     await publish(db, ctx, cc.message_updated(ctx), *tally, *cc.decision_updated(ctx), *told, now=now)
 
 
-async def leave_open_calls(
-    db: AsyncSession, who: Member, now: datetime, *, by: Member, event_ids: list[int] | None = None
-) -> None:
+async def leave_open_calls(db: AsyncSession, who: Member, now: datetime, *, event_ids: list[int] | None = None) -> None:
     """``drop_from_call`` for each call among ``event_ids`` that's collecting, voting, or decided
     with the meal still ahead: a guest's invitations. With None, a member's open calls (#331):
     only the ones they're in, or have a role or a vote in, and never an offer, which keeps who
@@ -277,7 +283,7 @@ async def leave_open_calls(
         if event_ids is None and (event.is_offer or not _takes_part(await load(db, event), who.id)):
             continue
         await events.lock(who.household_id, event_id, now)
-        await drop_from_call(db, event, who.id, now, by=by)
+        await drop_from_call(db, event, who.id, now)
 
 
 def _takes_part(ctx: cc.CallContext, member_id: int) -> bool:
@@ -573,7 +579,7 @@ async def fold_into_member(
         folded = await members.update(
             target.household_id, target.id, now, slack_user_id=slack_id, slack_link_locked=True
         )
-    await leave_open_calls(db, guest, now, by=actor, event_ids=await invited_events(db, guest))
+    await leave_open_calls(db, guest, now, event_ids=await invited_events(db, guest))
     payload: dict[str, object] = {"guest_id": guest.id, "slack_user_id": slack_id, "override": override}
     if via is not None:
         payload["via"] = via
@@ -601,7 +607,7 @@ async def remove(db: AsyncSession, actor: Member, guest_id: int, *, now: datetim
     guest = await _guest(db, actor, guest_id)
     updated = await MemberRepository(db).update(actor.household_id, guest.id, now, active=False, join_refused=True)
     await SessionRepository(db).delete_for_member(guest.id)
-    await leave_open_calls(db, guest, now, by=actor, event_ids=await invited_events(db, guest))
+    await leave_open_calls(db, guest, now, event_ids=await invited_events(db, guest))
     await audit(db, actor.household_id, actor, "guest.removed", f"member:{guest.id}", {}, now)
     await db.commit()
     return updated
