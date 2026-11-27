@@ -12,7 +12,11 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ### Changed
 
-- **Dinnerbell deletes old notifications every night** (#340). The notification queue kept every Slack message and edit for the life of the install, about 20 MB a year, in every backup copy, and `/healthz`'s `outbox.failed` count never went down. Now, at 04:15 household time, after the backup, Dinnerbell deletes a call's sent and failed notifications 90 days after the call ended (done, abandoned, or called off), and other notifications 90 days after they were sent or failed. It keeps the posts that made each call's channel messages, so they can still be edited, and a sent request to link a Slack account, so the admins aren't asked again. `outbox.failed` now falls as old failures go. The audit log stays for good. See [What Dinnerbell deletes](docs/backup-and-upgrade.md#what-dinnerbell-deletes).
+- **Dinnerbell deletes old notifications every night** (#340). The notification queue kept every Slack message and edit for the life of the install, about 20 MB a year, in every backup copy, and `/healthz`'s `outbox.failed` count never went down. Now, at 04:15 household time, after the backup, Dinnerbell deletes a call's sent and failed notifications 90 days after the call's last change once it ended (done, abandoned, or called off), and other notifications 90 days after they were sent or failed. It keeps the posts that made each call's channel messages, about 3 per run, for good, so they can still be edited, and a sent request to link a Slack account, so the admins aren't asked again. An assistant thread under a deleted direct message, such as an old reminder, no longer knows which call it's about. `outbox.failed` now falls as old failures go. The audit log stays for good. See [What Dinnerbell deletes](docs/backup-and-upgrade.md#what-dinnerbell-deletes).
+
+### Upgrade notes
+
+- **The first night after the upgrade deletes the backlog** (#340): every notification already past 90 days, at 04:15 household time, in short batches, logged as `old notifications removed` with a count. The database file doesn't shrink, since SQLite reuses the space. The nightly and weekly backup copies, and any `pre-upgrade-*` or `pre-migrate-*` copy, still hold the deleted rows until they're pruned or you delete them.
 
 ### Fixed
 
