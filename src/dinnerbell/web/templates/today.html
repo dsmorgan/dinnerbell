@@ -62,7 +62,7 @@
 <details class="card today-action"{% if offer_error %} open{% endif %}>
   <summary><h2>Make an offer</h2><span class="small muted">Say what you're already making or getting, so others can join.</span></summary>
   {% if offer_error %}<p class="alert error" role="alert">{{ offer_error }}</p>{% endif %}
-  <p class="small muted">Others join until your spare servings are taken. If that meal's call is open already, your offer becomes a proposal on it. A cooking offer stands in for that day's call.</p>
+  <p class="small muted">Others join until your spare servings are taken. If that meal's call is open already, your offer becomes a proposal on it. A cooking offer for after that meal's call time stands in for that day's call.</p>
   <form method="post" action="/offers" class="stack">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="pair">

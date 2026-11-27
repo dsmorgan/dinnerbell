@@ -133,6 +133,13 @@ EXAMPLES: list[tuple[n.Notification, str, str | None, str | None, int | None]] =
     (n.OfferUpdated(OFFER_EVENT, OFFER, ROSTER, 4), "event:7:run2:offer_updated", "event:7:run2:call", None, None),
     (n.OfferFull(OFFER_EVENT, SAM, OFFER), "event:7:run2:offer_full", None, None, 2),
     (n.GuestInvited(EVENT, PAT, ALEX), f"event:7:run2:guest_invited:member{PAT.id}", None, None, PAT.id),
+    (
+        n.GuestInvited(EVENT, PAT, ALEX, WHEN),
+        f"event:7:run2:guest_invited:member{PAT.id}:{int(WHEN.timestamp() * 1_000_000)}",
+        None,
+        None,
+        PAT.id,
+    ),
     (n.GuestJoined(1, ALEX, PAT, "slack"), f"join:{PAT.id}:admin{ALEX.id}", None, None, ALEX.id),
     (
         n.LinkNeeded(1, ALEX, SAM, "U07X", "Sammy", "join"),

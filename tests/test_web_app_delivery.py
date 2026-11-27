@@ -380,8 +380,16 @@ async def test_a_guests_message_goes_by_the_inviters_choice(house: House, slack:
         await web_app.set_my_notify_via(db, house["Kim"], NotifyVia.WEB, now=house.clock())
     event = await a_call(house)
     decision = roles_to_choose().decision
-    pat = note.PersonInfo(999, "Pat")
+    pat = note.PersonInfo(house["Lee"].id, "Pat")  # stands for the guest: only ``via`` matters here
     async with house.sessionmaker() as db:
+        for assignment_id, role in ((1, "pickup"), (2, "order")):  # a role message goes while it's theirs
+            await db.execute(
+                text(
+                    "INSERT INTO assignment (id, household_id, event_id, member_id, role, created_at) "
+                    "VALUES (:id, :h, :e, :m, :r, '2026-10-22 20:00:00')"
+                ),
+                {"id": assignment_id, "h": house.household.id, "e": event.id, "m": pat.id, "r": role},
+            )
         for assignment_id, inviter in ((1, "Kim"), (2, "Sam")):
             via = note.PersonInfo(house[inviter].id, inviter)
             made = note.AssignmentMade(event, assignment_id, pat, (AssignmentRole.PICKUP,), decision, via=via)

@@ -29,7 +29,7 @@ from datetime import datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from dinnerbell.db.events import EventRepository
+from dinnerbell.db.events import AssignmentRepository, EventRepository
 from dinnerbell.db.outbox import OutboxEntry, OutboxRepository
 from dinnerbell.db.repositories import MemberRepository
 from dinnerbell.domain.events import EventState
@@ -39,6 +39,8 @@ from dinnerbell.domain.notifications import (
     STEP_BOUND,
     SUPERSEDED_BY_CALL_OFF,
     SUPERSEDED_BY_PROGRESS,
+    SUPERSEDED_BY_ROLE_MOVE,
+    AssignmentMade,
     BadgesEarned,
     Channel,
     ChannelUnavailable,
@@ -314,7 +316,9 @@ async def overtaken_by(db: AsyncSession, notification: Notification) -> str | No
     """Why ``notification`` is no longer worth sending, or None. A row in ``CALL_OFF_SUPERSEDES``
     is overtaken when its call was called off or has started a newer run since it was queued; a
     row in ``STEP_BOUND``, also when the call has left the states its step is in. A
-    ``CoordinatorPicked`` row, also when its member no longer coordinates. A ``BadgesEarned``
+    ``CoordinatorPicked`` row, also when its member no longer coordinates. An ``AssignmentMade``
+    row, also when its assignment is gone or its member no longer has every role it names: a
+    retry must never say "You're picking up" after "You're off it" (#331). A ``BadgesEarned``
     row is overtaken once a correction took back every badge of every member it names
     (``announcements.take_back``), as revision 0028 deletes one: members counted in
     ``more_people`` alone aren't a post. The push drainer (``services.push``) drops a direct
@@ -337,7 +341,20 @@ async def overtaken_by(db: AsyncSession, notification: Notification) -> str | No
         return SUPERSEDED_BY_CALL_OFF if event.state is EventState.CANCELLED else SUPERSEDED_BY_PROGRESS
     if isinstance(notification, CoordinatorPicked) and event.coordinator_id != notification.member.id:
         return SUPERSEDED_BY_PROGRESS  # they handed it off, said out, or were deactivated since (#179)
+    if isinstance(notification, AssignmentMade) and await _role_moved_on(db, notification):
+        return SUPERSEDED_BY_ROLE_MOVE
     return None
+
+
+async def _role_moved_on(db: AsyncSession, notification: AssignmentMade) -> bool:
+    """Whether the assignment ``notification`` is about is gone, or its member lost a role it
+    names, since it was queued: the role went to someone else, or they left the call."""
+    event = notification.event
+    assignments = await AssignmentRepository(db).for_event(event.household_id, event.id)
+    if not any(a.id == notification.assignment_id for a in assignments):
+        return True
+    theirs = {a.role for a in assignments if a.member_id == notification.member.id}
+    return not set(notification.roles) <= theirs
 
 
 async def _send(

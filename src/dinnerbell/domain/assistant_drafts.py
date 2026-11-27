@@ -337,13 +337,15 @@ class OfferOutcome(StrEnum):
     ALONE = "alone"
 
 
-def offer_outcome(call: Event | None, mode: Mode) -> OfferOutcome:
-    path = offer_path(call, mode)
+def offer_outcome(call: Event | None, mode: Mode, at: datetime, call_at: datetime) -> OfferOutcome:
+    """``at`` is the offer's time, and ``call_at`` when the slot's call opens that day: a
+    cooking offer holds the call only for a time after that (``offers.replaces_call``)."""
+    path = offer_path(call, mode, at)
     if path is OfferPath.ATTACH:
         return OfferOutcome.JOIN
     if path is OfferPath.REPLACE:
         return OfferOutcome.REPLACE
-    if call is None and mode is Mode.COOK:
+    if call is None and mode is Mode.COOK and at > call_at:
         return OfferOutcome.HOLD
     return OfferOutcome.ALONE
 

@@ -146,6 +146,7 @@ A guest is never offered coordinating, handed it, assigned it, or picked at rand
 | The coordinator says Maybe | They keep coordinating. If they're still a maybe when answers close, they're out, and they stop coordinating. |
 | The coordinator, as a late joiner, is switched off | They're out, so they stop coordinating. |
 | An admin deactivates the coordinator | Nobody coordinates their open calls. |
+| An admin deactivates a member who's in | They're out of every open call: their answer is out, their votes while voting are taken back, and any role they had is cleared, with a message to the coordinator, or each admin, as for a removed guest. Reactivating them puts none of it back. |
 | Nobody coordinates after the decision | Nobody can claim it. An admin can assign someone who's in, on the web. |
 | Someone assigned can't do it | They can't refuse in the app. They tell the coordinator, who picks someone else with **Adjust**. |
 | An admin removes a guest who had a role | The role is cleared. The coordinator gets a message with **Adjust** to pick someone who's in; with nobody coordinating, each admin gets a message that links the web. |

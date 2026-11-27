@@ -8,8 +8,8 @@ offer with no seats left, which opens again when someone drops out. Seats count 
 whoever made the offer, guests included, so "3 servings spare" means three more people.
 
 FR-5 decides what posting an offer does to that slot's call on that day (``offer_path``): an
-offer for a call that's open joins it as a pick, and a cooking offer posted before the call
-replaces the call.
+offer for a call that's open joins it as a pick, and a cooking offer posted before the call,
+for a time after the call opens, replaces the call.
 """
 
 from __future__ import annotations
@@ -54,28 +54,33 @@ class OfferPath(StrEnum):
     the offer takes its place."""
 
 
-def offer_path(call: Event | None, mode: Mode) -> OfferPath:
+def offer_path(call: Event | None, mode: Mode, at: datetime) -> OfferPath:
     """FR-5. An offer for a slot whose call is open joins that call as a pick; a cooking offer
-    posted before the call (it's scheduled, not posted) replaces it. Once a call is decided or
-    over, an offer stands on its own. With no call at all, a cooking offer still stands in for
-    it: the scheduler doesn't open a call for that slot and day while it's live
-    (``replaces_call``)."""
+    posted before the call (it's scheduled, not posted) replaces it, unless the offer's time
+    ``at`` comes before the call opens: a meal that's over by then isn't that call's (#331).
+    Once a call is decided or over, an offer stands on its own. With no call at all, a cooking
+    offer still stands in for it: the scheduler doesn't open a call for that slot and day while
+    it's live (``replaces_call``)."""
     if call is None:
         return OfferPath.NEW
     if call.state in {EventState.COLLECTING, EventState.VOTING}:
         return OfferPath.ATTACH
-    if call.state is EventState.SCHEDULED and mode is Mode.COOK:
+    if call.state is EventState.SCHEDULED and mode is Mode.COOK and at > call.opens_at:
         return OfferPath.REPLACE
     return OfferPath.NEW
 
 
-def replaces_call(offer: Event) -> bool:
-    """Whether ``offer`` keeps its slot's daily call from opening that day: a cooking offer
-    that's still on. One that was called off or ended frees the slot again."""
+def replaces_call(offer: Event, call_at: datetime) -> bool:
+    """Whether ``offer`` keeps its slot's daily call, which opens at ``call_at``, from opening
+    that day: a cooking offer that's still on, for a time after the call opens. One that was
+    called off or ended frees the slot again, and one whose time comes first, such as a 1:30 PM
+    offer filed under dinner, never held it (#331)."""
     return (
         offer.is_offer
         and offer.decided_mode is Mode.COOK
         and offer.state in {EventState.COLLECTING, EventState.DECIDED}
+        and offer.meal_time is not None
+        and offer.meal_time > call_at
     )
 
 

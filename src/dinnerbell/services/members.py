@@ -158,6 +158,9 @@ async def set_member_active(db: AsyncSession, actor: Member, member_id: int, act
         # Reactivated within 15 minutes, they still couldn't use a code made before (spec 6.15).
         await SignInCodeRepository(db).delete_for_member(target.id)
         await _stop_coordinating(db, actor, target, now)
+        # Out of every open call, as a removed guest is (#331): their answer, vote, and roles
+        # stop counting. Reactivating them puts none of it back; they answer again.
+        await guests.leave_open_calls(db, updated, now)
     action = "member.reactivated" if active else "member.deactivated"
     await audit(db, actor.household_id, actor, action, f"member:{updated.id}", {}, now)
     await db.commit()
