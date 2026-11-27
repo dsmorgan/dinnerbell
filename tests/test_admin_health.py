@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -22,7 +23,8 @@ from dinnerbell.services import admin_health, push
 from dinnerbell.services.admin_health import action_words, health_details, kind_words
 from dinnerbell.services.database import Database
 from dinnerbell.services.errors import Forbidden
-from dinnerbell.services.health import BACKUP_STALE_AFTER, HealthReport
+from dinnerbell.services.health import BACKUP_STALE_AFTER, HealthReport, OutboxHealth, PushBacklog
+from dinnerbell.web.routes import health as health_routes
 from tests.conftest import invite, page, sign_in
 from tests.support.calls import House
 from tests.support.clock import FakeClock
@@ -74,6 +76,7 @@ async def test_it_lists_failed_notifications_newest_first_with_who_and_why(house
         )
         await db.commit()
         details = await health_details(db, house["Alex"])
+    assert all(f.event is not None and f.event.id == event.id for f in details.failed)
     assert [(f.via, f.kind, f.recipient, f.reason) for f in details.failed] == [
         ("Web push", "Call opened", "Kim", "failed: 400"),
         (
@@ -291,7 +294,7 @@ def test_the_page_shows_status_failures_and_the_audit_log(admin: TestClient, mig
     assert re.search(
         r"<dt>Last backup</dt><dd><time [^>]+>.+</time>, <code>dinnerbell-\d{4}-\d{2}-\d{2}\.db</code>", status
     )
-    assert "<dt>Notifications that failed</dt><dd>0</dd>" in status
+    assert "<dt>Slack notifications that failed</dt><dd>0</dd>" in status
     assert "<dt>Version</dt>" in status
     assert "None. Every notification went out" in html
     audit = html.split('id="audit"', 1)[1]
@@ -317,24 +320,142 @@ def test_an_old_or_failing_backup_warns(admin: TestClient) -> None:
     state = admin.app.state.dinnerbell.scheduler_state  # type: ignore[attr-defined]
     clock = admin.app.state.dinnerbell.clock  # type: ignore[attr-defined]
     state.last_backup = clock() - BACKUP_STALE_AFTER - timedelta(minutes=1)
-    warning = page(admin.get("/admin/health")).split('id="backup-warning"', 1)[1].split("</p>", 1)[0]
-    assert "more than 36 hours old" in warning
+    html = page(admin.get("/admin/health"))
+    assert "more than 36 hours old" in warning(html, "backup")
+    assert "Everything is working." not in html  # /healthz says ok, but the page warns
+    assert "Something needs attention" in html
     state.last_backup, state.last_backup_file = None, None
-    warning = page(admin.get("/admin/health")).split('id="backup-warning"', 1)[1].split("</p>", 1)[0]
-    assert "no backup yet" in warning
+    assert "no backup yet" in warning(page(admin.get("/admin/health")), "backup")
     state.backup_failing = True
     html = page(admin.get("/admin/health"))
-    assert "Last night's backup failed." in html
+    assert "The last backup failed." in warning(html, "backup")
     assert "Something needs attention" in html
     state.backup_failing = False
     state.last_backup = clock()
-    assert 'id="backup-warning"' not in page(admin.get("/admin/health"))
+    html = page(admin.get("/admin/health"))
+    assert 'id="warn-' not in html
+    assert "Everything is working." in html
+
+
+def warning(html: str, cause: str) -> str:
+    return html.split(f'id="warn-{cause}"', 1)[1].split("</p>", 1)[0]
+
+
+NOW = datetime(2026, 10, 22, 18, tzinfo=UTC)
+HEALTHY = HealthReport(True, "ok", NOW, "connected", OutboxHealth(0, 0, None), None, NOW, "x.db", False, 0)
+LATE = timedelta(hours=1, minutes=5)
+DEGRADED = {
+    "scheduler": [{"scheduler": "stale"}, {"scheduler": "starting", "last_tick": None}],
+    "slack": [{"slack": "disconnected"}, {"slack": "error"}],
+    "outbox": [{"outbox": OutboxHealth(3, 0, LATE)}],
+    "push": [{"push": PushBacklog(2, LATE)}],
+    "backup": [{"backup_failing": True}],
+    "stuck_calls": [{"stuck_calls": 2}, {"stuck_calls": None}],
+}
+"""Each cause of "degraded", and the changes that set it."""
+
+
+def test_each_cause_degrades_the_report_and_stopping_is_an_error() -> None:
+    assert HEALTHY.status == "ok" and HEALTHY.causes == frozenset() and HEALTHY.healthy
+    for cause, changes in DEGRADED.items():
+        for change in changes:
+            report = replace(HEALTHY, **change)  # type: ignore[arg-type]
+            assert (report.status, report.causes) == ("degraded", {cause}), change
+    # Waiting up to the hour, or "not_configured" Slack, is fine.
+    fine = replace(HEALTHY, slack="not_configured", outbox=OutboxHealth(1, 4, timedelta(hours=1)))
+    assert fine.status == "ok"
+    assert replace(fine, push=PushBacklog(1, timedelta(hours=1))).status == "ok"
+    stopped = replace(HEALTHY, scheduler="stopped")
+    assert (stopped.status, stopped.healthy, stopped.causes) == ("error", False, {"scheduler"})
+    unreachable = replace(HEALTHY, database_ok=False, outbox=None)
+    assert (unreachable.status, unreachable.healthy) == ("error", False)
+
+
+@pytest.mark.parametrize(
+    ("cause", "change"), [(cause, change) for cause, changes in DEGRADED.items() for change in changes]
+)
+def test_each_cause_shows_a_warning(
+    admin: TestClient, monkeypatch: pytest.MonkeyPatch, cause: str, change: dict[str, object]
+) -> None:
+    """The page's "Look for the warnings below" always has one to point to."""
+    report = replace(HEALTHY, **change)  # type: ignore[arg-type]
+
+    async def checked(*_: object) -> HealthReport:
+        return report
+
+    monkeypatch.setattr(health_routes, "check_health", checked)
+    html = page(admin.get("/admin/health"))
+    assert "Something needs attention. Look for the warnings below." in html
+    assert re.findall(r'id="warn-([a-z-]+)"', html) == [cause.replace("_", "-")]
+    assert warning(html, cause.replace("_", "-")).strip()
+
+
+def test_an_error_says_why(admin: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    for change, cause in (
+        ({"scheduler": "stopped"}, "scheduler"),
+        ({"database_ok": False, "outbox": None}, "database"),
+    ):
+        report = replace(HEALTHY, **change)  # type: ignore[arg-type]
+
+        async def checked(*_: object, report: HealthReport = report) -> HealthReport:
+            return report
+
+        monkeypatch.setattr(health_routes, "check_health", checked)
+        html = page(admin.get("/admin/health"))
+        assert "answers 503" in html
+        assert cause in re.findall(r'id="warn-([a-z-]+)"', html)
+
+
+def test_a_failure_names_its_call_and_a_call_thats_gone_has_no_link(
+    admin: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gone = admin_health.FailedNotification(NOW, "Slack", "Call opened", "The channel", "x", 7, None)
+
+    async def details(*_: object) -> admin_health.HealthDetails:
+        return admin_health.HealthDetails([gone], [])
+
+    monkeypatch.setattr(health_routes, "health_details", details)
+    failed = page(admin.get("/admin/health")).split('id="failed"', 1)[1].split("</section>", 1)[0]
+    assert "for The channel · Call 7</div>" in failed
+    assert "/events/7" not in failed
 
 
 def test_the_report_knows_when_a_backup_is_stale() -> None:
-    now = datetime(2026, 10, 22, tzinfo=UTC)
-    report = HealthReport("ok", True, "ok", now, "connected", None, None, now, "x.db", False, 0)
-    assert report.healthy and not report.backup_stale(now + BACKUP_STALE_AFTER)
-    assert report.backup_stale(now + BACKUP_STALE_AFTER + timedelta(seconds=1))
-    error = HealthReport("error", False, "ok", None, "connected", None, None, None, None, False, None)
-    assert not error.healthy and error.backup_stale(now)
+    assert not HEALTHY.backup_stale(NOW + BACKUP_STALE_AFTER)
+    assert HEALTHY.backup_stale(NOW + BACKUP_STALE_AFTER + timedelta(seconds=1))
+    assert replace(HEALTHY, last_backup=None).backup_stale(NOW)
+
+
+# The outbox's failed count (/healthz) -----------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_the_failed_count_reads_the_index_and_counts_the_same(
+    house: House, database: Database, clock: FakeClock
+) -> None:
+    event = await a_call(house)
+    kim, sam = who(house, "Kim", "Sam")
+    await enqueue(house, note.ResponseReminder(event, kim), note.ResponseReminder(event, sam))
+    first, second = await outbox_ids(house)
+    sent: list[tuple[str, object]] = []
+
+    def capture(_conn: object, _cursor: object, statement: str, parameters: object, *_: object) -> None:
+        if "failed_at IS NOT NULL" in statement:
+            sent.append((statement, parameters))
+
+    async with house.sessionmaker() as db:
+        await give_up(db, first, "PermanentDeliveryError: no Slack user", clock())
+        repo = OutboxRepository(db)
+        assert await repo.claim(second, "u", now=clock(), until=clock() + timedelta(minutes=5))
+        assert await repo.delivered(second, "u", now=clock(), ref=None)
+        await db.commit()
+        sql_events.listen(database.engine.sync_engine, "before_cursor_execute", capture)
+        try:
+            assert await repo.backlog() == (0, 1)
+        finally:
+            sql_events.remove(database.engine.sync_engine, "before_cursor_execute", capture)
+        [(statement, parameters)] = sent
+        connection = await db.connection()
+        raw = await connection.exec_driver_sql(f"EXPLAIN QUERY PLAN {statement}", parameters)  # type: ignore[arg-type]
+        plan = " ".join(str(row[-1]) for row in raw)
+    assert "ix_outbox_pending" in plan and "SCAN outbox" not in plan.replace("USING COVERING INDEX", ""), plan

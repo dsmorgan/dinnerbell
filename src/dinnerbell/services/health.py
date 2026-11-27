@@ -197,8 +197,6 @@ class HealthReport:
     """What /healthz reports, and Admin > Health shows in words (#339). Both read it from
     ``check_health``, so they can't disagree."""
 
-    status: str
-    """``ok``, ``degraded`` (something needs attention), or ``error`` (/healthz answers 503)."""
     database_ok: bool
     scheduler: str
     """``SchedulerState.scheduler_status``."""
@@ -216,6 +214,36 @@ class HealthReport:
     """How many calls are stuck, or None if the check failed or is out of date."""
 
     @property
+    def causes(self) -> frozenset[str]:
+        """What makes the report "degraded": ``scheduler`` (not ticking on time), ``slack``
+        (disconnected, or a startup check failed), ``outbox`` (a notification waiting over
+        ``STALE_OUTBOX``), ``push`` (a push waiting over ``STALE_PUSH``), ``backup`` (the last
+        backup failed), and ``stuck_calls`` (a stuck call, or a check that failed or is out of
+        date). Admin > Health shows a warning for each."""
+        found = set()
+        if self.scheduler != "ok":
+            found.add("scheduler")
+        if self.slack not in {"connected", "not_configured"}:
+            found.add("slack")
+        if self.outbox is not None and (self.outbox.oldest or timedelta(0)) > STALE_OUTBOX:
+            found.add("outbox")
+        if self.push is not None and (self.push.oldest or timedelta(0)) > STALE_PUSH:
+            found.add("push")
+        if self.backup_failing:
+            found.add("backup")
+        if self.stuck_calls != 0:
+            found.add("stuck_calls")
+        return frozenset(found)
+
+    @property
+    def status(self) -> str:
+        """``error`` (/healthz answers 503) when the database is unreachable or the scheduler
+        has stopped; otherwise ``degraded`` with any of ``causes``, or ``ok``."""
+        if not self.database_ok or self.scheduler == "stopped":
+            return "error"
+        return "degraded" if self.causes else "ok"
+
+    @property
     def healthy(self) -> bool:
         return self.status != "error"
 
@@ -227,9 +255,9 @@ class HealthReport:
 async def check_health(
     sessionmaker: async_sessionmaker[AsyncSession], scheduler: SchedulerState, slack: SlackState, now: datetime
 ) -> HealthReport:
-    """Check everything /healthz reports. ``error`` when the database is unreachable or the
-    scheduler has stopped ticking, so the container health check and Uptime Kuma both catch a
-    dead scheduler.
+    """Check everything /healthz reports; ``HealthReport.status`` and ``causes`` say what's wrong.
+    ``error`` when the database is unreachable or the scheduler has stopped ticking, so the
+    container health check and Uptime Kuma both catch a dead scheduler.
 
     A notification waiting over an hour also reports "degraded": the outbox is stuck. So does a
     push waiting over an hour while the web app is on: the push services can't be reached or
@@ -247,21 +275,7 @@ async def check_health(
     current = scheduler.current_stuck(now)  # the latest tick's check, never a query here
     stuck = None if current is None else len(current)
     slack_status = await slack.status()
-    if not database_ok or scheduler_status == "stopped":
-        status = "error"
-    elif (
-        scheduler_status == "ok"
-        and slack_status in {"connected", "not_configured"}
-        and (oldest or timedelta(0)) <= STALE_OUTBOX
-        and (pushes is None or (pushes.oldest or timedelta(0)) <= STALE_PUSH)
-        and not scheduler.backup_failing
-        and stuck == 0
-    ):
-        status = "ok"
-    else:
-        status = "degraded"
     return HealthReport(
-        status=status,
         database_ok=database_ok,
         scheduler=scheduler_status,
         last_tick=scheduler.last_tick,

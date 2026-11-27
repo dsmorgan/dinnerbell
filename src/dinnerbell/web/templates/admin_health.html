@@ -7,17 +7,45 @@
 {% block content %}
 {% include "_admin_tabs.html" %}
 <h1>Health</h1>
-{% if report.status == "ok" %}
+{% set causes = report.causes %}
+{% if report.status == "ok" and not backup_stale %}
 <p class="alert ok" role="status" id="health-status">Everything is working.</p>
-{% elif report.status == "degraded" %}
-<p class="alert error" role="status" id="health-status">Something needs attention. Look for the warnings below.</p>
+{% elif report.status == "error" %}
+<p class="alert error" role="status" id="health-status">Dinnerbell is in trouble: <code>/healthz</code> answers 503, so the container restarts if it stays this way. Look for the warnings below.</p>
 {% else %}
-<p class="alert error" role="status" id="health-status">Dinnerbell is in trouble: <code>/healthz</code> answers 503, so the container restarts if it stays this way.</p>
+<p class="alert error" role="status" id="health-status">Something needs attention. Look for the warnings below.</p>
 {% endif %}
-{% if report.backup_failing %}
-<p class="alert error" role="status" id="backup-warning">Last night's backup failed. Look for <code>database backup failed</code> in the logs; a full disk is the usual cause.</p>
+{#- One warning for each of HealthReport.causes, and for a backup that's too old, so every
+    status but "ok" says why. -#}
+{% if not report.database_ok %}
+<p class="alert error" role="status" id="warn-database">Dinnerbell can't reach its database. Check the data volume's free space and permissions, and the logs.</p>
+{% endif %}
+{% if "scheduler" in causes %}
+<p class="alert error" role="status" id="warn-scheduler">
+  {%- if report.scheduler == "starting" %}The scheduler is starting. Reload this page in a minute.
+  {%- elif report.scheduler == "stale" %}The scheduler is running late{% if report.last_tick %}: it last ran {{ when(report.last_tick) }}{% endif %}. If it stays late, restart the container.
+  {%- else %}The scheduler has stopped, so calls and notifications have stopped too. Restart the container.{% endif %}</p>
+{% endif %}
+{% if "slack" in causes %}
+<p class="alert error" role="status" id="warn-slack">
+  {%- if report.slack == "error" %}Slack refused a check at startup, so Dinnerbell posts nothing. The logs say how to fix it.
+  {%- else %}Dinnerbell can't reach Slack and keeps trying. Notifications wait until it's back.{% endif %}</p>
+{% endif %}
+{% if "outbox" in causes %}
+<p class="alert error" role="status" id="warn-outbox">A notification has waited more than an hour, for {{ report.outbox.oldest|elapsed }}. Slack may be down or refusing Dinnerbell; after 24 hours, a notification fails instead of arriving late.</p>
+{% endif %}
+{% if "push" in causes %}
+<p class="alert error" role="status" id="warn-push">A push has waited more than an hour, for {{ report.push.oldest|elapsed }}. The push services can't be reached or refuse it; after 24 hours, a push closes unsent.</p>
+{% endif %}
+{% if "backup" in causes %}
+<p class="alert error" role="status" id="warn-backup">The last backup failed. Look for <code>database backup failed</code> in the logs; a full disk is the usual cause.</p>
 {% elif backup_stale %}
-<p class="alert error" role="status" id="backup-warning">{% if report.last_backup %}The newest backup is more than {{ backup_stale_hours }} hours old.{% else %}There's no backup yet.{% endif %} Dinnerbell backs up every night at 3:30 AM. Check that the container was running then, and look for <code>database backup failed</code> in the logs.</p>
+<p class="alert error" role="status" id="warn-backup">{% if report.last_backup %}The newest backup is more than {{ backup_stale_hours }} hours old.{% else %}There's no backup yet.{% endif %} Dinnerbell backs up every night at 3:30 AM. Check that the container was running then, and look for <code>database backup failed</code> in the logs.</p>
+{% endif %}
+{% if "stuck_calls" in causes %}
+<p class="alert error" role="status" id="warn-stuck-calls">
+  {%- if report.stuck_calls is none %}The check for stuck calls failed or is out of date: the scheduler's call step may have hung. If this lasts, restart the container.
+  {%- else %}{{ report.stuck_calls }} {{ "call is" if report.stuck_calls == 1 else "calls are" }} stuck. The banner at the top of this page says which.{% endif %}</p>
 {% endif %}
 <section class="card" aria-labelledby="status-heading" id="status">
   <h2 id="status-heading">Status</h2>
@@ -37,7 +65,7 @@
     <div><dt>Notifications waiting</dt><dd>
       {%- if report.outbox is none %}Unknown
       {%- else %}{{ report.outbox.waiting }}{% if report.outbox.oldest %}, the oldest for {{ report.outbox.oldest|elapsed }}{% endif %}{% endif %}</dd></div>
-    <div><dt>Notifications that failed</dt><dd>{{ "Unknown" if report.outbox is none else report.outbox.failed }}</dd></div>
+    <div><dt>Slack notifications that failed</dt><dd>{{ "Unknown" if report.outbox is none else report.outbox.failed }}</dd></div>
     {% if report.push %}
     <div><dt>Pushes waiting</dt><dd>{{ report.push.waiting }}{% if report.push.oldest %}, the oldest for {{ report.push.oldest|elapsed }}{% endif %}</dd></div>
     {% endif %}
@@ -59,7 +87,9 @@
     {% for f in failed %}
     <li>
       <div class="small muted">{{ when(f.at) }} · {{ f.via }}</div>
-      <div><strong>{{ f.kind }}</strong> for {{ f.recipient }}{% if f.event_id %} · <a href="/events/{{ f.event_id }}">Call {{ f.event_id }}</a>{% endif %}</div>
+      <div><strong>{{ f.kind }}</strong> for {{ f.recipient }}
+        {%- if f.event %} · <a href="{{ f.event.path }}">{{ f.event.slot.value|capitalize }}{{ " offer" if f.event.is_offer }}, {{ f.event.day|day }}</a>
+        {%- elif f.event_id %} · Call {{ f.event_id }}{% endif %}</div>
       <div class="small">{{ f.reason }}</div>
     </li>
     {% endfor %}

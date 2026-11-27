@@ -6,7 +6,7 @@ people."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -71,6 +71,8 @@ class FailedNotification:
     """Who it was for: a member's name, "The channel", or a placeholder."""
     reason: str
     event_id: int | None
+    event: Event | None
+    """The call it was about, if it still exists: the page names it by slot and day."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,10 +106,24 @@ async def health_details(db: AsyncSession, actor: Member) -> HealthDetails:
     outbox = await OutboxRepository(db).recent_failures(household_id, LIMIT)
     pushes = await PushRepository(db).recent_closed(household_id, LIMIT, except_reasons=ROUTINE_CLOSES)
     failed = [_from_outbox(row, names) for row in outbox] + [_from_push(row, names) for row in pushes]
-    failed.sort(key=lambda f: f.at, reverse=True)
+    failed = sorted(failed, key=lambda f: f.at, reverse=True)[:LIMIT]
     rows = await AuditRepository(db).recent(household_id, LIMIT)
-    audit = await _audit_lines(db, household_id, rows, names)
-    return HealthDetails(failed[:LIMIT], audit)
+    call_ids = {f.event_id for f in failed if f.event_id is not None} | _ids(rows, "event")
+    events = await _events(db, household_id, call_ids)
+    failed = [replace(f, event=events.get(f.event_id)) if f.event_id is not None else f for f in failed]
+    audit = await _audit_lines(db, household_id, rows, names, events)
+    return HealthDetails(failed, audit)
+
+
+async def _events(db: AsyncSession, household_id: int, event_ids: set[int]) -> dict[int, Event]:
+    """The calls that still exist, by ID: one primary-key read each, at most twice ``LIMIT``."""
+    repo = EventRepository(db)
+    found: dict[int, Event] = {}
+    for event_id in sorted(event_ids):
+        event = await repo.get(household_id, event_id)
+        if event is not None:
+            found[event_id] = event
+    return found
 
 
 def kind_words(kind: str) -> str:
@@ -137,13 +153,13 @@ def _from_outbox(row: FailedEntry, names: dict[int, str]) -> FailedNotification:
     except PayloadError:  # the reason it failed, often: the page still lists it
         recipient = "Unknown"
     reason = row.reason or "No reason recorded"
-    return FailedNotification(row.failed_at, "Slack", kind_words(row.kind), recipient, reason, row.event_id)
+    return FailedNotification(row.failed_at, "Slack", kind_words(row.kind), recipient, reason, row.event_id, None)
 
 
 def _from_push(row: ClosedPush, names: dict[int, str]) -> FailedNotification:
     reason = row.reason or "No reason recorded"
     return FailedNotification(
-        row.closed_at, "Web push", kind_words(row.kind), _name(names, row.member_id), reason, row.event_id
+        row.closed_at, "Web push", kind_words(row.kind), _name(names, row.member_id), reason, row.event_id, None
     )
 
 
@@ -157,16 +173,10 @@ def _ids(rows: list[AuditEntry], kind: str) -> set[int]:
 
 
 async def _audit_lines(
-    db: AsyncSession, household_id: int, rows: list[AuditEntry], names: dict[int, str]
+    db: AsyncSession, household_id: int, rows: list[AuditEntry], names: dict[int, str], events: dict[int, Event]
 ) -> list[AuditLine]:
     """Each row with its actor and target in words. One query for the items' and tags' names,
-    and one primary-key read per call, so the cost stays with the ``LIMIT``."""
-    events_repo = EventRepository(db)
-    events: dict[int, Event] = {}
-    for event_id in sorted(_ids(rows, "event")):
-        event = await events_repo.get(household_id, event_id)
-        if event is not None:
-            events[event_id] = event
+    so the cost stays with the ``LIMIT``."""
     catalog = await CatalogRepository(db).names(household_id, _ids(rows, "item"), _ids(rows, "tag"))
     lines = []
     for row in rows:
