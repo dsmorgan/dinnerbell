@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable
-from datetime import time
+from datetime import date, time
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Form, Query, Request
@@ -40,7 +40,14 @@ from dinnerbell.domain.events import (
     friendly,
 )
 from dinnerbell.domain.guests import GuestInput
-from dinnerbell.domain.labels import DECISION_TIME_SHIFTS, EITHER_WAY_VALUE
+from dinnerbell.domain.labels import (
+    AWAY_CLEARED,
+    DECISION_TIME_SHIFTS,
+    EITHER_WAY_VALUE,
+    OFFER_WORDS,
+    SHIFT_WORDS,
+    short_day,
+)
 from dinnerbell.domain.meals import PICK_SLOT, Slot
 from dinnerbell.domain.members import InvalidMemberInput
 from dinnerbell.domain.offers import MAX_CAPACITY
@@ -85,6 +92,56 @@ newer run. Required: every card that posts here writes it."""
 STALE = "That can't happen anymore. Reload the page to see what changed."
 RULE_ERRORS = (EventRuleViolation, InvalidResponse, BadFormValue, InvalidMemberInput, Forbidden)
 
+# What a screen reader hears after a card's action works (#336) ----------------------------------
+#
+# The card swapped in carries it as data-announce, and app.js puts it in the page's status line,
+# which is there before the swap, so it's announced once, politely. A refusal has its own alert
+# instead. Each says what changed in a few words; the card shows the rest.
+
+ANSWERED = {Status.IN.value: "You're in.", Status.MAYBE.value: "You're a maybe.", Status.OUT.value: "You're out."}
+GUEST_ANSWERED = {Status.IN.value: "The guest is in.", Status.OUT.value: "The guest is out."}
+WINDOW_CLOSED = {Window.RESPOND.value: "Answers closed.", Window.VOTE.value: "Voting closed."}
+WINDOW_CLOSES = {Window.RESPOND.value: "Answers close", Window.VOTE.value: "Voting closes"}
+SAVED = "Saved."
+
+
+def _offered(who: str, role: str, on: bool) -> str:
+    """A role offer turned on or off: "You can cook." or "You no longer offer to cook.", or the
+    same for a guest."""
+    chosen = choice(RoleOffer, role)
+    if chosen is None:
+        return SAVED
+    word = OFFER_WORDS[chosen]
+    if who == "you":
+        return f"You can {word}." if on else f"You no longer offer to {word}."
+    return f"The guest can {word}." if on else f"The guest no longer offers to {word}."
+
+
+def _away_said(back: str) -> str:
+    """Away until…: "You're away until Wed, Nov 12.", the day they're back."""
+    try:
+        return f"You're away until {short_day(date.fromisoformat(back.strip()))}."
+    except ValueError:
+        return SAVED  # the action refuses it, so this is never heard
+
+
+def _joined(guests: str) -> str:
+    """Joining an offer, or saving its guests: "You're in, with 2 guests." """
+    count = guests.strip()
+    if not count.isdigit() or int(count) == 0:
+        return ANSWERED[Status.IN.value]
+    return f"You're in, with {int(count)} guest{'' if int(count) == 1 else 's'}."
+
+
+def _moved(window: str, shift: str) -> str:
+    """A deadline moved: "Voting closes 15 minutes later.", or "Voting closed." for an admin's
+    close now."""
+    if shift == "close":
+        return WINDOW_CLOSED.get(window, SAVED)
+    if window not in WINDOW_CLOSES or shift not in SHIFT_WORDS:
+        return SAVED
+    return f"{WINDOW_CLOSES[window]} {SHIFT_WORDS[shift]}."
+
 
 def _any_time(context: AppContext) -> bool:
     """Whether a called-off call may start again at any time: on a test instance only (#60)."""
@@ -106,16 +163,18 @@ async def _card(
     came_from: str,
     error: str | None = None,
     status_code: int | None = None,
+    announce: str | None = None,
 ) -> Response:
     """The event's card for HTMX, or the event page with the error for a plain form post.
-    An error is a 409 unless ``status_code`` says otherwise."""
+    An error is a 409 unless ``status_code`` says otherwise. ``announce`` is what a screen reader
+    hears once the card is swapped in (#336), only after an action that worked."""
     view = await event_views.event_view(
         db, principal.member, event_id, now=context.clock(), any_time=_any_time(context)
     )
     status = status_code or (409 if error else 200)
     page = {"v": view, "from_page": came_from, "error": error}
     if is_htmx(request):
-        page |= await _den_update(request, principal, context, db, came_from, event_id)
+        page |= {"announce": announce} | await _den_update(request, principal, context, db, came_from, event_id)
         return await render(request, "_event.html", page, status_code=status)
     page |= {"from_page": "event"} | await _event_den(principal, context, db, event_id)
     return await render(request, "event.html", page, status_code=status)
@@ -172,7 +231,11 @@ async def _run(
     event_id: int,
     came_from: str,
     action: Action,
+    *,
+    said: str,
 ) -> Response:
+    """Run a card's action, and swap in the card: with ``said`` for a screen reader when it works
+    (#336), or with the reason it refused."""
     try:
         await action()
     except (StaleRun, WindowMoved) as exc:
@@ -186,7 +249,7 @@ async def _run(
         _refused(request, principal, friendly(exc), error, event_id=event_id)
         return await _card(request, principal, context, db, event_id, came_from=came_from, error=error)
     if is_htmx(request):
-        return await _card(request, principal, context, db, event_id, came_from=came_from)
+        return await _card(request, principal, context, db, event_id, came_from=came_from, announce=said)
     return _back(event_id, came_from)
 
 
@@ -298,7 +361,7 @@ async def respond(
             raise BadFormValue("Pick in, out, or maybe.")
         await calls.respond(db, principal.member, event_id, chosen, now=context.clock())
 
-    return await _run(request, principal, context, db, event_id, came_from, action)
+    return await _run(request, principal, context, db, event_id, came_from, action, said=ANSWERED.get(status, SAVED))
 
 
 @router.post("/events/{event_id}/offer")
@@ -318,7 +381,8 @@ async def offer(
             raise BadFormValue("Pick cooking, picking up, or ordering.")
         await calls.offer_role(db, principal.member, event_id, chosen, offered == "1", now=context.clock())
 
-    return await _run(request, principal, context, db, event_id, came_from, action)
+    said = _offered("you", role, offered == "1")
+    return await _run(request, principal, context, db, event_id, came_from, action, said=said)
 
 
 def _wall_time(value: str, message: str) -> time | None:
@@ -359,7 +423,7 @@ async def details(
         )
         await calls.save_details(db, principal.member, event_id, parsed, now=context.clock())
 
-    return await _run(request, principal, context, db, event_id, came_from, action)
+    return await _run(request, principal, context, db, event_id, came_from, action, said="Details saved.")
 
 
 # Away until… (FR-63) ----------------------------------------------------------------------------
@@ -381,7 +445,7 @@ async def away_until(
         day = iso_date(back, "Pick the day you're back.")
         await away.away_until(db, principal.member, event_id, day, now=context.clock())
 
-    return await _run(request, principal, context, db, event_id, came_from, action)
+    return await _run(request, principal, context, db, event_id, came_from, action, said=_away_said(back))
 
 
 @router.post("/events/{event_id}/back")
@@ -398,7 +462,7 @@ async def im_back(
     async def action() -> None:
         await away.back_on_call(db, principal.member, event_id, now=context.clock())
 
-    return await _run(request, principal, context, db, event_id, came_from, action)
+    return await _run(request, principal, context, db, event_id, came_from, action, said=AWAY_CLEARED)
 
 
 # Coordinating -----------------------------------------------------------------------------------
@@ -418,7 +482,7 @@ async def coordinate(
     async def action() -> None:
         await calls.claim_coordinator(db, principal.member, event_id, now=context.clock())
 
-    return await _run(request, principal, context, db, event_id, came_from, action)
+    return await _run(request, principal, context, db, event_id, came_from, action, said="You're coordinating.")
 
 
 def _member_id(value: str) -> int:
@@ -441,7 +505,7 @@ async def hand_off(
     async def action() -> None:
         await calls.hand_off(db, principal.member, event_id, _member_id(member_id), now=context.clock())
 
-    return await _run(request, principal, context, db, event_id, came_from, action)
+    return await _run(request, principal, context, db, event_id, came_from, action, said="Coordinating handed off.")
 
 
 # Proposals and votes ----------------------------------------------------------------------------
@@ -483,7 +547,8 @@ async def add_proposal(
             now=context.clock(),
         )
 
-    return await _run(request, principal, context, db, event_id, came_from, action)
+    said = "You joined late and added a proposal." if join_late == "1" else "Proposal added."
+    return await _run(request, principal, context, db, event_id, came_from, action, said=said)
 
 
 ProposalUseCase = Callable[..., Awaitable[None]]
@@ -498,11 +563,13 @@ async def _on_proposal(
     proposal_id: int,
     came_from: str,
     use_case: ProposalUseCase,
+    *,
+    said: str,
 ) -> Response:
     async def action() -> None:
         await use_case(db, principal.member, event_id, proposal_id, now=context.clock())
 
-    return await _run(request, principal, context, db, event_id, came_from, action)
+    return await _run(request, principal, context, db, event_id, came_from, action, said=said)
 
 
 @router.post("/events/{event_id}/proposals/{proposal_id}/vote")
@@ -523,7 +590,8 @@ async def vote(
         late = join_late == "1"
         await calls.vote(db, principal.member, event_id, proposal_id, join_late=late, now=context.clock())
 
-    return await _run(request, principal, context, db, event_id, came_from, action)
+    said = "You joined late and voted." if join_late == "1" else "Voted."
+    return await _run(request, principal, context, db, event_id, came_from, action, said=said)
 
 
 @router.post("/events/{event_id}/proposals/{proposal_id}/unvote")
@@ -536,7 +604,9 @@ async def unvote(
     proposal_id: RowId,
     came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
 ) -> Response:
-    return await _on_proposal(request, principal, context, db, event_id, proposal_id, came_from, calls.unvote)
+    return await _on_proposal(
+        request, principal, context, db, event_id, proposal_id, came_from, calls.unvote, said="Vote removed."
+    )
 
 
 @router.post("/events/{event_id}/proposals/{proposal_id}/lock")
@@ -550,7 +620,9 @@ async def lock(
     came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
 ) -> Response:
     """FR-15: the coordinator or an admin; the service checks which."""
-    response = await _on_proposal(request, principal, context, db, event_id, proposal_id, came_from, calls.lock)
+    response = await _on_proposal(
+        request, principal, context, db, event_id, proposal_id, came_from, calls.lock, said="Locked in."
+    )
     return await _celebrating(request, principal, db, event_id, "decided", response)
 
 
@@ -580,7 +652,7 @@ async def shuffle_picks(
     async def action() -> None:
         await coordinator.shuffle(db, principal.member, event_id, run=seen, shuffles=count, now=context.clock())
 
-    return await _run(request, principal, context, db, event_id, came_from, action)
+    return await _run(request, principal, context, db, event_id, came_from, action, said="Proposals shuffled.")
 
 
 @router.post("/events/{event_id}/proposals/{proposal_id}/break-tie")
@@ -602,7 +674,7 @@ async def break_tie(
     async def action() -> None:
         await coordinator.break_tie(db, principal.member, event_id, proposal_id, run=seen, now=context.clock())
 
-    return await _run(request, principal, context, db, event_id, came_from, action)
+    return await _run(request, principal, context, db, event_id, came_from, action, said="Tie broken.")
 
 
 @router.post("/events/{event_id}/proposals/{proposal_id}/way")
@@ -638,7 +710,8 @@ async def set_way(
             db, principal.member, event_id, proposal_id, chosen, clears=cleared, run=seen, now=context.clock()
         )
 
-    return await _run(request, principal, context, db, event_id, came_from, action)
+    said = "Way cleared." if mode == EITHER_WAY_VALUE else f"{mode.capitalize()} chosen."
+    return await _run(request, principal, context, db, event_id, came_from, action, said=said)
 
 
 @router.post("/events/{event_id}/decision-time")
@@ -664,7 +737,8 @@ async def move_decision_time(
             raise BadFormValue("Pick how to move the decision time.")
         await coordinator.move_decision_time(db, principal.member, event_id, minutes, run=seen, now=context.clock())
 
-    return await _run(request, principal, context, db, event_id, came_from, action)
+    said = _moved(Window.VOTE.value, shift)
+    return await _run(request, principal, context, db, event_id, came_from, action, said=said)
 
 
 @router.post("/events/{event_id}/roles")
@@ -706,7 +780,7 @@ async def choose_roles(
             now=context.clock(),
         )
 
-    return await _run(request, principal, context, db, event_id, came_from, action)
+    return await _run(request, principal, context, db, event_id, came_from, action, said="Roles assigned.")
 
 
 # Joining late (#76) -----------------------------------------------------------------------------
@@ -730,7 +804,7 @@ async def join_late(
     async def action() -> None:
         await calls.join_late(db, principal.member, event_id, run=seen, now=context.clock())
 
-    return await _run(request, principal, context, db, event_id, came_from, action)
+    return await _run(request, principal, context, db, event_id, came_from, action, said="You joined late.")
 
 
 @router.post("/events/{event_id}/late/{member_id}")
@@ -768,7 +842,8 @@ async def switch_late_joiner(
             now=context.clock(),
         )
 
-    return await _run(request, principal, context, db, event_id, came_from, action)
+    said = ("Taking part" if switch == "part" else "Vote counts") + (" on." if on == "1" else " off.")
+    return await _run(request, principal, context, db, event_id, came_from, action, said=said)
 
 
 # After the decision -----------------------------------------------------------------------------
@@ -790,7 +865,7 @@ async def meal_time(
             raise BadFormValue("Enter the meal time as HH:MM.")
         await calls.set_meal_time(db, principal.member, event_id, wall, now=context.clock())
 
-    return await _run(request, principal, context, db, event_id, came_from, action)
+    return await _run(request, principal, context, db, event_id, came_from, action, said="Meal time saved.")
 
 
 @router.post("/events/{event_id}/place")
@@ -828,7 +903,7 @@ async def change_place(
             now=context.clock(),
         )
 
-    return await _run(request, principal, context, db, event_id, came_from, action)
+    return await _run(request, principal, context, db, event_id, came_from, action, said="Place changed.")
 
 
 @router.post("/events/{event_id}/assignments")
@@ -851,7 +926,8 @@ async def assignment(
         who = _member_id(member_id) if member_id else None
         await calls.change_assignment(db, principal.member, event_id, chosen, who, now=context.clock())
 
-    return await _run(request, principal, context, db, event_id, came_from, action)
+    said = "Role assigned." if member_id else "Role cleared."
+    return await _run(request, principal, context, db, event_id, came_from, action, said=said)
 
 
 @router.post("/events/{event_id}/done")
@@ -866,7 +942,7 @@ async def done(
     async def action() -> None:
         await calls.mark_done(db, principal.member, event_id, now=context.clock())
 
-    response = await _run(request, principal, context, db, event_id, came_from, action)
+    response = await _run(request, principal, context, db, event_id, came_from, action, said="Marked done.")
     return await _celebrating(request, principal, db, event_id, "done", response)
 
 
@@ -908,7 +984,7 @@ async def cancel(
     async def action() -> None:
         await calls.cancel_call(db, principal.member, event_id, note=reason or None, run=seen, now=context.clock())
 
-    return await _run(request, principal, context, db, event_id, came_from, action)
+    return await _run(request, principal, context, db, event_id, came_from, action, said="Called off.")
 
 
 @router.post("/events/{event_id}/close")
@@ -932,7 +1008,8 @@ async def close(
         member = principal.member
         await calls.close_window(db, member, event_id, run=seen, expected_window=expected, now=context.clock())
 
-    return await _run(request, principal, context, db, event_id, came_from, action)
+    said = WINDOW_CLOSED.get(window, SAVED)
+    return await _run(request, principal, context, db, event_id, came_from, action, said=said)
 
 
 @router.post("/events/{event_id}/post-now")
@@ -953,7 +1030,7 @@ async def post_now(
     async def action() -> None:
         await calls.post_now(db, principal.member, event_id, run=seen, now=context.clock())
 
-    return await _run(request, principal, context, db, event_id, came_from, action)
+    return await _run(request, principal, context, db, event_id, came_from, action, said="Call posted.")
 
 
 @router.post("/events/{event_id}/restart")
@@ -976,7 +1053,7 @@ async def restart(
         label = context.settings.instance_label
         await calls.restart_call(db, principal.member, event_id, run=seen, now=context.clock(), instance_label=label)
 
-    return await _run(request, principal, context, db, event_id, came_from, action)
+    return await _run(request, principal, context, db, event_id, came_from, action, said="Call started again.")
 
 
 # Offers (FR-4, FR-5) ----------------------------------------------------------------------------
@@ -1048,7 +1125,7 @@ async def join_offer(
         member = principal.member
         await offers.join(db, member, event_id, guests=count, guest_needs=needs, run=seen, now=context.clock())
 
-    return await _run(request, principal, context, db, event_id, came_from, action)
+    return await _run(request, principal, context, db, event_id, came_from, action, said=_joined(guests))
 
 
 @router.post("/events/{event_id}/leave")
@@ -1069,7 +1146,7 @@ async def leave_offer(
     async def action() -> None:
         await offers.leave(db, principal.member, event_id, run=seen, now=context.clock())
 
-    return await _run(request, principal, context, db, event_id, came_from, action)
+    return await _run(request, principal, context, db, event_id, came_from, action, said="You're out.")
 
 
 # Guests (#38) -----------------------------------------------------------------------------------
@@ -1103,7 +1180,7 @@ async def invite_guest(
             db, principal.member, event_id, guest_id=saved, new_guest=new, run=seen, now=context.clock()
         )
 
-    return await _run(request, principal, context, db, event_id, came_from, action)
+    return await _run(request, principal, context, db, event_id, came_from, action, said="Guest invited.")
 
 
 @router.post("/events/{event_id}/guests/{guest_id}/answer")
@@ -1141,7 +1218,8 @@ async def answer_for_guest(
             now=context.clock(),
         )
 
-    return await _run(request, principal, context, db, event_id, came_from, action)
+    said = GUEST_ANSWERED.get(status, SAVED) if status else _offered("guest", role, offered == "1")
+    return await _run(request, principal, context, db, event_id, came_from, action, said=said)
 
 
 @router.post("/events/{event_id}/guests/{guest_id}/remove")
@@ -1157,7 +1235,7 @@ async def uninvite_guest(
     async def action() -> None:
         await guests.uninvite(db, principal.member, event_id, guest_id, now=context.clock())
 
-    return await _run(request, principal, context, db, event_id, came_from, action)
+    return await _run(request, principal, context, db, event_id, came_from, action, said="Guest taken off the call.")
 
 
 def _ids(values: list[str] | None) -> frozenset[int]:
@@ -1188,7 +1266,7 @@ async def move_deadline(
             db, principal.member, event_id, chosen, DEADLINE_SHIFTS[shift], now=context.clock()
         )
 
-    return await _run(request, principal, context, db, event_id, came_from, action)
+    return await _run(request, principal, context, db, event_id, came_from, action, said=_moved(window, shift))
 
 
 @router.post("/events/{event_id}/admin/rerun")
@@ -1203,7 +1281,7 @@ async def rerun(
     async def action() -> None:
         await call_admin.rerun(db, principal.member, event_id, now=context.clock())
 
-    return await _run(request, principal, context, db, event_id, came_from, action)
+    return await _run(request, principal, context, db, event_id, came_from, action, said="Call started over.")
 
 
 @router.post("/events/{event_id}/admin/place")
@@ -1241,7 +1319,7 @@ async def correct_place(
             now=context.clock(),
         )
 
-    return await _run(request, principal, context, db, event_id, came_from, action)
+    return await _run(request, principal, context, db, event_id, came_from, action, said="Place corrected.")
 
 
 @router.post("/events/{event_id}/admin/coordinator")
@@ -1258,7 +1336,8 @@ async def assign_coordinator(
         who = _member_id(member_id) if member_id else None
         await call_admin.assign_coordinator(db, principal.member, event_id, who, now=context.clock())
 
-    return await _run(request, principal, context, db, event_id, came_from, action)
+    said = "Coordinator assigned." if member_id else "Coordinator cleared."
+    return await _run(request, principal, context, db, event_id, came_from, action, said=said)
 
 
 # Discarding a call, on a test instance only (#60) ------------------------------------------------
