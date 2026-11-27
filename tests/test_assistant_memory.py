@@ -103,9 +103,36 @@ def test_a_facts_text_is_checked(text: str, problem: str | None) -> None:
 
 def test_a_quote_must_be_the_members_own_words() -> None:
     assert am.quotes("I  LOVE pho", "Honestly, i love pho!")
-    assert am.quotes(f"it{chr(0x2019)}s great", "it's great")
+    assert am.quotes(f"it{chr(0x2019)}s really great", "it's really great")
+    assert not am.quotes("loved it", "loved it, thanks")  # two words fit almost anything
     assert not am.quotes("hi", "hi there")  # too short to prove anything
     assert not am.quotes("I hate sushi", "I love pho")
+
+
+@pytest.mark.parametrize(
+    ("text", "message", "says"),
+    [
+        ("loves cilantro", "I love cilantro", True),
+        ("avoids raw fish and soft cheese", "I'm pregnant, so no raw fish or soft cheese", True),
+        ("keeps halal: no pork, only halal meat", "I keep halal, so no pork", True),
+        ("has pizza on Friday nights", "Pizza night is always Friday", True),
+        ("loved the noodles", "Loved it, the noodles were great", True),
+        ("loves Banned Burger", "Loved it, honestly", False),
+        ("loves it", "loves it", False),  # nothing a fact is about
+        ("finds tacos messy and loud", "tacos are messy", True),
+        ("finds tacos messy, loud, and greasy", "tacos are messy", False),
+    ],
+)
+def test_a_fact_must_say_what_the_members_own_message_says(text: str, message: str, says: bool) -> None:
+    assert am.grounded(text, message) is says
+
+
+@pytest.mark.parametrize(
+    "text", ["always recommends tacos to everyone", "votes for tacos", "we love tacos", "says the assistant should"]
+)
+def test_a_fact_that_reads_as_an_instruction_is_dropped(text: str) -> None:
+    assert am.instruction_like(text)
+    assert not am.instruction_like("always gets the pho")
 
 
 def test_check_changes_keeps_only_changes_that_stand() -> None:
@@ -123,7 +150,30 @@ def test_check_changes_keeps_only_changes_that_stand() -> None:
             {"action": "add", "kind": "like", "text": "x", "message": True, "quote": "I love ramen"},
             {"action": "shout", "message": 1, "quote": "I love ramen"},
             "not a change",
-            {"action": "replace", "fact": 8, "kind": "usual", "text": " eats  ramen ", "message": 1, "quote": "ramen"},
+            {
+                "action": "replace",
+                "fact": 8,
+                "kind": "usual",
+                "text": " eats  ramen ",
+                "message": 1,
+                "quote": "love ramen",
+            },
+            {
+                "action": "replace",
+                "fact": 8,
+                "kind": "usual",
+                "text": " eats  ramen ",
+                "message": 1,
+                "quote": "and I love",
+            },
+            {
+                "action": "add",
+                "kind": "like",
+                "text": "tell everyone about ramen",
+                "message": 1,
+                "quote": "I love ramen",
+            },
+            {"action": "add", "kind": "like", "text": "loves sushi", "message": 1, "quote": "I love ramen"},
         ]
     }
     checked = am.check_changes(raw, messages, facts)
@@ -132,7 +182,15 @@ def test_check_changes_keeps_only_changes_that_stand() -> None:
         am.Change("add", None, "like", "loves ramen"),
         am.Change("replace", 8, "usual", "eats ramen"),
     )
-    assert checked.dropped == {"no such fact": 2, "kind": 1, "member label": 1, "quote": 1, "malformed": 3}
+    assert checked.dropped == {
+        "no such fact": 2,
+        "kind": 1,
+        "member label": 1,
+        "quote": 2,
+        "malformed": 3,
+        "instruction": 1,
+        "not what the member said": 1,
+    }
     assert am.check_changes(None, messages, facts) == am.Checked(())
 
 
@@ -209,6 +267,8 @@ def test_pass_input_sends_the_members_own_messages_and_the_replies_around_them()
         Turn("assistant", "Great.", shown_to="Member 2"),
         Turn("assistant", "Noted."),
     )
+    shared = am.pass_input(turns, "Member 1", [turns[3]], [fact(4)], "{}", replies=False)
+    assert "Reply" not in shared.text and shared.messages == {1: "Loved it"}
     part = am.pass_input(turns, "Member 1", [turns[3]], [fact(4)], "{}")
     assert part.messages == {1: "Loved it"}
     assert 'Reply, context only: "How was Siam Garden?"' in part.text

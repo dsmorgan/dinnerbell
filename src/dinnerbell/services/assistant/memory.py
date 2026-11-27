@@ -8,15 +8,18 @@ waiting message reaches Conversation hours, once 24,000 bytes wait, or as a last
 past them (``domain.assistant_memory.due``); **Start over** rolls up first, too. A pass makes
 one model call for each member whose messages it takes, with **Admin > Assistant**'s rollup
 model. That call sends the member's facts, what their Preferences hold, and their own messages,
-with the replies around them as context only: never anyone else's messages. It's reserved and
+in a private conversation with the replies around them as context only: never anyone else's
+messages, and never a channel thread's replies, which can echo housemates' words. It's reserved and
 settled under the monthly cap like any call (``conversation.call_outside_message``), under that
 member, and it waits while what's left wouldn't also cover the smallest private message.
 
 The call runs outside any transaction. Then, under the write lock, its changes are kept only if
 the switches are still on, the member is still active, and their facts are as the call read
 them; otherwise their messages wait for the next run. ``domain.assistant_memory.check_changes``
-drops any change that doesn't quote the member's own message, names a fact that isn't theirs,
-or holds a member label or a link, so a fact lands only in its author's record.
+drops any change that doesn't quote at least three words of the member's own message, says
+what that message doesn't, reads as an instruction, names a fact that isn't theirs, or holds a
+member label or a link, so a fact lands only in its author's record and says only what its
+author said.
 """
 
 from __future__ import annotations
@@ -141,7 +144,7 @@ async def _one(
     now = assistant.clock()
     facts = await MemoryRepository(db).facts(household_id, now, member.id)
     held = json.dumps(await housemates.summary(db, member), ensure_ascii=False)
-    part = pass_input(stored.turns, author, mine, facts, held)
+    part = pass_input(stored.turns, author, mine, facts, held, replies=stored.private)
     request = rollup_request(model, part.text)
     if not await _room(db, assistant, member, zone, request):
         log.info("assistant memory waits for room under the cap", extra={"member_id": member.id})
