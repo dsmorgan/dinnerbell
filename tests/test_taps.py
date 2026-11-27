@@ -244,7 +244,7 @@ def test_a_repeat_tap_is_dropped_and_polls_share_the_cards_sync(client: TestClie
     assert '"htmx:confirm"' in script and 'elt.classList.contains("htmx-request")' in script
     assert "source: card, target: card" in script
     assert "input:not([type=hidden]):not([type=radio]):not([type=checkbox])" in script
-    assert "card.contains(focused) && (focused.matches(TYPING) || !focusByPointer)" in script
+    assert "return focused.matches(TYPING) || !focusByPointer;" in script
     assert '|| card.querySelector("details[open]") || unsavedIn(card)' in script
     assert 'querySelectorAll("textarea, select, input:not([type=hidden])")' in script
     assert '!fields[i].closest("details:not([open])")' in script  # a closed form's changes don't hold it

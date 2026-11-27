@@ -30,6 +30,7 @@ from dinnerbell.domain.events import (
     AssignmentRole,
     Details,
     EventRuleViolation,
+    EventState,
     IllegalTransition,
     InvalidResponse,
     RoleOffer,
@@ -133,14 +134,42 @@ def _joined(guests: str) -> str:
     return f"You're in, with {int(count)} guest{'' if int(count) == 1 else 's'}."
 
 
-def _moved(window: str, shift: str) -> str:
-    """A deadline moved: "Voting closes 15 minutes later.", or "Voting closed." for an admin's
-    close now."""
-    if shift == "close":
-        return WINDOW_CLOSED.get(window, SAVED)
-    if window not in WINDOW_CLOSES or shift not in SHIFT_WORDS:
-        return SAVED
-    return f"{WINDOW_CLOSES[window]} {SHIFT_WORDS[shift]}."
+Said = str | Callable[[event_views.EventView], str]
+"""The words, or how to choose them from the card as the action left it, for words that depend
+on what happened, not only on what was asked."""
+STILL_OPEN = {
+    Window.RESPOND.value: frozenset({EventState.SCHEDULED, EventState.COLLECTING}),
+    Window.VOTE.value: frozenset({EventState.SCHEDULED, EventState.COLLECTING, EventState.VOTING}),
+}
+"""The states in which each window hasn't closed yet."""
+
+
+def _moved(window: str, shift: str) -> Said:
+    """A deadline moved: "Voting closes 15 minutes later.", or "Voting closed." once the call is
+    past it: an admin's close now, or an earlier time that has already passed, which closes the
+    window at once."""
+
+    def words(view: event_views.EventView) -> str:
+        if window not in STILL_OPEN:
+            return SAVED  # the action refuses it, so this is never heard
+        if shift == "close" or view.event.state not in STILL_OPEN[window]:
+            return WINDOW_CLOSED[window]
+        if shift not in SHIFT_WORDS:
+            return SAVED
+        return f"{WINDOW_CLOSES[window]} {SHIFT_WORDS[shift]}."
+
+    return words
+
+
+def _late(joining: bool, done: str, words: str) -> Said:
+    """``done`` after joining late, such as "You joined late and voted.", only if the viewer is a
+    late joiner now; otherwise ``words``."""
+
+    def chosen(view: event_views.EventView) -> str:
+        late = joining and view.mine is not None and view.mine.late
+        return done if late else words
+
+    return chosen
 
 
 def _any_time(context: AppContext) -> bool:
@@ -163,18 +192,20 @@ async def _card(
     came_from: str,
     error: str | None = None,
     status_code: int | None = None,
-    announce: str | None = None,
+    announce: Said | None = None,
 ) -> Response:
     """The event's card for HTMX, or the event page with the error for a plain form post.
     An error is a 409 unless ``status_code`` says otherwise. ``announce`` is what a screen reader
-    hears once the card is swapped in (#336), only after an action that worked."""
+    hears once the card is swapped in (#336), only after an action that worked: the words, or how
+    to choose them from the card."""
     view = await event_views.event_view(
         db, principal.member, event_id, now=context.clock(), any_time=_any_time(context)
     )
     status = status_code or (409 if error else 200)
     page = {"v": view, "from_page": came_from, "error": error}
     if is_htmx(request):
-        page |= {"announce": announce} | await _den_update(request, principal, context, db, came_from, event_id)
+        words = announce(view) if callable(announce) else announce
+        page |= {"announce": words} | await _den_update(request, principal, context, db, came_from, event_id)
         return await render(request, "_event.html", page, status_code=status)
     page |= {"from_page": "event"} | await _event_den(principal, context, db, event_id)
     return await render(request, "event.html", page, status_code=status)
@@ -232,7 +263,7 @@ async def _run(
     came_from: str,
     action: Action,
     *,
-    said: str,
+    said: Said,
 ) -> Response:
     """Run a card's action, and swap in the card: with ``said`` for a screen reader when it works
     (#336), or with the reason it refused."""
@@ -547,7 +578,7 @@ async def add_proposal(
             now=context.clock(),
         )
 
-    said = "You joined late and added a proposal." if join_late == "1" else "Proposal added."
+    said = _late(join_late == "1", "You joined late and added a proposal.", "Proposal added.")
     return await _run(request, principal, context, db, event_id, came_from, action, said=said)
 
 
@@ -564,7 +595,7 @@ async def _on_proposal(
     came_from: str,
     use_case: ProposalUseCase,
     *,
-    said: str,
+    said: Said,
 ) -> Response:
     async def action() -> None:
         await use_case(db, principal.member, event_id, proposal_id, now=context.clock())
@@ -590,7 +621,7 @@ async def vote(
         late = join_late == "1"
         await calls.vote(db, principal.member, event_id, proposal_id, join_late=late, now=context.clock())
 
-    said = "You joined late and voted." if join_late == "1" else "Voted."
+    said = _late(join_late == "1", "You joined late and voted.", "Voted.")
     return await _run(request, principal, context, db, event_id, came_from, action, said=said)
 
 
