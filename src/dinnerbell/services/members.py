@@ -160,7 +160,7 @@ async def set_member_active(db: AsyncSession, actor: Member, member_id: int, act
         await _stop_coordinating(db, actor, target, now)
         # Out of every open call, as a removed guest is (#331): their answer, vote, and roles
         # stop counting. Reactivating them puts none of it back; they answer again.
-        await guests.leave_open_calls(db, updated, now)
+        await guests.leave_open_calls(db, updated, now, by=actor)
     action = "member.reactivated" if active else "member.deactivated"
     await audit(db, actor.household_id, actor, action, f"member:{updated.id}", {}, now)
     await db.commit()

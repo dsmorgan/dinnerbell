@@ -164,6 +164,13 @@ EXAMPLES: list[tuple[n.Notification, str, str | None, str | None, int | None]] =
         ALEX.id,
     ),
     (
+        n.RoleVacated(EVENT, ALEX, PAT, (AssignmentRole.PICKUP,), WHEN),
+        f"event:7:run2:role_vacated:member{ALEX.id}:left{PAT.id}:{int(WHEN.timestamp() * 1_000_000)}",
+        None,
+        None,
+        ALEX.id,
+    ),
+    (
         n.AssignmentMade(EVENT, 12, PAT, (AssignmentRole.PICKUP,), DECISION, via=SAM),
         f"event:7:run2:assignment_made:member{PAT.id}:12",
         None,

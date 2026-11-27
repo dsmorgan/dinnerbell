@@ -35,7 +35,7 @@
     {% set action = "reactivate" if not m.active else "deactivate" %}
     <form method="post" action="/admin/members/{{ m.id }}/{{ action }}"
           hx-post="/admin/members/{{ m.id }}/{{ action }}" hx-target="#member-{{ m.id }}" hx-swap="outerHTML"
-          {% if m.active %}hx-confirm="Deactivate {{ m.display_name }}? They'll be signed out everywhere and taken out of every open call they're in."{% endif %}>
+          {% if m.active %}hx-confirm="Deactivate {{ m.display_name }}? They'll be signed out everywhere and taken out of calls still ahead of them."{% endif %}>
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <button type="submit" class="button small {{ 'danger' if m.active else 'admin' }}">{{ key_icon() }}{{ action|capitalize }}</button>
     </form>

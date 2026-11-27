@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import logging
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -32,7 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from dinnerbell.db.events import AssignmentRepository, EventRepository
 from dinnerbell.db.outbox import OutboxEntry, OutboxRepository
 from dinnerbell.db.repositories import MemberRepository
-from dinnerbell.domain.events import EventState
+from dinnerbell.domain.events import AssignmentRole, EventState
 from dinnerbell.domain.members import Member
 from dinnerbell.domain.notifications import (
     CALL_OFF_SUPERSEDES,
@@ -218,6 +218,7 @@ async def _deliver(
         result.superseded += 1
         log.info("notification closed", extra=_about(entry, note=overtaken))
         return True
+    notification = await as_it_stands(db, notification)
     on_web_app = await _skipped(db, entry, notification, switched_off)
     if on_web_app is not None:
         await repo.delivered(entry.id, token, now=clock(), ref=None, note=SKIPPED_WEB_APP)
@@ -317,8 +318,9 @@ async def overtaken_by(db: AsyncSession, notification: Notification) -> str | No
     is overtaken when its call was called off or has started a newer run since it was queued; a
     row in ``STEP_BOUND``, also when the call has left the states its step is in. A
     ``CoordinatorPicked`` row, also when its member no longer coordinates. An ``AssignmentMade``
-    row, also when its assignment is gone or its member no longer has every role it names: a
-    retry must never say "You're picking up" after "You're off it" (#331). A ``BadgesEarned``
+    row, also when its member has none of the roles it names any more: a retry must never say
+    "You're picking up" after "You're off it" (#331). One whose member still has some of them
+    goes with only those (``as_it_stands``). A ``BadgesEarned``
     row is overtaken once a correction took back every badge of every member it names
     (``announcements.take_back``), as revision 0028 deletes one: members counted in
     ``more_people`` alone aren't a post. The push drainer (``services.push``) drops a direct
@@ -341,20 +343,28 @@ async def overtaken_by(db: AsyncSession, notification: Notification) -> str | No
         return SUPERSEDED_BY_CALL_OFF if event.state is EventState.CANCELLED else SUPERSEDED_BY_PROGRESS
     if isinstance(notification, CoordinatorPicked) and event.coordinator_id != notification.member.id:
         return SUPERSEDED_BY_PROGRESS  # they handed it off, said out, or were deactivated since (#179)
-    if isinstance(notification, AssignmentMade) and await _role_moved_on(db, notification):
+    if isinstance(notification, AssignmentMade) and notification.roles and not await _roles_held(db, notification):
         return SUPERSEDED_BY_ROLE_MOVE
     return None
 
 
-async def _role_moved_on(db: AsyncSession, notification: AssignmentMade) -> bool:
-    """Whether the assignment ``notification`` is about is gone, or its member lost a role it
-    names, since it was queued: the role went to someone else, or they left the call."""
+async def _roles_held(db: AsyncSession, notification: AssignmentMade) -> tuple[AssignmentRole, ...]:
+    """The roles ``notification`` names that its member still has, in its order."""
     event = notification.event
     assignments = await AssignmentRepository(db).for_event(event.household_id, event.id)
-    if not any(a.id == notification.assignment_id for a in assignments):
-        return True
     theirs = {a.role for a in assignments if a.member_id == notification.member.id}
-    return not set(notification.roles) <= theirs
+    return tuple(role for role in notification.roles if role in theirs)
+
+
+async def as_it_stands(db: AsyncSession, notification: Notification) -> Notification:
+    """``notification`` as it's true now, just before a drainer sends it, once ``overtaken_by``
+    let it go: an ``AssignmentMade`` names only the roles its member still has (#331), so a
+    hand-off of coordinating, or a pickup gone to someone else, still leaves them told what
+    they do. Anything else, unchanged. The push drainer (``services.push``) uses it too."""
+    if not isinstance(notification, AssignmentMade) or not notification.roles:
+        return notification
+    held = await _roles_held(db, notification)
+    return notification if held == notification.roles else replace(notification, roles=held)
 
 
 async def _send(

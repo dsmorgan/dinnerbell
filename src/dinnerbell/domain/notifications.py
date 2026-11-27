@@ -1005,17 +1005,20 @@ class RoleVacated(_Notification):
     """A guest left a decided call (#38: an admin removed them), or a member did (#331: an admin
     deactivated them), while assigned to cook, pick up, or order: one direct message to
     ``member``, the coordinator or, with none, each admin, to pick someone else. ``left`` is who
-    left; ``roles`` are the ones nobody has now."""
+    left; ``roles`` are the ones nobody has now. ``at``, when they left, keeps each leaving its
+    own row, such as a member deactivated, reactivated, and deactivated again on one run."""
 
     kind: ClassVar[str] = "role_vacated"
     event: EventInfo
     member: PersonInfo
     left: PersonInfo
     roles: tuple[AssignmentRole, ...]
+    at: datetime | None = None
 
     @property
     def idempotency_key(self) -> str:
-        return f"{self.event.key}:{self.kind}:member{self.member.id}:left{self.left.id}"
+        base = f"{self.event.key}:{self.kind}:member{self.member.id}:left{self.left.id}"
+        return base if self.at is None else f"{base}:{int(self.at.timestamp() * 1_000_000)}"
 
     @property
     def recipient_id(self) -> int | None:
@@ -1131,8 +1134,8 @@ STEP_BOUND: dict[str, frozenset[EventState]] = {
 The drainer closes them unsent, just before sending one, once the call has left those states."""
 SUPERSEDED_BY_PROGRESS = "superseded: the call moved on"
 SUPERSEDED_BY_ROLE_MOVE = "superseded: the role moved on"
-"""Why the drainer closes an ``AssignmentMade`` whose assignment is gone, or whose member lost a
-role it names, before it went (#331)."""
+"""Why a drainer closes an ``AssignmentMade`` whose member has none of the roles it names any
+more, before it went (#331)."""
 
 
 # Delivery -------------------------------------------------------------------------------------
