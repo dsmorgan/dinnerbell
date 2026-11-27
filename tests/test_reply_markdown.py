@@ -388,9 +388,17 @@ def test_a_long_last_line_still_being_written_shows_as_text() -> None:
     assert reply_blocks(line, unfinished=True) == reply_blocks(line)
 
 
-def test_a_long_last_line_gets_one_closer_and_nothing_more(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Past ``_LONG_LINE``, the tries that style the line a few more times each are skipped, so
-    a crafted line costs no more than the closers."""
+LONG_LINE_CALLS = 15
+"""The most ``inline`` calls measured for a last line past ``_LONG_LINE``: held, the line, its
+closers, the openers checked, the two spans closed together, and the render."""
+
+
+def test_a_long_last_line_is_never_cut_and_styled_a_bounded_number_of_times(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Past ``_LONG_LINE``, the cut before an opener, which styles the line several more times,
+    is skipped, so a crafted line costs no more than the closers and the two spans closed
+    together."""
     calls = []
     styled = markdown_module.inline
 
@@ -403,7 +411,26 @@ def test_a_long_last_line_gets_one_closer_and_nothing_more(monkeypatch: pytest.M
     line = ("*a _b ~~c **d " * 150)[: markdown_module.MAX_STYLED]
     assert len(line) > markdown_module._LONG_LINE
     reply_blocks(line, unfinished=True)
-    assert len(calls) <= 11  # held, the line, its closers, and the render
+    assert len(calls) <= LONG_LINE_CALLS
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "word " * 98 + "**Tacos for _everyone_ tonight** and more.",
+        "word " * 96 + "**Tacos for _everyone_ tonight** and more.",  # crosses it with both open
+        "word " * 94 + "**bold _ital and more words still being written",
+    ],
+)
+def test_a_long_last_line_still_closes_two_open_spans_together(text: str) -> None:
+    """A line past ``_LONG_LINE`` with a span open inside another shows both styled, never the
+    inner one's marker as typed, at every character."""
+    start = text.index("*")
+    for cut in range(start + 1, len(text) + 1):
+        if text[cut - 1].isspace():
+            continue
+        shown = _visible("".join(reply_blocks(text[:cut], unfinished=True)))
+        assert "_" not in shown and "*" not in shown, text[:cut][-30:]
 
 
 def test_a_last_line_is_styled_once_per_try(monkeypatch: pytest.MonkeyPatch) -> None:

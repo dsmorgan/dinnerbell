@@ -104,8 +104,8 @@ a single ``~``, as in "~20 minutes", opens nothing."""
 _SHORTEST_CLOSER = {marker: min(len(c) for c in _CLOSERS if c[0] == marker) for marker in "*_~"}
 _MARKER_RUN = re.compile(r"\*+|_+|~+")
 _LONG_LINE = 500
-"""A longer last line still being written gets one closer and nothing more (``_closed``): the
-other tries style it a few more times each, and each costs about its length."""
+"""A longer last line still being written is never cut before an opener (``_closed``): the cut
+styles it several more times, and each costs about its length."""
 
 
 def _could_close(opener: re.Match[str]) -> bool:
@@ -194,12 +194,12 @@ def _closed(line: str) -> str:
     together, innermost first. When markers still show as typed after that, the line ends
     instead before the last marker that opens a span that doesn't close, if that shows fewer
     and cuts off no code: that span shows once it closes. Markers that open nothing, as in
-    "john_doe", "2*3", or "~20", never cut it. A line longer than ``_LONG_LINE`` gets only the
-    one closer, so it costs a few times its length at most."""
+    "john_doe", "2*3", or "~20", never cut it. A line longer than ``_LONG_LINE`` is never cut,
+    which saves styling it again for the cut, so it costs a few times its length at most."""
     if len(line) > MAX_STYLED or not line:
         return line
     best, fewest = _best_closer(line)
-    if not fewest or len(line) > _LONG_LINE:
+    if not fewest:
         return best
     openers = [opener for opener in _OPENER.finditer(line) if _could_close(opener)]
     openers = openers[-_OPENERS_TRIED:][::-1]  # the last first
@@ -214,6 +214,8 @@ def _closed(line: str) -> str:
             best, fewest = candidate, left
             if not fewest:
                 return best
+    if len(line) > _LONG_LINE:
+        return best
     for opener in unclosed:
         if not _shown_as_typed(best, opener, fewest):  # the closer closed it
             continue
