@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dinnerbell.db.events import EventRepository
 from dinnerbell.db.repositories import MemberRepository, SessionRepository
 from dinnerbell.db.sign_in_codes import SignInCodeRepository
+from dinnerbell.domain.events import EventState
 from dinnerbell.domain.members import (
     Capabilities,
     Member,
@@ -160,7 +161,7 @@ async def set_member_active(db: AsyncSession, actor: Member, member_id: int, act
         await _stop_coordinating(db, actor, target, now)
         # Out of every open call, as a removed guest is (#331): their answer, vote, and roles
         # stop counting. Reactivating them puts none of it back; they answer again.
-        await guests.leave_open_calls(db, updated, now, by=actor)
+        await guests.leave_open_calls(db, updated, now)
     action = "member.reactivated" if active else "member.deactivated"
     await audit(db, actor.household_id, actor, action, f"member:{updated.id}", {}, now)
     await db.commit()
@@ -169,13 +170,17 @@ async def set_member_active(db: AsyncSession, actor: Member, member_id: int, act
 
 async def _stop_coordinating(db: AsyncSession, actor: Member, target: Member, now: datetime) -> None:
     """A deactivated member coordinates nothing (#154): every open call they coordinate has
-    nobody coordinating, so the admin's powers for that case, and **I'll coordinate**, work."""
+    nobody coordinating, so the admin's powers for that case, and **I'll coordinate**, work.
+    A decided call past its meal time keeps them: they coordinated the meal (#331)."""
     events = EventRepository(db)
     for event_id in await events.open_ids(actor.household_id):
         event = await events.get(actor.household_id, event_id)
-        if event is not None and event.coordinator_id == target.id:
-            await events.lock(actor.household_id, event_id, now)
-            await cc.release_coordinator(db, event, actor, why="deactivated", now=now)
+        if event is None or event.coordinator_id != target.id:
+            continue
+        if event.state is EventState.DECIDED and not cc.before_the_meal(event, now):
+            continue  # the meal happened: they coordinated it, and keep the credit (#154)
+        await events.lock(actor.household_id, event_id, now)
+        await cc.release_coordinator(db, event, actor, why="deactivated", now=now)
 
 
 async def set_slack_user(

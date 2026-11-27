@@ -535,11 +535,12 @@ async def test_deactivating_a_member_leaves_offers_alone(house: House) -> None:
     assert lee is not None and lee.status is Status.IN
 
 
-async def test_the_admin_who_deactivates_isnt_asked_to_pick_someone_else(house: House) -> None:
-    """With nobody coordinating, each admin is asked, but not the one who deactivated them."""
+async def test_the_only_admin_who_deactivates_a_member_hears_their_role_is_open(house: House) -> None:
+    """Deactivating happens on **Admin** > **Members**, away from the call, so the admin may not
+    know Lee had the pickup: with nobody coordinating, the only admin is asked, though they
+    deactivated Lee themselves. Someone must hear."""
     from tests.support.calls import nobody_coordinates
 
-    await house.add_member("Max", admin=True)
     event_id = await decided(house)
     await nobody_coordinates(house, event_id)
     before = len(await rows(house))
@@ -547,7 +548,45 @@ async def test_the_admin_who_deactivates_isnt_asked_to_pick_someone_else(house: 
     await deactivate(house, "Lee")
 
     vacated = [x for _, x in (await rows(house))[before:] if isinstance(x, n.RoleVacated)]
-    assert [x.member.name for x in vacated] == ["Max"]
+    assert [x.member.name for x in vacated] == ["Alex"]
+
+
+async def test_deactivating_the_coordinator_after_the_meal_keeps_their_credit(house: House) -> None:
+    """Sam coordinated the 6:30 PM dinner; at 7:00 PM an admin deactivates Sam. The call keeps
+    Sam as its coordinator, sends nothing, and Sam earns the coordinating contribution."""
+    from sqlalchemy import select as select_
+
+    from dinnerbell.db.models import ContributionRow
+    from tests.support.calls import DONE_AT, MEAL
+
+    event_id = await decided(house)
+    await house.drain(RecordingChannel())
+    before = len(await rows(house))
+    house.clock.now = MEAL + timedelta(minutes=30)
+
+    await deactivate(house, "Sam")
+
+    assert (await house.event(event_id)).coordinator_id == house["Sam"].id
+    assert [x.kind for _, x in (await rows(house))[before:]] == []
+    house.clock.now = DONE_AT
+    await house.tick()
+    async with house.sessionmaker() as db:
+        kinds = set(
+            await db.scalars(
+                select_(ContributionRow.kind).where(
+                    ContributionRow.event_id == event_id, ContributionRow.member_id == house["Sam"].id
+                )
+            )
+        )
+    assert "coordinated" in kinds
+
+
+async def test_deactivating_the_coordinator_before_the_meal_still_frees_coordinating(house: House) -> None:
+    event_id = await decided(house)
+
+    await deactivate(house, "Sam")
+
+    assert (await house.event(event_id)).coordinator_id is None
 
 
 async def home_start_buttons(house: House) -> set[str]:
