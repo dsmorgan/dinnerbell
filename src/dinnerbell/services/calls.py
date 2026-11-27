@@ -145,19 +145,20 @@ async def start_call(
     if not actor.active:
         raise EventRuleViolation("Only active members can start a call.", code="inactive")
     guest_rules.refuse_guest(actor, GuestAction.START)
-    household = await HouseholdRepository(db).get(actor.household_id)
-    if household is None:  # pragma: no cover - members cascade with their household
-        raise NotFound("No such household.")
-    today = household_today(household, now)
-    check_ad_hoc_day(day, today)
-    schedule = slot_schedule(await household_settings(db, household.id), slot)
-    opens_at = now if day == today else schedule.opens_at(day, ZoneInfo(household.timezone))
     try:
         # Under the write lock, so a cooking offer posted at the same moment (FR-5) either sees
-        # this call or keeps it from starting.
+        # this call or keeps it from starting, and the call's times use the zone and schedule
+        # as they are when it's created, even if ``set-timezone`` just changed the zone (#334).
         async with write_transaction(db):
             if expect is not None:
                 await expect()
+            household = await HouseholdRepository(db).get(actor.household_id)
+            if household is None:  # pragma: no cover - members cascade with their household
+                raise NotFound("No such household.")
+            today = household_today(household, now)
+            check_ad_hoc_day(day, today)
+            schedule = slot_schedule(await household_settings(db, household.id), slot)
+            opens_at = now if day == today else schedule.opens_at(day, ZoneInfo(household.timezone))
             event = await lifecycle.create_call(
                 db, household, slot, day, opens_at=opens_at, actor=actor, now=now, restart_any_time=restart_any_time
             )

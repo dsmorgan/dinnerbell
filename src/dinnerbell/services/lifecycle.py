@@ -212,14 +212,16 @@ async def open_due_calls(db: AsyncSession, household: Household, now: datetime) 
     yesterday's would post it only to expire it. The unique index on (household, slot, date)
     makes a double post impossible even if two ticks race.
     """
-    zone = ZoneInfo(household.timezone)
-    today = household_today(household, now)
     opened: list[Event] = []
     for slot, schedule in slot_schedules(await household_settings(db, household.id)).items():
-        opens_at = schedule.opens_at(today, zone)
         # Check and create under the write lock, so a cooking offer posted at the same moment
         # (``offers.post_offer`` takes it too) either sees the call or keeps it from opening.
         async with write_transaction(db):
+            # The zone is read under the lock too, so a call never opens on a zone that
+            # ``set-timezone`` changed since the tick began (#334).
+            household = await HouseholdRepository(db).get(household.id) or household
+            today = household_today(household, now)
+            opens_at = schedule.opens_at(today, ZoneInfo(household.timezone))
             exists = await EventRepository(db).call_for(household.id, slot, today) is not None
             # A cooking offer stands in for the call (FR-5). Called off before the response
             # deadline, it frees the slot, and the next tick posts the call after all.

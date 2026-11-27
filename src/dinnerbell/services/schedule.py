@@ -124,10 +124,11 @@ async def update_slot(
     call earlier never silently drops today's call. Turning the slot off applies today."""
     _require_member(actor)
     check_schedule(schedule)
-    household = await HouseholdRepository(db).get(actor.household_id)
-    if household is None:  # pragma: no cover - members cascade with their household
-        raise NotFound("No such household.")
     async with write_transaction(db):
+        # Under the lock, so today's call kept on the old schedule gets the zone as it is now (#334).
+        household = await HouseholdRepository(db).get(actor.household_id)
+        if household is None:  # pragma: no cover - members cascade with their household
+            raise NotFound("No such household.")
         stored = await household_settings(db, household.id)
         before = slot_schedules(stored)[slot]
         changes = slot_changes(before, schedule)

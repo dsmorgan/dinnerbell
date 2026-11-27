@@ -7,7 +7,8 @@ from __future__ import annotations
 import logging
 import sqlite3
 from collections.abc import AsyncIterator, Iterator
-from datetime import UTC, datetime, timedelta
+from contextlib import asynccontextmanager
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -21,11 +22,13 @@ from dinnerbell.config import Settings
 from dinnerbell.db.models import AuditRow, HouseholdRow
 from dinnerbell.domain.events import EventState
 from dinnerbell.domain.household import NAME_MAX_LENGTH, InvalidHouseholdInput, check_timezone, is_timezone
+from dinnerbell.domain.meals import Slot
+from dinnerbell.domain.schedule import default_settings, slot_schedule
 from dinnerbell.scheduler import runner
-from dinnerbell.services import calls, household
+from dinnerbell.services import backups, calls, household, lifecycle
 from dinnerbell.services.database import Database, open_database
 from dinnerbell.services.health import SchedulerState
-from tests.support.calls import ZONE, House, furnish, make_house
+from tests.support.calls import OPENS, ZONE, House, dinner_id, furnish, make_house
 from tests.support.clock import FakeClock
 from tests.test_reset import open_call, with_house
 
@@ -235,6 +238,93 @@ async def test_a_failed_check_is_logged(
         scheduler.shutdown(wait=False)
     assert "time zone check failed" in caplog.text
     assert job_context.zone == ZoneInfo(ZONE)
+
+
+async def test_after_a_move_west_the_next_copy_comes_within_a_day_plus_the_zones_difference(
+    house: House, job_context: runner.JobContext
+) -> None:
+    """Copies are one per date in the household's zone. Tokyo's copy for 10-23 is taken at
+    18:30 UTC on 10-22; moved to Los Angeles at 20:00 UTC, the next run, 03:30 on 10-23 there,
+    finds that date's copy and writes nothing. The next copy comes the night after: 40 hours
+    after the last, a day plus the zones' 16 hours."""
+    tokyo, los_angeles = ZoneInfo("Asia/Tokyo"), ZoneInfo("America/Los_Angeles")
+    await set_zone(house, "Asia/Tokyo")
+    job_context.zone = tokyo
+    last = datetime(2026, 10, 22, 18, 30, tzinfo=UTC)  # 03:30 on 10-23 in Tokyo
+    for at in (last - timedelta(days=1), last):
+        house.clock.now = at
+        await runner.nightly_backup(job_context)
+    assert sorted(backups.existing_backups(job_context.backup_dir)) == [date(2026, 10, 22), date(2026, 10, 23)]
+
+    house.clock.now = changed = datetime(2026, 10, 22, 20, tzinfo=UTC)
+    await set_zone(house, "America/Los_Angeles")
+    scheduler = runner.build_scheduler(job_context)
+    scheduler.start(paused=True)
+    try:
+        await runner.follow_zone(job_context, scheduler)
+        trigger = backup_job(scheduler).trigger
+    finally:
+        scheduler.shutdown(wait=False)
+    first = trigger.get_next_fire_time(None, changed)
+    second = trigger.get_next_fire_time(first, first + timedelta(seconds=1))
+    assert first.astimezone(los_angeles).date() == date(2026, 10, 23)
+    house.clock.now = first.astimezone(UTC)
+    await runner.nightly_backup(job_context)
+    assert len(backups.existing_backups(job_context.backup_dir)) == 2  # that date has its copy
+    house.clock.now = second.astimezone(UTC)
+    await runner.nightly_backup(job_context)
+    assert date(2026, 10, 24) in backups.existing_backups(job_context.backup_dir)
+    difference = tokyo.utcoffset(last) - los_angeles.utcoffset(last)
+    assert second.astimezone(UTC) - last == timedelta(days=1) + difference == timedelta(hours=40)
+
+
+# Calls read the zone under the lock ----------------------------------------------------------------
+
+
+def change_zone_before_the_lock(monkeypatch: pytest.MonkeyPatch, module: Any, house: House, zone: str) -> None:
+    """Commit ``zone`` from another session just before ``module`` takes the write lock, as
+    ``set-timezone`` could in the gap the reviewer of #381 found."""
+    real = module.write_transaction
+    done: list[bool] = []
+
+    @asynccontextmanager
+    async def racing(db: Any) -> AsyncIterator[None]:
+        if not done:
+            done.append(True)
+            await set_zone(house, zone)
+        async with real(db):
+            yield
+
+    monkeypatch.setattr(module, "write_transaction", racing)
+
+
+async def test_a_call_started_as_the_zone_changes_uses_the_new_zone(
+    house: House, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tomorrow = date(2026, 10, 23)
+    change_zone_before_the_lock(monkeypatch, calls, house, "Europe/Berlin")
+    async with house.sessionmaker() as db:
+        event = await calls.start_call(db, house["Kim"], Slot.DINNER, tomorrow, now=house.clock())
+    dinner = slot_schedule(default_settings(), Slot.DINNER)
+    assert event.state is EventState.SCHEDULED
+    assert event.opens_at == dinner.opens_at(tomorrow, ZoneInfo("Europe/Berlin"))
+    assert event.opens_at != dinner.opens_at(tomorrow, ZoneInfo(ZONE))
+
+
+async def test_the_tick_opens_no_call_on_a_zone_changed_as_it_ran(
+    house: House, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """At 20:00 UTC, dinner is due in Chicago but two hours off in Los Angeles."""
+    house.clock.now = OPENS
+    change_zone_before_the_lock(monkeypatch, lifecycle, house, "America/Los_Angeles")
+    async with house.sessionmaker() as db:
+        opened = await lifecycle.open_due_calls(db, house.household, house.clock())
+    assert opened == []
+    monkeypatch.undo()
+    house.clock.now = OPENS + timedelta(hours=2)  # dinner's time in Los Angeles
+    await house.tick()
+    event = await house.event(await dinner_id(house))
+    assert event.state is EventState.COLLECTING
 
 
 # The commands --------------------------------------------------------------------------------------

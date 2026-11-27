@@ -144,16 +144,20 @@ def _backup_trigger(zone: ZoneInfo) -> CronTrigger:
 async def follow_zone(ctx: JobContext, scheduler: AsyncIOScheduler) -> None:
     """Move the nightly backup to the household's time zone once ``dinnerbell set-timezone``
     changes it (#334), so the change takes effect within a minute, with no restart. The backup is
-    the only job that keeps a zone: everything else reads the household row each time."""
+    the only job that keeps a zone: everything else reads the household row each time.
+
+    Backups are one per date in the household's zone, so after a move west the next night's
+    date may already have its copy, taken in the old zone, and that run writes nothing. The gap
+    between two copies is then up to a day plus the difference between the zones."""
     try:
         async with ctx.sessionmaker() as db:
             household = await household_service.current_household(db)
+        if household.timezone == ctx.zone.key:
+            return
+        zone = ZoneInfo(household.timezone)
     except Exception:
         log.exception("time zone check failed")
         return
-    if household.timezone == ctx.zone.key:
-        return
-    zone = ZoneInfo(household.timezone)
     try:
         scheduler.reschedule_job("nightly_backup", trigger=_backup_trigger(zone))
     except JobLookupError:  # shutting down: stop_scheduler removed the jobs
