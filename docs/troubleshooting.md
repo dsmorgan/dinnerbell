@@ -35,7 +35,9 @@ After you fix a setting, recreate the service: `podman-compose down && podman-co
 | The log says `Slack can't find the channel` | `DINNERBELL_SLACK_CHANNEL` isn't a channel ID, or the channel is private and the app lacks `groups:read`. | Copy the ID that starts with `C` ([section 6](setup.md#6-find-the-team-id-and-channel-id)), and use a public channel. |
 | The log says `The bot isn't a member of the channel` | The bot isn't invited. | Send `/invite @Dinnerbell` in the channel. Dinnerbell notices within a minute. |
 | The log says `The channel … is archived` | The channel is archived. | Unarchive it, or set `DINNERBELL_SLACK_CHANNEL` to another channel. |
-| `/healthz` shows `outbox.failed` above 0 | Slack refused some notifications for good, such as a direct message to someone with no Slack link. | Find `notification delivery gave up` in the log, and fix the link or the channel. |
+| A notification didn't arrive, or `/healthz` shows `outbox.failed` above 0 | Slack refused it for good, such as a direct message to someone with no Slack link, or a push service refused a web push. | **Admin** > **Health** lists the newest failed notifications with who each was for and why. Fix the link or the channel; for Slack's, `notification delivery gave up` in the log has the details. |
+| You don't know whether last night's backup ran | The host was off or asleep at 03:30, the disk is full, or nothing's wrong. | **Admin** > **Health** shows the newest backup's time and file, and warns when it failed or is more than 36 hours old. See [Back up](backup-and-upgrade.md#back-up). |
+| You want to know who changed something, such as the schedule | Every admin action and schedule change writes an audit row. | **Admin** > **Health** lists the 50 newest audit rows: when, who, what, and to what. For older rows, query the `audit` table in a [backup copy](backup-and-upgrade.md#back-up). |
 | `/healthz` reports the scheduler `stale` or `stopped` after the host's clock was set back, such as by an NTP correction | The scheduler's jobs wait for the clock to reach each one's next due time, so the heartbeat, calls, and notifications stop for as long as the clock went back. | Restart the container: `podman-compose restart dinnerbell`. Calls catch up on the next tick. |
 | `/healthz` shows `stuck_calls` above 0 | A call's next step, such as closing its answers, has failed for more than an hour. A restart doesn't help. | A banner on **Admin** lists each stuck call. Call it off, or re-run a voting or decided call from its **Admin** menu. Report the `could not advance call` log line on the issue tracker. |
 | Badges show as text, and the log says `badge art not available` with `missing_scope` | The Slack app lacks `files:write`. | Paste the current manifest and reinstall the app (see [Upgrade](backup-and-upgrade.md#upgrade)). |
@@ -87,7 +89,7 @@ Then sign in. If `DINNERBELL_ADMIN_EMAIL` was mistyped, fix it too, and deactiva
 | `stuck_calls` | Calls whose next step has been due for more than an hour. Above 0, or `null` when the check failed or is out of date, reports `degraded`. |
 | `instance`, `slack_dms_dropped` | On a test instance only: its label, and the direct messages withheld from people outside the test channel. |
 
-To be alerted on `degraded`, see [Monitor it](hardening.md#monitor-it).
+**Admin** > **Health** shows the same report in words, with the newest backup's file, the failed notifications, and the audit log. To be alerted on `degraded`, see [Monitor it](hardening.md#monitor-it).
 
 ## Read the logs
 

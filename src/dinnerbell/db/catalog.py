@@ -47,6 +47,12 @@ class ItemValues:
     active: bool
 
 
+@dataclass(frozen=True, slots=True)
+class NameLookup:
+    items: dict[int, str]
+    tags: dict[int, str]
+
+
 class CatalogRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
@@ -156,6 +162,27 @@ class CatalogRepository:
             .order_by(CatalogItemRow.name_key, CatalogItemRow.id)
         )
         return list(rows)
+
+    async def names(self, household_id: int, item_ids: Iterable[int], tag_ids: Iterable[int]) -> NameLookup:
+        """The names of these items and tags, by ID, in one query each. An ID that isn't the
+        household's is left out."""
+        items = sorted(set(item_ids))
+        tags = sorted(set(tag_ids))
+        item_names: dict[int, str] = {}
+        tag_names: dict[int, str] = {}
+        if items:
+            found = await self._session.execute(
+                select(CatalogItemRow.id, CatalogItemRow.name).where(
+                    CatalogItemRow.household_id == household_id, CatalogItemRow.id.in_(items)
+                )
+            )
+            item_names = {int(i): str(n) for i, n in found}
+        if tags:
+            found = await self._session.execute(
+                select(TagRow.id, TagRow.name).where(TagRow.household_id == household_id, TagRow.id.in_(tags))
+            )
+            tag_names = {int(i): str(n) for i, n in found}
+        return NameLookup(item_names, tag_names)
 
     async def item(self, household_id: int, item_id: int) -> CatalogItem | None:
         row = await self._item_row(household_id, item_id)

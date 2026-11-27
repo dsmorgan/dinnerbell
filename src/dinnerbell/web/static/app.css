@@ -882,6 +882,10 @@ fieldset.card > .button.block { margin-bottom: 0; }
 .counts { margin: 0; display: grid; gap: 0.25rem; }
 .counts > div { display: flex; justify-content: space-between; gap: 1rem; border-bottom: 1px solid var(--hair); padding: 0.25rem 0; }
 .counts dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+/* Admin > Health (#339): its status values are words, so they wrap on a phone and keep to the right. */
+.counts.health dd { text-align: right; overflow-wrap: anywhere; }
+.log-list { list-style: none; padding: 0; margin: 0 0 0.5rem; }
+.log-list li { padding: 0.45rem 0; border-bottom: 1px solid var(--hair); overflow-wrap: anywhere; }
 
 /* Gold and Diamond sparkle: twinkling stars and a sheen that sweeps every few seconds. Without
    motion the stars sit still and the sheen is off. */

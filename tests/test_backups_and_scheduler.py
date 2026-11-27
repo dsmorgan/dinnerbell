@@ -62,10 +62,14 @@ def test_backup_prunes_by_retention(migrated: Settings) -> None:
     assert stranger.exists()
 
 
-def test_last_backup_time(tmp_path: Path) -> None:
-    assert backups.last_backup_time(tmp_path / "none") is None
+def test_newest_backup(tmp_path: Path) -> None:
+    assert backups.newest_backup(tmp_path / "none") is None
     make_backup(tmp_path, date(2026, 1, 1))
-    assert backups.last_backup_time(tmp_path) is not None
+    make_backup(tmp_path, date(2026, 1, 2))
+    newest = backups.newest_backup(tmp_path)
+    assert newest is not None
+    assert newest.name == "dinnerbell-2026-01-02.db"
+    assert newest.at.tzinfo is not None
 
 
 @pytest.fixture

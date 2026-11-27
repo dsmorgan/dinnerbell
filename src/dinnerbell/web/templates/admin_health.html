@@ -1,0 +1,92 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{% set admin_page = true %}
+{% extends "base.html" %}
+{% set tz = principal.household.timezone %}
+{% macro when(at) %}<time datetime="{{ at.isoformat() }}">{{ at|local_date(tz)|day }} at {{ at|clock(tz) }}</time>{% endmacro %}
+{% block title %}Health{% endblock %}
+{% block content %}
+{% include "_admin_tabs.html" %}
+<h1>Health</h1>
+{% if report.status == "ok" %}
+<p class="alert ok" role="status" id="health-status">Everything is working.</p>
+{% elif report.status == "degraded" %}
+<p class="alert error" role="status" id="health-status">Something needs attention. Look for the warnings below.</p>
+{% else %}
+<p class="alert error" role="status" id="health-status">Dinnerbell is in trouble: <code>/healthz</code> answers 503, so the container restarts if it stays this way.</p>
+{% endif %}
+{% if report.backup_failing %}
+<p class="alert error" role="status" id="backup-warning">Last night's backup failed. Look for <code>database backup failed</code> in the logs; a full disk is the usual cause.</p>
+{% elif backup_stale %}
+<p class="alert error" role="status" id="backup-warning">{% if report.last_backup %}The newest backup is more than {{ backup_stale_hours }} hours old.{% else %}There's no backup yet.{% endif %} Dinnerbell backs up every night at 3:30 AM. Check that the container was running then, and look for <code>database backup failed</code> in the logs.</p>
+{% endif %}
+<section class="card" aria-labelledby="status-heading" id="status">
+  <h2 id="status-heading">Status</h2>
+  <dl class="counts health">
+    <div><dt>Scheduler</dt><dd>
+      {%- if report.scheduler == "ok" %}Running
+      {%- elif report.scheduler == "stale" %}Running late
+      {%- elif report.scheduler == "stopped" %}Stopped
+      {%- else %}Starting{% endif %}
+      {%- if report.last_tick %}, last ran {{ when(report.last_tick) }}{% endif %}</dd></div>
+    <div><dt>Database</dt><dd>{{ "Reachable" if report.database_ok else "Unreachable" }}</dd></div>
+    <div><dt>Slack</dt><dd>
+      {%- if report.slack == "connected" %}Connected
+      {%- elif report.slack == "disconnected" %}Disconnected, and retrying
+      {%- elif report.slack == "error" %}A startup check failed; the logs say how to fix it
+      {%- else %}Not set up{% endif %}</dd></div>
+    <div><dt>Notifications waiting</dt><dd>
+      {%- if report.outbox is none %}Unknown
+      {%- else %}{{ report.outbox.waiting }}{% if report.outbox.oldest %}, the oldest for {{ report.outbox.oldest|elapsed }}{% endif %}{% endif %}</dd></div>
+    <div><dt>Notifications that failed</dt><dd>{{ "Unknown" if report.outbox is none else report.outbox.failed }}</dd></div>
+    {% if report.push %}
+    <div><dt>Pushes waiting</dt><dd>{{ report.push.waiting }}{% if report.push.oldest %}, the oldest for {{ report.push.oldest|elapsed }}{% endif %}</dd></div>
+    {% endif %}
+    <div><dt>Last backup</dt><dd>
+      {%- if report.last_backup %}{{ when(report.last_backup) }}{% if report.last_backup_file %}, <code>{{ report.last_backup_file }}</code>{% endif %}
+      {%- else %}None yet{% endif %}</dd></div>
+    <div><dt>Stuck calls</dt><dd>{{ "Unknown: the check is out of date" if report.stuck_calls is none else report.stuck_calls }}</dd></div>
+    {% if dms_dropped is not none %}
+    <div><dt>Direct messages withheld</dt><dd>{{ dms_dropped }}</dd></div>
+    {% endif %}
+    <div><dt>Version</dt><dd>{{ version }}</dd></div>
+  </dl>
+  <p class="small muted">The same as <a href="/healthz"><code>/healthz</code></a>, which a monitor can check. This page doesn't update by itself: reload it to check again.</p>
+</section>
+<section class="card" aria-labelledby="failed-heading" id="failed">
+  <h2 id="failed-heading">Failed notifications</h2>
+  {% if failed %}
+  <ul class="log-list">
+    {% for f in failed %}
+    <li>
+      <div class="small muted">{{ when(f.at) }} · {{ f.via }}</div>
+      <div><strong>{{ f.kind }}</strong> for {{ f.recipient }}{% if f.event_id %} · <a href="/events/{{ f.event_id }}">Call {{ f.event_id }}</a>{% endif %}</div>
+      <div class="small">{{ f.reason }}</div>
+    </li>
+    {% endfor %}
+  </ul>
+  <p class="small muted">The newest {{ failed|length }}, newest first. A notification that waits more than 24 hours fails instead of arriving late. Failed pushes stay listed for a week.</p>
+  {% else %}
+  <p class="small muted">None. Every notification went out, or is still waiting.</p>
+  {% endif %}
+</section>
+<section class="card" aria-labelledby="audit-heading" id="audit">
+  <h2 id="audit-heading">Audit log</h2>
+  {% if audit %}
+  <ul class="log-list">
+    {% for a in audit %}
+    <li>
+      <div class="small muted">{{ when(a.at) }} · {{ a.who }}</div>
+      <div><strong>{{ a.words }}</strong>
+        {%- if a.event %}: <a href="{{ a.event.path }}">{{ a.event.slot.value|capitalize }}{{ " offer" if a.event.is_offer }}, {{ a.event.day|day }}</a>
+        {%- elif a.target and a.target_path %}: <a href="{{ a.target_path }}">{{ a.target }}</a>
+        {%- elif a.target %}: {{ a.target }}{% endif %}</div>
+      <div class="small muted"><code>{{ a.action }}</code></div>
+    </li>
+    {% endfor %}
+  </ul>
+  <p class="small muted">The newest {{ audit|length }} changes, newest first. "Dinnerbell" is the scheduler or the app itself; "The host" is a command run on the server.</p>
+  {% else %}
+  <p class="small muted">Nothing yet.</p>
+  {% endif %}
+</section>
+{% endblock %}

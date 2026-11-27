@@ -6,7 +6,7 @@ If you keep secrets in files, add `-f compose.yaml -f compose.secrets.yaml` to e
 
 ## Back up
 
-Every night at 03:30 household time, Dinnerbell backs up its database to `/data/backups/dinnerbell-YYYY-MM-DD.db`, and at start if the newest backup is more than a day old. If the host sleeps through 03:30, or the clocks skip it, Dinnerbell backs up as soon as it can. It checks each copy with SQLite's `quick_check` and retries once. If both tries fail, it logs `database backup failed its check`, and `/healthz` reports `"backup": {"failing": true}` until a backup succeeds.
+Every night at 03:30 household time, Dinnerbell backs up its database to `/data/backups/dinnerbell-YYYY-MM-DD.db`, and at start if the newest backup is more than a day old. If the host sleeps through 03:30, or the clocks skip it, Dinnerbell backs up as soon as it can. It checks each copy with SQLite's `quick_check` and retries once. If both tries fail, it logs `database backup failed its check`, and `/healthz` reports `"backup": {"failing": true}` until a backup succeeds. **Admin** > **Health** shows the newest backup's time and file, and warns when it failed or is more than 36 hours old.
 
 Dinnerbell also takes a one-off copy before anything hard to undo, named for what it came before, with the UTC time:
 

@@ -64,12 +64,21 @@ def existing_migration_backups(backup_dir: Path) -> dict[str, str]:
     return found
 
 
-def last_backup_time(backup_dir: Path) -> datetime | None:
+@dataclass(frozen=True, slots=True)
+class NewestBackup:
+    at: datetime
+    """When it was written: the file's modification time."""
+    name: str
+    """Its file name in the backups directory, such as ``dinnerbell-2026-10-22.db``."""
+
+
+def newest_backup(backup_dir: Path) -> NewestBackup | None:
+    """The newest nightly backup, or None if there's none."""
     backups = existing_backups(backup_dir)
     if not backups:
         return None
     newest = backups[max(backups)]
-    return datetime.fromtimestamp(newest.stat().st_mtime, UTC)
+    return NewestBackup(datetime.fromtimestamp(newest.stat().st_mtime, UTC), newest.name)
 
 
 def run_backup(database_path: Path, backup_dir: Path, today: date, *, now: datetime) -> BackupResult:

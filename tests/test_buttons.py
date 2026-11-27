@@ -311,6 +311,7 @@ def test_the_pages_only_admins_see_use_the_admin_style(admin: TestClient, voting
         "/admin/badges",
         "/admin/assistant",
         "/admin/web-app",
+        "/admin/health",
     ):
         html = page(admin.get(path))
         assert ADMIN_MAIN in html, path
@@ -403,6 +404,7 @@ def walk_every_page(
         "/admin/badges",
         "/admin/assistant",
         "/admin/web-app",
+        "/admin/health",
         "/catalog",
         "/catalog/new",
         "/catalog/items/1",

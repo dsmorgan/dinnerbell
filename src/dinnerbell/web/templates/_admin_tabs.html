@@ -5,6 +5,7 @@
   <a href="/admin/schedule"{% if path.startswith("/admin/schedule") %} aria-current="page"{% endif %}>Ranking</a>
   <a href="/admin/badges"{% if path.startswith("/admin/badges") %} aria-current="page"{% endif %}>Badges</a>
   <a href="/admin/web-app"{% if path.startswith("/admin/web-app") %} aria-current="page"{% endif %}>Web app</a>
+  <a href="/admin/health"{% if path.startswith("/admin/health") %} aria-current="page"{% endif %}>Health</a>
   {% if assistant_admin %}<a href="/admin/assistant"{% if path.startswith("/admin/assistant") %} aria-current="page"{% endif %}>Assistant</a>{% endif %}
 </nav>
 {% if stuck_calls %}
