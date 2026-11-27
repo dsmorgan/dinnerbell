@@ -502,6 +502,10 @@ class Turn:
     pending: bool = False
     """For a member's message written while **Memory** was on (#367), whether it still waits for
     the rollup. A message written while it was off never does."""
+    tries: int = 0
+    """For a waiting message, how many rollups failed on it (#367): after 3, it stops waiting."""
+    retry_at: datetime | None = None
+    """For a waiting message a rollup failed on, the earliest the next one may try it."""
 
     def to_json(self) -> dict[str, Any]:
         found: dict[str, Any] = {"role": self.role, "text": self.text}
@@ -509,6 +513,8 @@ class Turn:
         found |= {"record": self.record} if self.record is not None else {}
         found |= {"at": self.at.isoformat()} if self.at is not None else {}
         found |= {"pending": True} if self.pending else {}
+        found |= {"tries": self.tries} if self.tries else {}
+        found |= {"retry_at": self.retry_at.isoformat()} if self.retry_at is not None else {}
         return found | ({"shown_to": self.shown_to} if self.shown_to is not None else {})
 
     @classmethod
@@ -527,11 +533,17 @@ class Turn:
             record if role == DRAFT and isinstance(record, int) and not isinstance(record, bool) else None,
             _when(raw.get("at")) if role == USER else None,
             role == USER and raw.get("pending") is True,
+            _count(raw.get("tries")) if role == USER else 0,
+            _when(raw.get("retry_at")) if role == USER else None,
         )
 
     @property
     def size(self) -> int:
         return len(self.text.encode()) + len((self.author or "").encode())
+
+
+def _count(raw: object) -> int:
+    return raw if isinstance(raw, int) and not isinstance(raw, bool) and 0 <= raw <= 100 else 0
 
 
 def _when(raw: object) -> datetime | None:

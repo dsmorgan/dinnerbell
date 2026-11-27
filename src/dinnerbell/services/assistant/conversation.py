@@ -31,7 +31,7 @@ import json
 import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -63,7 +63,7 @@ from dinnerbell.domain.assistant import (
     web_key,
 )
 from dinnerbell.domain.assistant_drafts import MAX_OPEN_DRAFTS
-from dinnerbell.domain.assistant_memory import MAX_BLOCK_BYTES, Fact, cut_waiting, memory_block
+from dinnerbell.domain.assistant_memory import Fact, cut_waiting, full_block, memory_block
 from dinnerbell.domain.members import Member
 from dinnerbell.services.assistant import direct
 from dinnerbell.services.assistant.acting import ToolRefusal
@@ -86,6 +86,8 @@ MAX_MODEL_CALLS = 6
 MAX_OUTPUT_TOKENS = 6_000
 """Each call's ``max_tokens``, thinking included. It bounds the reservation's output."""
 MAX_MESSAGE_CHARS = 4_000
+SOME_DAY = datetime(2026, 11, 27, tzinfo=UTC)
+"""Any day: what ``least_call_micros``'s memory block says its facts were written, for its size."""
 EFFORT = "medium"
 MESSAGE_SECONDS = 100.0
 """The most one message runs, its model calls, tools, and menu links together: under the
@@ -300,9 +302,10 @@ def least_call_micros(model: str, *, private: bool, members: Sequence[Member], m
     private conversation, or a channel thread, offers, by ``_call``'s own reservation. A cap below
     it can't answer any such message (``CAP_BELOW_ONE_CALL``). A conversation's roster is never
     shorter: it has the same names, and labels at least as high. With ``memory`` (#367), the
-    message carries a full memory block too, as one may, with the Memory prompt and tools."""
+    message carries the largest memory block one can (``full_block``), with the Memory prompt
+    and tools."""
     roster = roster_of(with_roster(Pseudonyms(), members), members)
-    block = "x" * MAX_BLOCK_BYTES if memory else ""
+    block = full_block(SOME_DAY) if memory else ""
     request = build_request(
         model,
         tools_for(private, memory=memory),

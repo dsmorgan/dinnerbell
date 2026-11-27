@@ -916,7 +916,7 @@ class AssistantMemoryFactRow(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     household_id: Mapped[int] = mapped_column(ForeignKey("household.id", ondelete="CASCADE"))
-    member_id: Mapped[int] = mapped_column(ForeignKey("member.id", ondelete="CASCADE"))
+    member_id: Mapped[int] = mapped_column(ForeignKey("member.id", ondelete="CASCADE"), index=True)
     kind: Mapped[str] = mapped_column(String(16))
     text: Mapped[str] = mapped_column(String(160))
     source_key: Mapped[str] = mapped_column(String(80))

@@ -16,12 +16,21 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Any
 
-from dinnerbell.domain.assistant import ASSISTANT, USER, Conversation, Turn, turns_for
+from dinnerbell.domain.assistant import (
+    ASSISTANT,
+    MAX_HISTORY_BYTES,
+    MAX_STORED_BYTES,
+    USER,
+    Conversation,
+    Turn,
+    turns_for,
+)
 
 LIKE, DISLIKE, USUAL, EXPERIENCE, BELIEF, ROUTINE = "like", "dislike", "usual", "experience", "belief", "routine"
 KINDS = (LIKE, DISLIKE, USUAL, EXPERIENCE, BELIEF, ROUTINE)
@@ -41,6 +50,12 @@ MAX_BLOCK_BYTES = 16_000
 MIN_QUOTE_CHARS = 3
 MIN_QUOTE_WORDS = 3
 """A quote shorter than this proves too little: "loved it" fits almost any message."""
+MAX_ADDS_PER_PASS = 5
+"""The most facts one pass adds, so one pass can't push out every older fact, such as "keeps halal"."""
+MAX_TRIES = 3
+"""How many failed rollups a waiting message gets before it stops waiting."""
+RETRY_AFTER = timedelta(minutes=10)
+"""How long after a failed rollup the next may try, doubled after each failure."""
 REMOVE, ADD, REPLACE = "remove", "add", "replace"
 ACTIONS = (ADD, REPLACE, REMOVE)
 
@@ -68,27 +83,53 @@ def expiry(kind: str, now: datetime) -> datetime | None:
 
 # What a fact's text may hold -----------------------------------------------------------------------
 
-_LABELISH = re.compile(r"\bmember\s*#?\s*\d", re.IGNORECASE)
-_LINK = re.compile(r"://|\bwww\.|@|\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}\b", re.IGNORECASE)
-_MARKUP = re.compile(r"[<>\x00-\x1f\x7f]")
+_LABELISH = re.compile(r"\bmembers?\b", re.IGNORECASE)
+"""A fact is about its own member, so it never needs the word: "Member 2", "member two"."""
+_LINK = re.compile(r"://|\bwww\.|@|\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}\b|\b[a-z][a-z0-9+.-]*:\S", re.IGNORECASE)
+_DOTS = str.maketrans({0x3002: ".", 0xFF0E: ".", 0xFF61: ".", 0x2024: ".", 0xFE52: "."})
+_MARKUP = re.compile(r"[<>\[\]{}*_`#|\\~\x00-\x1f\x7f]")
+_SCRIPTS = {"LATIN", "CYRILLIC", "GREEK", "ARMENIAN", "HEBREW", "ARABIC", "CHEROKEE", "COPTIC"}
 
 
 def clean(text: str) -> str:
-    """``text`` on one line, with runs of spaces as one."""
-    return " ".join(text.split())
+    """``text`` in Unicode NFKC form (so fullwidth letters and digits read as the plain ones), on
+    one line, with runs of spaces as one."""
+    return " ".join(unicodedata.normalize("NFKC", text).split())
+
+
+def _script(char: str) -> str | None:
+    first = unicodedata.name(char, "").split(" ", 1)[0]
+    return first if first in _SCRIPTS else None
+
+
+def _mixes_scripts(text: str) -> bool:
+    """Whether any word mixes letters of two scripts, as a Cyrillic letter that looks like "e"
+    does inside "everyone"."""
+    for word in re.findall(r"\w+", text):
+        scripts = {found for char in word if char.isalpha() and (found := _script(char)) is not None}
+        if len(scripts) > 1:
+            return True
+    return False
 
 
 def text_problem(text: str) -> str | None:
-    """Why a fact's text can't be kept, or None: empty, too long, a member label (which would
-    mean someone else in another conversation, since labels are per conversation), a link, an
-    email address, or markup or control characters that could break out of the request's block."""
+    """Why a fact's text, ``clean`` already, can't be kept, or None: empty, too long, a format or
+    private-use character (zero-width, bidi), a word that mixes scripts, the word "member" (a
+    label would mean someone else in another conversation, since labels are per conversation), a
+    link or scheme, an email address, or markup or control characters that could break out of
+    the request's block or style a reply. The checks read the text as ``clean`` leaves it, so a
+    fullwidth or compatibility form reads as the plain one."""
     if not text:
         return "empty"
     if len(text) > MAX_FACT_CHARS:
         return "too long"
-    if _LABELISH.search(text):
+    if any(unicodedata.category(char) in ("Cf", "Co", "Cs", "Cn") for char in text):
+        return "hidden character"
+    if _mixes_scripts(text):
+        return "mixed scripts"
+    if _LABELISH.search(skeleton(text)):
         return "member label"
-    if _LINK.search(text):
+    if _LINK.search(skeleton(text.translate(_DOTS))):
         return "link"
     if _MARKUP.search(text):
         return "markup"
@@ -100,7 +141,7 @@ _STRAIGHT = str.maketrans({0x2018: "'", 0x2019: "'", 0x201C: '"', 0x201D: '"'})
 
 def _folded(text: str) -> str:
     """For the quote check: case, spacing, and curly quotes don't matter."""
-    straight = text.translate(_STRAIGHT)
+    straight = "".join(c for c in clean(text) if unicodedata.category(c) != "Cf").translate(_STRAIGHT)
     return clean(straight).casefold()
 
 
@@ -111,7 +152,36 @@ def quotes(quote: str, message: str) -> bool:
     return len(wanted) >= MIN_QUOTE_CHARS and len(wanted.split()) >= MIN_QUOTE_WORDS and wanted in _folded(message)
 
 
-_WORD = re.compile(r"[a-z0-9]+(?:'[a-z]+)?")
+_WORD = re.compile(r"[^\W_]+(?:'[^\W_]+)?")
+"""A word: letters and digits of any script, so a fact's words in Cyrillic or Greek count too."""
+_LOOKALIKES = {
+    "a": "\u0430\u03b1\u0251",
+    "b": "\u0432\u03b2",
+    "c": "\u0441\u03f2\u03c2",
+    "d": "\u0501",
+    "e": "\u0435\u0451\u03b5",
+    "h": "\u043d\u04bb",
+    "i": "\u0456\u0457\u03b9\u0131",
+    "j": "\u0458\u03f3",
+    "k": "\u043a\u03ba",
+    "l": "\u04cf",
+    "m": "\u043c",
+    "n": "\u043f\u03b7\u0578",
+    "o": "\u043e\u03bf\u0585",
+    "p": "\u0440\u03c1",
+    "q": "\u051b",
+    "r": "\u0433",
+    "s": "\u0455",
+    "t": "\u0442\u03c4",
+    "u": "\u03c5\u03bc\u057d",
+    "v": "\u0475\u03bd",
+    "w": "\u051d\u03c9",
+    "x": "\u0445\u03c7",
+    "y": "\u0443\u03b3",
+}
+_SKELETON = str.maketrans({char: latin for latin, chars in _LOOKALIKES.items() for char in chars})
+"""Common Cyrillic, Greek, and Armenian letters that look like Latin ones, folded to those, so
+a word spelled all in lookalikes still reads as the word it imitates."""
 _LIGHT_WORDS = """a an the and or but of to in on at for with without from by about as than then is are was were be been
     being it its it's this that these those my me i i'm im he she they them their his her you your no not don't
     doesn't dont doesnt can't cant won't isn't never only just very really so too also more most less much any some
@@ -130,6 +200,12 @@ _INSTRUCTION_WORDS = """everyone everybody anyone anybody others we us our recom
 INSTRUCTION_WORDS = frozenset(_INSTRUCTION_WORDS.split())
 """Words that make a fact an instruction or a claim about others, never a member's own taste:
 "always recommend the burger place to everyone". Code drops them; the prompt asks for the same."""
+_OTHERS_WORDS = """household family families kids kid children child wife husband partner spouse roommate
+    roommates housemate housemates mom dad mother father son daughter brother sister boyfriend girlfriend"""
+OTHERS_WORDS = frozenset(_OTHERS_WORDS.split())
+"""Words that make a fact about someone else, or the house: "my wife hates cilantro", "the
+household only eats pizza". Code drops them; a name or nickname ("Theo hates sushi") is left to
+the prompt, since code can't tell a name from a food."""
 
 
 def _stem(word: str) -> str:
@@ -143,20 +219,33 @@ def _words(text: str) -> list[str]:
     return [w.removesuffix("'s") for w in _WORD.findall(_folded(text))]
 
 
+def skeleton(text: str) -> str:
+    """``text`` folded for the word lists and the label and link checks: as ``_folded``, with
+    each lookalike letter as the Latin one it imitates (``_LOOKALIKES``)."""
+    return _folded(text).translate(_SKELETON)
+
+
 def grounded(text: str, message: str) -> bool:
     """Whether a fact's ``text`` says what the member's own ``message`` says: at least one of its
-    content words (``_LIGHT`` aside), and more than half of them, appear in the message, apart
-    from case and endings. So a fact can't borrow its substance from a reply, a catalog item's name, or
-    an instruction while citing a harmless quote."""
-    content = [_stem(w) for w in _words(text) if w not in _LIGHT]
+    distinct content words (``_LIGHT`` aside), and more than half of them, appear in the message,
+    apart from case and endings, so repeating a word the member wrote can't carry others. So a
+    fact can't borrow its substance from a reply, a catalog item's name, or an instruction while
+    citing a harmless quote."""
+    content = {_stem(w) for w in _words(text) if w not in _LIGHT}
     said = {_stem(w) for w in _words(message)}
-    found = sum(1 for w in content if w in said)
-    return bool(content) and found * 2 > len(content)
+    return bool(content) and len(content & said) * 2 > len(content)
+
+
+def about_others(text: str) -> bool:
+    """Whether a fact's text names someone else or the house (``OTHERS_WORDS``), even spelled in
+    lookalike letters."""
+    return any(w in OTHERS_WORDS for w in _words(skeleton(text)))
 
 
 def instruction_like(text: str) -> bool:
-    """Whether a fact's text reads as an instruction or a claim about others (``INSTRUCTION_WORDS``)."""
-    return any(w in INSTRUCTION_WORDS for w in _words(text))
+    """Whether a fact's text reads as an instruction or a claim about others
+    (``INSTRUCTION_WORDS``), even spelled in lookalike letters."""
+    return any(w in INSTRUCTION_WORDS for w in _words(skeleton(text)))
 
 
 # Changes ---------------------------------------------------------------------------------------------
@@ -187,7 +276,7 @@ def check_changes(raw: object, messages: Mapping[int, str], facts: Sequence[Fact
     quote its words; a replace or remove must name one of ``facts``; an add or replace needs a
     kind and a text ``text_problem`` allows, that doesn't read as an instruction, and whose
     content the cited message itself says (``grounded``). A fact changed twice keeps the first
-    change."""
+    change, and a pass adds at most ``MAX_ADDS_PER_PASS`` facts."""
     items = raw.get("changes") if isinstance(raw, Mapping) else None
     kept: list[Change] = []
     dropped: dict[str, int] = {}
@@ -224,10 +313,15 @@ def check_changes(raw: object, messages: Mapping[int, str], facts: Sequence[Fact
         problem = text_problem(text)
         if problem is None and instruction_like(text):
             problem = "instruction"
+        if problem is None and about_others(text):
+            problem = "about others"
         if problem is None and not grounded(text, messages[message]):
             problem = "not what the member said"
         if problem is not None:
             drop(problem)
+            continue
+        if action == ADD and sum(1 for c in kept if c.action == ADD) >= MAX_ADDS_PER_PASS:
+            drop("too many adds")
             continue
         kept.append(Change(str(action), fact_id if action == REPLACE else None, str(kind), text))
     return Checked(tuple(kept), dropped)
@@ -247,9 +341,14 @@ class Plan:
     removed: frozenset[int]
 
 
+_KEEP_LONGEST = {EXPERIENCE: 0, BELIEF: 2}
+"""Which kinds go first past ``MAX_FACTS``: experiences, then the rest, beliefs last."""
+
+
 def plan(facts: Sequence[Fact], changes: Iterable[Change], now: datetime) -> Plan:
     """Apply ``changes`` to ``facts`` and keep the record within ``MAX_FACTS``: past the limit,
-    the oldest experience goes first, then the oldest of the rest, by when each was written. An
+    the oldest experience goes first, then the oldest taste, usual, or routine, and a belief
+    such as "keeps halal" only last, by when each was written. An
     add whose text the member's record already holds is dropped. New and replaced facts count as
     written ``now``."""
     removed = {c.fact_id for c in changes if c.action == REMOVE and c.fact_id is not None}
@@ -271,7 +370,7 @@ def plan(facts: Sequence[Fact], changes: Iterable[Change], now: datetime) -> Pla
     remaining += [(kind, now, None, n) for n, (kind, _) in enumerate(added)]
     extra = len(remaining) - MAX_FACTS
     if extra > 0:
-        order = sorted(remaining, key=lambda r: (r[0] != EXPERIENCE, r[1], r[2] is None, r[2] or 0, r[3]))
+        order = sorted(remaining, key=lambda r: (_KEEP_LONGEST.get(r[0], 1), r[1], r[2] is None, r[2] or 0, r[3]))
         for _, _, fact_id, place in order[:extra]:
             if fact_id is None:
                 added[place] = ("", "")
@@ -412,26 +511,45 @@ def waiting(conversation: Conversation) -> tuple[Turn, ...]:
     return tuple(turn for turn in conversation.turns if turn.role == USER and turn.pending)
 
 
+def ready(conversation: Conversation, now: datetime) -> tuple[Turn, ...]:
+    """The waiting messages a rollup may try now: those no failed rollup has put off past ``now``."""
+    return tuple(t for t in waiting(conversation) if t.retry_at is None or t.retry_at <= now)
+
+
+CUT_RISK_BYTES = MAX_STORED_BYTES - MAX_HISTORY_BYTES
+"""How much stored text, from the oldest waiting message on, makes a pass due: within one more
+long exchange, ``recent_turns`` would cut that message before any other trigger fires."""
+
+
 def due(conversation: Conversation, now: datetime, hours: int) -> bool:
-    """Whether the rollup takes ``conversation`` now: something waits, and the oldest waiting
-    message is within ``ROLLUP_LEAD`` of Conversation hours, ``MAX_PASS_BYTES`` wait, or the
-    conversation is past Conversation hours (its last try before it's deleted)."""
-    found = waiting(conversation)
-    if not found or hours == 0:
+    """Whether the rollup takes ``conversation`` now: something waits, and the conversation is
+    past Conversation hours (its last try before it's deleted, whatever a failure put off), or
+    something the rollup may try now (``ready``) meets one of these: the oldest such message is
+    within ``ROLLUP_LEAD`` of Conversation hours, ``MAX_PASS_BYTES`` of them wait, or the stored
+    text from the oldest waiting message on reaches ``CUT_RISK_BYTES``, so long replies don't
+    push it out of the history unrolled."""
+    if not waiting(conversation) or hours == 0:
         return False
     if conversation.expired(now, hours):
         return True
+    found = ready(conversation, now)
+    if not found:
+        return False
     oldest = min(turn.at or conversation.last_message_at for turn in found)
     if now >= oldest + timedelta(hours=hours) - ROLLUP_LEAD:
         return True
-    return sum(turn.size for turn in found) >= MAX_PASS_BYTES
+    if sum(turn.size for turn in found) >= MAX_PASS_BYTES:
+        return True
+    first = next(n for n, turn in enumerate(conversation.turns) if turn.role == USER and turn.pending)
+    return sum(turn.size for turn in conversation.turns[first:]) >= CUT_RISK_BYTES
 
 
-def taken(conversation: Conversation) -> tuple[Turn, ...]:
-    """The waiting messages one pass takes: the oldest, up to ``MAX_PASS_BYTES``, and always one."""
+def taken(conversation: Conversation, now: datetime | None = None) -> tuple[Turn, ...]:
+    """The waiting messages one pass takes: the oldest the rollup may try at ``now`` (every
+    waiting one with None, as for a last try), up to ``MAX_PASS_BYTES``, and always one."""
     found: list[Turn] = []
     used = 0
-    for turn in waiting(conversation):
+    for turn in waiting(conversation) if now is None else ready(conversation, now):
         if found and used + turn.size > MAX_PASS_BYTES:
             break
         found.append(turn)
@@ -447,11 +565,27 @@ def same_turn(a: Turn, b: Turn) -> bool:
 def rolled(turns: Sequence[Turn], done: Sequence[Turn]) -> tuple[Turn, ...]:
     """``turns`` with each of ``done`` no longer waiting."""
     return tuple(
-        Turn(t.role, t.text, t.author, t.shown_to, t.record, t.at, False)
-        if t.pending and any(same_turn(t, d) for d in done)
-        else t
+        replace(t, pending=False, tries=0, retry_at=None) if t.pending and any(same_turn(t, d) for d in done) else t
         for t in turns
     )
+
+
+def failed(turns: Sequence[Turn], tried: Sequence[Turn], now: datetime) -> tuple[tuple[Turn, ...], int]:
+    """``turns`` after a rollup failed on ``tried``: each counts one more try, and waits
+    ``RETRY_AFTER``, doubled for each earlier failure, before the next; after ``MAX_TRIES``, it
+    stops waiting. Returns the turns and how many stopped waiting."""
+    given_up = 0
+    after: list[Turn] = []
+    for t in turns:
+        if t.pending and any(same_turn(t, d) for d in tried):
+            tries = t.tries + 1
+            if tries >= MAX_TRIES:
+                given_up += 1
+                t = replace(t, pending=False, tries=tries, retry_at=None)
+            else:
+                t = replace(t, tries=tries, retry_at=now + RETRY_AFTER * 2 ** (tries - 1))
+        after.append(t)
+    return tuple(after), given_up
 
 
 def cut_waiting(before: Sequence[Turn], after: Sequence[Turn]) -> int:
@@ -468,24 +602,40 @@ MEMORY_HEADING = (
 )
 
 
+def _quoted(text: str) -> str:
+    """``text`` as a JSON string, with ``<`` and ``>`` escaped too, so even a fact stored before a
+    check existed can't close the block's tags."""
+    return json.dumps(text, ensure_ascii=False).replace("<", "\\u003c").replace(">", "\\u003e")
+
+
 def memory_block(sections: Sequence[tuple[str, bool, Sequence[Fact]]], max_bytes: int = MAX_BLOCK_BYTES) -> str:
     """The memory block, or an empty string with no facts: each ``(label, answering, facts)`` in
-    the order given, the member answered first, each member's facts newest first. Facts stop at
-    ``max_bytes`` of text, so a large household's last members may send fewer."""
+    the order given, the member answered first, each member's facts newest first. The whole
+    block, heading, tags, and labels included, stays within ``max_bytes``, so a large
+    household's last members may send fewer facts."""
     lines: list[str] = []
-    used = 0
+    used = sum(len(part.encode()) + 1 for part in (MEMORY_HEADING, "<memory>", "</memory>"))
     for label, answering, facts in sections:
+        heading = f"{label}{' (the member you are answering)' if answering else ''}:"
         rows: list[str] = []
         for fact in sorted(facts, key=lambda f: (f.written_at, f.id), reverse=True):
-            row = f"- {fact.kind}, {fact.written_at.date().isoformat()}: {json.dumps(fact.text, ensure_ascii=False)}"
-            size = len(row.encode()) + 1
+            row = f"- {fact.kind}, {fact.written_at.date().isoformat()}: {_quoted(fact.text)}"
+            size = len(row.encode()) + 1 + (0 if rows else len(heading.encode()) + 1)
             if used + size > max_bytes:
                 break
             rows.append(row)
             used += size
         if rows:
-            lines.append(f"{label}{' (the member you are answering)' if answering else ''}:")
-            lines.extend(rows)
+            lines.extend([heading, *rows])
     if not lines:
         return ""
     return "\n".join([MEMORY_HEADING, "<memory>", *lines, "</memory>"])
+
+
+def full_block(written_at: datetime) -> str:
+    """A memory block as large as one can be: what ``conversation.least_call_micros`` measures
+    a request with Memory on against. Each fact is at the length limit, in characters that take
+    as many bytes as JSON escaping makes them."""
+    facts = [Fact(n, 0, EXPERIENCE, "\\" * MAX_FACT_CHARS, written_at, None, "") for n in range(MAX_FACTS)]
+    sections = [(f"Member {n}", n == 1, facts) for n in range(1, 99)]
+    return memory_block(sections)
