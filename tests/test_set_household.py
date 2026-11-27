@@ -8,7 +8,8 @@ import logging
 import sqlite3
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
-from datetime import UTC, date, datetime, timedelta
+from dataclasses import replace
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -19,13 +20,15 @@ from sqlalchemy import select
 from dinnerbell import main as cli
 from dinnerbell.channels.base import NullChannel
 from dinnerbell.config import Settings
+from dinnerbell.db.events import EventRepository
 from dinnerbell.db.models import AuditRow, HouseholdRow
 from dinnerbell.domain.events import EventState
 from dinnerbell.domain.household import NAME_MAX_LENGTH, InvalidHouseholdInput, check_timezone, is_timezone
 from dinnerbell.domain.meals import Slot
-from dinnerbell.domain.schedule import default_settings, slot_schedule
+from dinnerbell.domain.schedule import default_settings, slot_fingerprint, slot_schedule
 from dinnerbell.scheduler import runner
 from dinnerbell.services import backups, calls, household, lifecycle
+from dinnerbell.services import schedule as schedule_service
 from dinnerbell.services.database import Database, open_database
 from dinnerbell.services.health import SchedulerState
 from tests.support.calls import OPENS, ZONE, House, dinner_id, furnish, make_house
@@ -245,8 +248,8 @@ async def test_after_a_move_west_the_next_copy_comes_within_a_day_plus_the_zones
 ) -> None:
     """Copies are one per date in the household's zone. Tokyo's copy for 10-23 is taken at
     18:30 UTC on 10-22; moved to Los Angeles at 20:00 UTC, the next run, 03:30 on 10-23 there,
-    finds that date's copy and writes nothing. The next copy comes the night after: 40 hours
-    after the last, a day plus the zones' 16 hours."""
+    finds that date's copy and writes nothing. The next copy comes the night after, a day plus
+    the zones' difference after the last: 40 hours in October, 41 once Los Angeles is on PST."""
     tokyo, los_angeles = ZoneInfo("Asia/Tokyo"), ZoneInfo("America/Los_Angeles")
     await set_zone(house, "Asia/Tokyo")
     job_context.zone = tokyo
@@ -325,6 +328,29 @@ async def test_the_tick_opens_no_call_on_a_zone_changed_as_it_ran(
     await house.tick()
     event = await house.event(await dinner_id(house))
     assert event.state is EventState.COLLECTING
+
+
+async def test_a_schedule_change_as_the_zone_changes_uses_the_new_zone(
+    house: House, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """At 19:00 UTC, dinner moves from 15:00 to 12:00. In Chicago, 14:00, the new time's window
+    has passed, so the old schedule keeps today's call at 15:00. In Los Angeles, 12:00, the new
+    schedule can still open today's call, so none is kept."""
+    house.clock.now = datetime(2026, 10, 22, 19, tzinfo=UTC)
+    before = slot_schedule(default_settings(), Slot.DINNER)
+    change_zone_before_the_lock(monkeypatch, schedule_service, house, "America/Los_Angeles")
+    async with house.sessionmaker() as db:
+        changed = await schedule_service.update_slot(
+            db,
+            house["Alex"],
+            Slot.DINNER,
+            replace(before, call_time=time(12)),
+            seen=slot_fingerprint(before),
+            now=house.clock(),
+        )
+    assert changed
+    async with house.sessionmaker() as db:
+        assert await EventRepository(db).call_for(house.household.id, Slot.DINNER, date(2026, 10, 22)) is None
 
 
 # The commands --------------------------------------------------------------------------------------
