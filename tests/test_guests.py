@@ -1125,7 +1125,8 @@ async def test_removing_a_guest_from_a_decided_call_clears_their_role(house: Hou
 @pytest.mark.parametrize("another_admin", [True, False], ids=["another admin", "only admin"])
 async def test_a_vacated_role_skips_an_admin_away_unless_none_is_left(house: House, another_admin: bool) -> None:
     """With nobody coordinating, each admin hears a role was left, but not one away that day
-    (FR-63), unless every admin is away: someone must hear."""
+    (FR-63), unless every admin is away: someone must hear. The admin who removed the guest
+    knows already, so they're never told (#331)."""
     from dinnerbell.services import away
     from tests.support.calls import nobody_coordinates
 
@@ -1146,7 +1147,7 @@ async def test_a_vacated_role_skips_an_admin_away_unless_none_is_left(house: Hou
     await act(house, away.set_my_away, house["Alex"], DAY, DAY)
     await act(house, guests.remove, house["Alex"], pat.id)
     told = {e.payload["member"]["id"] for e in await house.outbox() if e.kind == "role_vacated"}
-    assert told == {house["Dee"].id if another_admin else house["Alex"].id}
+    assert told == ({house["Dee"].id} if another_admin else set())
 
 
 @pytest.mark.parametrize("use", ["offer_role", "toggle_role", "claim_coordinator", "post_offer", "join_offer"])

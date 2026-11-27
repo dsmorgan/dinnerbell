@@ -177,7 +177,7 @@ async def uninvite(db: AsyncSession, actor: Member, event_id: int, guest_id: int
         if not (actor.is_admin or ctx.invitations[guest_id] == actor.id):
             raise Forbidden("Only whoever invited them, or an admin, can take a guest off the call.")
         await InvitationRepository(db).remove(actor.household_id, event.id, guest_id)
-        await drop_from_call(db, event, guest_id, now)
+        await drop_from_call(db, event, guest_id, now, by=actor)
         await audit(
             db, actor.household_id, actor, "event.guest_uninvited", f"event:{event.id}", {"guest_id": guest_id}, now
         )
@@ -228,11 +228,11 @@ async def answer_for(
         activity.action(db, "answer_for", event, actor, guest_id=guest.id, guest=guest.display_name, **what)
 
 
-async def drop_from_call(db: AsyncSession, event: Event, member_id: int, now: datetime) -> None:
+async def drop_from_call(db: AsyncSession, event: Event, member_id: int, now: datetime, *, by: Member) -> None:
     """Take someone out of a call they no longer belong to: a guest removed or uninvited, or a
     member an admin deactivated (#331). Their answer is out, any vote they cast while voting
     is gone, and any role they had is nobody's. Updates the call's messages, and tells whoever
-    can reassign a role that's left."""
+    can reassign a role that's left, other than ``by``, who took them off and knows."""
     ctx = await load(db, event)
     current = ctx.response_of(member_id)
     if current is not None and current.status is not Status.OUT:
@@ -254,24 +254,30 @@ async def drop_from_call(db: AsyncSession, event: Event, member_id: int, now: da
         around = [m for m in admins if not m.away_on(ctx.event.day)]
         deciders = [coordinator] if coordinator is not None and coordinator.active else (around or admins)
         info, left = cc.event_info(ctx), ctx.person(member_id)
-        told = [note.RoleVacated(info, ctx.person(m.id), left, vacated) for m in deciders]
+        told = [note.RoleVacated(info, ctx.person(m.id), left, vacated, now) for m in deciders if m.id != by.id]
     tally = [cc.proposals_updated(ctx)] if voted else []
     await publish(db, ctx, cc.message_updated(ctx), *tally, *cc.decision_updated(ctx), *told, now=now)
 
 
-async def leave_open_calls(db: AsyncSession, who: Member, now: datetime, event_ids: list[int] | None = None) -> None:
-    """``drop_from_call`` for each call among ``event_ids`` that's collecting, voting, or decided:
-    a guest's invitations. With None, a member's open calls (#331): only the ones they're in, or
-    have a role or a vote in, and never an offer, which keeps who joined it."""
+async def leave_open_calls(
+    db: AsyncSession, who: Member, now: datetime, *, by: Member, event_ids: list[int] | None = None
+) -> None:
+    """``drop_from_call`` for each call among ``event_ids`` that's collecting, voting, or decided
+    with the meal still ahead: a guest's invitations. With None, a member's open calls (#331):
+    only the ones they're in, or have a role or a vote in, and never an offer, which keeps who
+    joined it. A decided call past its meal time keeps them as they were: they were there, did
+    their role, and earn its contributions when the call is done."""
     events = EventRepository(db)
     for event_id in event_ids if event_ids is not None else await events.open_ids(who.household_id):
         event = await events.get(who.household_id, event_id)
         if event is None or event.state not in OPEN_FOR_LEAVING:
             continue
+        if event.state is EventState.DECIDED and not cc.before_the_meal(event, now):
+            continue  # the meal happened: what they did is the record, and nobody is told (#154)
         if event_ids is None and (event.is_offer or not _takes_part(await load(db, event), who.id)):
             continue
         await events.lock(who.household_id, event_id, now)
-        await drop_from_call(db, event, who.id, now)
+        await drop_from_call(db, event, who.id, now, by=by)
 
 
 def _takes_part(ctx: cc.CallContext, member_id: int) -> bool:
@@ -567,7 +573,7 @@ async def fold_into_member(
         folded = await members.update(
             target.household_id, target.id, now, slack_user_id=slack_id, slack_link_locked=True
         )
-    await leave_open_calls(db, guest, now, await invited_events(db, guest))
+    await leave_open_calls(db, guest, now, by=actor, event_ids=await invited_events(db, guest))
     payload: dict[str, object] = {"guest_id": guest.id, "slack_user_id": slack_id, "override": override}
     if via is not None:
         payload["via"] = via
@@ -595,7 +601,7 @@ async def remove(db: AsyncSession, actor: Member, guest_id: int, *, now: datetim
     guest = await _guest(db, actor, guest_id)
     updated = await MemberRepository(db).update(actor.household_id, guest.id, now, active=False, join_refused=True)
     await SessionRepository(db).delete_for_member(guest.id)
-    await leave_open_calls(db, guest, now, await invited_events(db, guest))
+    await leave_open_calls(db, guest, now, by=actor, event_ids=await invited_events(db, guest))
     await audit(db, actor.household_id, actor, "guest.removed", f"member:{guest.id}", {}, now)
     await db.commit()
     return updated

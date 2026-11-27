@@ -289,7 +289,7 @@ async def _prepare(
                 result.closed += 1
                 log.info("push closed", extra=_about(queued, note=reason))
             return
-        notification = from_payload(queued.kind, queued.payload)
+        notification = await outbox.as_it_stands(db, from_payload(queued.kind, queued.payload))
         at = clock()
         body = push.message(notification, at).payload(base_url)
         built.append(

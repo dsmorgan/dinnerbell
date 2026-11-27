@@ -6,7 +6,9 @@ doesn't hold the call back (FR-5)."""
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 
@@ -79,6 +81,38 @@ async def decided(house: House) -> int:
     assert ctx.event.state is EventState.DECIDED
     assert {a.member_id for a in ctx.assignments if a.role in WORK_ROLES} == {house["Lee"].id}
     return event_id
+
+
+async def lee_picks_up_alone(house: House) -> int:
+    """Decided, with Lee picking up and Alex ordering, so Lee's only role is the pickup."""
+    event_id = await open_dinner(house)
+    for name in ("Alex", "Sam", "Lee"):
+        await act(house, calls.respond, house[name], event_id, Status.IN)
+    await act(house, calls.respond, house["Kim"], event_id, Status.OUT)
+    await act(house, calls.offer_role, house["Lee"], event_id, RoleOffer.PICKUP, True)
+    await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.ORDER, True)
+    await act(house, calls.claim_coordinator, house["Sam"], event_id)
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    await house.settle_ways(event_id)
+    house.clock.now = VOTE_BY
+    await house.tick()
+    ctx = await house.context(event_id)
+    assert ctx.event.state is EventState.DECIDED
+    assert {a.role for a in ctx.assignments if a.member_id == house["Lee"].id} == {AssignmentRole.PICKUP}
+    return event_id
+
+
+@dataclass
+class Capturing(RecordingChannel):
+    """Records the notifications it delivers too, as the drainer hands them over."""
+
+    delivered: list[n.Notification] = field(default_factory=list)
+
+    async def deliver(self, notification: n.Notification, *, thread: n.MessageRef | None = None) -> n.DeliveryResult:
+        result = await super().deliver(notification, thread=thread)
+        self.delivered.append(notification)
+        return result
 
 
 async def deactivate(house: House, name: str, active: bool = False) -> Member:
@@ -178,46 +212,125 @@ async def test_deactivating_a_member_leaves_calls_they_werent_in_alone(house: Ho
 # B-5: a retried role message never follows "you're off it" -------------------------------------
 
 
-async def test_a_retried_role_message_closes_once_the_role_moved_on(house: House) -> None:
-    """Lee's "You're picking up" fails once and waits to be tried again; meanwhile the pickup
-    goes to Alex, and Lee hears it's off. The retry must not arrive after that."""
-    event_id = await decided(house)
+async def lee_message_fails_once(house: House, event_id: int) -> int:
+    """Lee's "You're ..." message fails once and waits to be tried again. Returns its row's ID."""
     (made,) = [r.id for r, x in await rows(house) if isinstance(x, n.AssignmentMade) and x.member.name == "Lee"]
-    down = RecordingChannel(fail=1_000)
-    await house.drain(down)
+    await house.drain(RecordingChannel(fail=1_000))
     house.clock.now = VOTE_BY + timedelta(minutes=1)
-    await act(house, calls.change_assignment, house["Sam"], event_id, AssignmentRole.PICKUP, house["Alex"].id)
-    channel = RecordingChannel()
+    return made
+
+
+async def drain_twice(house: House) -> Capturing:
+    """Drain now, and again once every retry is due."""
+    channel = Capturing()
     await house.drain(channel)
     house.clock.now = VOTE_BY + timedelta(hours=1)
     await house.drain(channel)
+    return channel
 
-    lees = [s.kind for s in channel.sent if s.recipient == house["Lee"].id]
-    assert lees == ["assignment_ended"]  # "You're off it" is their last word, and the only one
+
+async def test_a_retried_role_message_closes_once_the_role_moved_on(house: House) -> None:
+    """Lee's "You're picking up" fails once and waits; meanwhile the pickup goes to Sam, and Lee
+    hears it's off. The retry must not arrive after that."""
+    event_id = await lee_picks_up_alone(house)
+    made = await lee_message_fails_once(house, event_id)
+    await act(house, calls.change_assignment, house["Sam"], event_id, AssignmentRole.PICKUP, house["Sam"].id)
+
+    channel = await drain_twice(house)
+
+    assert [s.kind for s in channel.sent if s.recipient == house["Lee"].id] == ["assignment_ended"]
     async with house.sessionmaker() as db:
         row = await db.get(OutboxRow, made)
     assert row is not None and row.last_error == n.SUPERSEDED_BY_ROLE_MOVE
 
 
-async def test_a_role_push_closes_once_the_role_moved_on(house: House) -> None:
-    """The push drainer drops a role push by the same rule (``outbox.overtaken_by``)."""
+async def test_a_retried_role_message_names_only_the_roles_still_theirs(house: House) -> None:
+    """Lee orders and picks up; the pickup goes to Alex while the message waits. Lee still
+    hears that they order, and only that."""
+    event_id = await decided(house)
+    await lee_message_fails_once(house, event_id)
+    await act(house, calls.change_assignment, house["Sam"], event_id, AssignmentRole.PICKUP, house["Alex"].id)
+
+    channel = await drain_twice(house)
+
+    lees = [x for x in channel.delivered if x.recipient_id == house["Lee"].id]
+    assert sorted(x.kind for x in lees) == ["assignment_ended", "assignment_made"]
+    (made,) = [x for x in lees if isinstance(x, n.AssignmentMade)]
+    assert made.roles == (AssignmentRole.ORDER,)
+
+
+async def test_a_hand_off_leaves_the_rest_of_a_waiting_role_message(house: House) -> None:
+    """Lee picks up and coordinates; the message waits, and Lee hands coordinating to Alex. Lee
+    still picks up, so they're told so, without coordinating."""
+    event_id = await open_dinner(house)
+    for name in ("Alex", "Sam", "Lee"):
+        await act(house, calls.respond, house[name], event_id, Status.IN)
+    await act(house, calls.respond, house["Kim"], event_id, Status.OUT)
+    await act(house, calls.offer_role, house["Lee"], event_id, RoleOffer.PICKUP, True)
+    await act(house, calls.claim_coordinator, house["Lee"], event_id)
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    await house.settle_ways(event_id)
+    house.clock.now = VOTE_BY
+    await house.tick()
+    ctx = await house.context(event_id)
+    assert AssignmentRole.COORDINATOR in {a.role for a in ctx.assignments if a.member_id == house["Lee"].id}
+    await lee_message_fails_once(house, event_id)
+    await act(house, calls.hand_off, house["Lee"], event_id, house["Alex"].id)
+
+    channel = await drain_twice(house)
+
+    made = [x for x in channel.delivered if isinstance(x, n.AssignmentMade) and x.member.name == "Lee"]
+    assert len(made) == 1 and AssignmentRole.PICKUP in made[0].roles
+    assert AssignmentRole.COORDINATOR not in made[0].roles
+
+
+async def lee_on_the_web_app(house: House) -> None:
     from dinnerbell.domain.members import NotifyVia
     from dinnerbell.services import web_app
-    from tests.test_push import FakeSender, device, drain, queued, switch
+    from tests.test_push import device, switch
 
     await switch(house, True)
     async with house.sessionmaker() as db:
         house.people["Lee"] = await web_app.set_my_notify_via(db, house["Lee"], NotifyVia.WEB, now=house.clock())
     await device(house, "Lee")
-    event_id = await decided(house)
-    await act(house, calls.change_assignment, house["Sam"], event_id, AssignmentRole.PICKUP, house["Alex"].id)
+
+
+async def push_all(house: House) -> Any:
+    from tests.test_push import FakeSender, drain
 
     sender = FakeSender()
     for _ in range(5):  # a pass sends a few to each device; the rest wait for the next
         await drain(house, sender)
+    return sender
+
+
+async def test_a_role_push_closes_once_the_role_moved_on(house: House) -> None:
+    """The push drainer drops a role push by the same rule (``outbox.overtaken_by``)."""
+    from tests.test_push import queued
+
+    await lee_on_the_web_app(house)
+    event_id = await lee_picks_up_alone(house)
+    await act(house, calls.change_assignment, house["Sam"], event_id, AssignmentRole.PICKUP, house["Sam"].id)
+
+    await push_all(house)
 
     lees = [error for whose, _, error, *_ in await queued(house) if whose == "Lee"]
     assert n.SUPERSEDED_BY_ROLE_MOVE in lees
+
+
+async def test_a_role_push_names_only_the_roles_still_theirs(house: House) -> None:
+    """Lee orders and picks up, and the pickup goes to Alex before the push goes: it says only
+    that Lee orders (``outbox.as_it_stands``)."""
+    await lee_on_the_web_app(house)
+    event_id = await decided(house)
+    await act(house, calls.change_assignment, house["Sam"], event_id, AssignmentRole.PICKUP, house["Alex"].id)
+
+    sender = await push_all(house)
+
+    titles = [json.loads(body)["notification"]["title"] for _, body, *_ in sender.sent]
+    assert any(t.endswith("you're ordering") for t in titles), titles
+    assert not any("picking up" in t and "ordering" in t for t in titles), titles
 
 
 async def test_a_role_message_still_goes_while_the_role_is_theirs(house: House) -> None:
@@ -230,7 +343,7 @@ async def test_a_role_message_still_goes_while_the_role_is_theirs(house: House) 
 # B-6: a guest invited again gets a second invitation ---------------------------------------------
 
 
-async def add_guest(house: House, name: str, slack: str) -> Member:
+async def add_guest(house: House, name: str, slack: str | None) -> Member:
     async with house.sessionmaker() as db:
         guest = await MemberRepository(db).add_guest(
             household_id=house.household.id,
@@ -334,3 +447,148 @@ async def test_an_evening_cooking_offer_still_stands_in_for_the_call(house: Hous
         from dinnerbell.db.events import EventRepository
 
         assert await EventRepository(db).call_for(house.household.id, Slot.DINNER, DAY) is None
+
+
+# Review of #383: after the meal, offers, App Home, the call's own time, and who's told ---------
+
+
+async def test_deactivating_a_member_after_the_meal_keeps_what_they_did(house: House) -> None:
+    """Dinner was at 6:30 PM and Lee picked it up; at 7:00 PM, before the call is done, an admin
+    deactivates Lee. The record keeps Lee's answer and roles, and nobody is asked to pick
+    someone else (#154: after the meal, a change corrects the record and messages nobody)."""
+    from sqlalchemy import select as select_
+
+    from dinnerbell.db.models import ContributionRow
+    from tests.support.calls import DONE_AT, MEAL
+
+    event_id = await decided(house)
+    await house.drain(RecordingChannel())
+    before = len(await rows(house))
+    house.clock.now = MEAL + timedelta(minutes=30)
+
+    await deactivate(house, "Lee")
+
+    ctx = await house.context(event_id)
+    assert ctx.event.state is EventState.DECIDED and ctx.head_count == 3
+    lee = ctx.response_of(house["Lee"].id)
+    assert lee is not None and lee.status is Status.IN
+    assert {a.role for a in ctx.assignments if a.member_id == house["Lee"].id} >= {AssignmentRole.PICKUP}
+    assert [x.kind for _, x in (await rows(house))[before:]] == []
+    house.clock.now = DONE_AT
+    await house.tick()
+    async with house.sessionmaker() as db:
+        kinds = set(
+            await db.scalars(
+                select_(ContributionRow.kind).where(
+                    ContributionRow.event_id == event_id, ContributionRow.member_id == house["Lee"].id
+                )
+            )
+        )
+    assert {"picked_up", "participated"} <= kinds
+
+
+async def test_removing_a_guest_after_the_meal_keeps_what_they_did(house: House) -> None:
+    """The same for a guest an admin removes after the meal: they were there and did the pickup."""
+    from tests.support.calls import MEAL
+
+    jo = await add_guest(house, "Jo", None)
+    event_id = await open_dinner(house)
+    for name in ("Alex", "Sam"):
+        await act(house, calls.respond, house[name], event_id, Status.IN)
+    for name in ("Kim", "Lee"):
+        await act(house, calls.respond, house[name], event_id, Status.OUT)
+    await act(house, guests.invite, house["Sam"], event_id, guest_id=jo.id)
+    await act(house, guests.answer_for, house["Sam"], event_id, jo.id, role=RoleOffer.PICKUP)
+    await act(house, calls.claim_coordinator, house["Sam"], event_id)
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    await house.settle_ways(event_id)
+    house.clock.now = VOTE_BY
+    await house.tick()
+    ctx = await house.context(event_id)
+    assert ctx.event.state is EventState.DECIDED
+    assert AssignmentRole.PICKUP in {a.role for a in ctx.assignments if a.member_id == jo.id}
+    await house.drain(RecordingChannel())
+    before = len(await rows(house))
+    house.clock.now = MEAL + timedelta(minutes=30)
+
+    await act(house, guests.remove, house["Alex"], jo.id)
+
+    ctx = await house.context(event_id)
+    answer = ctx.response_of(jo.id)
+    assert answer is not None and answer.status is Status.IN
+    assert AssignmentRole.PICKUP in {a.role for a in ctx.assignments if a.member_id == jo.id}
+    assert not [x for _, x in (await rows(house))[before:] if isinstance(x, n.RoleVacated)]
+
+
+async def test_deactivating_a_member_leaves_offers_alone(house: House) -> None:
+    house.clock.now = AFTER_LUNCH
+    data = OfferInput(
+        slot=Slot.DINNER, day=DAY, mode=Mode.COOK, at=time(18, 0), capacity=4, item_id=house.items["Sam's Tacos"].id
+    )
+    offer_id = (await act(house, offers.post_offer, house["Sam"], data)).event_id
+    await act(house, offers.join, house["Lee"], offer_id)
+
+    await deactivate(house, "Lee")
+
+    lee = (await house.context(offer_id)).response_of(house["Lee"].id)
+    assert lee is not None and lee.status is Status.IN
+
+
+async def test_the_admin_who_deactivates_isnt_asked_to_pick_someone_else(house: House) -> None:
+    """With nobody coordinating, each admin is asked, but not the one who deactivated them."""
+    from tests.support.calls import nobody_coordinates
+
+    await house.add_member("Max", admin=True)
+    event_id = await decided(house)
+    await nobody_coordinates(house, event_id)
+    before = len(await rows(house))
+
+    await deactivate(house, "Lee")
+
+    vacated = [x for _, x in (await rows(house))[before:] if isinstance(x, n.RoleVacated)]
+    assert [x.member.name for x in vacated] == ["Max"]
+
+
+async def home_start_buttons(house: House) -> set[str]:
+    from dinnerbell.channels.slack.views import HomeLinks, home_view
+    from dinnerbell.services import event_views
+
+    async with house.sessionmaker() as db:
+        today = await event_views.today_view(db, house["Kim"], now=house.clock())
+    view = json.dumps(home_view(today, HomeLinks("https://dinnerbell.example")))
+    from dinnerbell.channels.slack import ids
+
+    return {action for slot, action in ids.ACTION_FOR_START.items() if f'"{action}"' in view}
+
+
+@pytest.mark.parametrize(("at", "held"), [(time(18, 0), True), (time(13, 30), False), (time(15, 0), False)])
+async def test_app_home_offers_a_dinner_call_unless_a_cooking_offer_stands_in(
+    house: House, at: time, held: bool
+) -> None:
+    """App Home hides **Start a dinner call** only while a cooking offer stands in for it
+    (``TodayView.held``): not for one that's over by the call's time, 3:00 PM, or at it."""
+    from dinnerbell.channels.slack import ids
+
+    house.clock.now = AFTER_LUNCH
+    data = OfferInput(
+        slot=Slot.DINNER, day=DAY, mode=Mode.COOK, at=at, capacity=4, item_id=house.items["Sam's Tacos"].id
+    )
+    await act(house, offers.post_offer, house["Sam"], data)
+
+    shown = ids.ACTION_FOR_START[Slot.DINNER] in await home_start_buttons(house)
+
+    assert shown is not held
+
+
+async def test_a_cooking_offer_at_the_calls_own_time_doesnt_hold_it(house: House) -> None:
+    """An offer at 3:00 PM closes as the 3:00 PM call opens: its meal isn't the call's, which
+    collects answers until 4:30 PM for a meal after that. The call goes out."""
+    house.clock.now = AFTER_LUNCH
+    data = OfferInput(
+        slot=Slot.DINNER, day=DAY, mode=Mode.COOK, at=time(15, 0), capacity=4, item_id=house.items["Sam's Tacos"].id
+    )
+    await act(house, offers.post_offer, house["Sam"], data)
+    house.clock.now = OPENS
+    await house.tick()
+    assert (await house.event(await dinner_id(house))).state is EventState.COLLECTING
