@@ -88,6 +88,7 @@ CLEAR: Final = frozenset(
         "push_queue",  # each notification's web pushes, which go with its outbox row
         "assistant_conversation",  # conversations with the assistant, which talk about those calls
         "assistant_draft",  # the assistant's drafts waiting for Confirm, which name those calls
+        "assistant_memory_fact",  # the assistant's memory (#367), which comes from those conversations
         "contribution",  # what each member did for those meals (M4) ...
         "badge_award",  # ... and the badges it earned
     }

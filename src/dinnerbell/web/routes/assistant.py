@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Admin > Assistant (ADR 0009): the switch, the monthly cap, Conversation hours, and this
-month's usage. The tab and the page exist only while the operator has set
-``DINNERBELL_ANTHROPIC_API_KEY``."""
+"""Admin > Assistant (ADR 0009): the switch, the monthly cap, Conversation hours, Memory and its
+rollup model (#367, ADR 0012), **Clear memory**, and this month's usage. The tab and the page
+exist only while the operator has set ``DINNERBELL_ANTHROPIC_API_KEY``."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from dinnerbell.domain.assistant import (
     MAX_CONVERSATION_HOURS,
     MIN_CAP_DOLLARS,
     MIN_CONVERSATION_HOURS,
+    MODELS,
     AssistantSettings,
     InvalidAssistantSettings,
     format_dollars,
@@ -27,12 +28,19 @@ from dinnerbell.services.errors import NotFound
 from dinnerbell.web.auth import AdminCSRFChecked, AdminPrincipal, Context, Database
 from dinnerbell.web.context import AppContext
 from dinnerbell.web.forms import BadFormValue, checked, optional_int
+from dinnerbell.web.redirects import local_redirect
 from dinnerbell.web.render import render
 
 router = APIRouter(prefix="/admin")
 
 MAX_FIELD = 40
-NOTICES = {"saved": "Assistant settings saved."}
+NOTICES = {
+    "saved": "Assistant settings saved.",
+    "cleared": "Memory cleared.",
+}
+CHOOSE = "Choose whose memory to clear."
+EVERYONE = "all"
+"""**Clear memory**'s choice for every member's facts."""
 
 
 def _config(context: AppContext) -> AssistantConfig:
@@ -59,6 +67,8 @@ def _values(settings: AssistantSettings) -> dict[str, Any]:
         "enabled": settings.enabled,
         "cap_dollars": str(settings.cap_dollars),
         "conversation_hours": str(settings.conversation_hours),
+        "memory": settings.memory,
+        "rollup_model": settings.rollup_model,
     }
 
 
@@ -95,6 +105,10 @@ async def _page(
         "least_call": format_dollars(view.least_call_micros),
         "least_channel_call": format_dollars(view.least_channel_call_micros),
         "least_cap": f"${-(-view.least_call_micros // 1_000_000)}",
+        "memory": [(m.member_id, m.name, m.facts) for m in view.memory],
+        "facts": view.facts,
+        "models": list(MODELS),
+        "everyone": EVERYONE,
         "limits": {
             "cap": (MIN_CAP_DOLLARS, MAX_CAP_DOLLARS),
             "hours": (MIN_CONVERSATION_HOURS, MAX_CONVERSATION_HOURS),
@@ -116,16 +130,44 @@ async def assistant_page(
 async def save_assistant(request: Request, principal: AdminCSRFChecked, context: Context, db: Database) -> Response:
     config = _config(context)
     form = await request.form()
-    enabled = checked(_field(form, "enabled"))
+    enabled, memory = checked(_field(form, "enabled")), checked(_field(form, "memory"))
     cap, hours = _field(form, "cap_dollars") or "", _field(form, "conversation_hours") or ""
-    posted: dict[str, Any] = {"enabled": enabled, "cap_dollars": cap, "conversation_hours": hours}
+    rollup_model = _field(form, "rollup_model")
+    if rollup_model is None:  # a form from before Memory (#367): keep the model as it is
+        current = await assistant_admin.assistant_admin(db, config, principal.member, now=context.clock())
+        rollup_model = current.settings.rollup_model
+    posted: dict[str, Any] = {
+        "enabled": enabled,
+        "cap_dollars": cap,
+        "conversation_hours": hours,
+        "memory": memory,
+        "rollup_model": rollup_model,
+    }
     try:
         values = AssistantSettings(
             enabled=enabled,
             cap_dollars=_whole(cap, "The monthly cap"),
             conversation_hours=_whole(hours, "Conversation hours"),
+            memory=memory,
+            rollup_model=rollup_model,
         )
         await assistant_admin.update_assistant(db, config, principal.member, values, now=context.clock())
     except (InvalidAssistantSettings, BadFormValue) as exc:
         return await _page(request, context, db, principal, values=posted, error=str(exc), status_code=400)
     return RedirectResponse("/admin/assistant?notice=saved", status_code=303)
+
+
+@router.post("/assistant/memory/clear")
+async def clear_memory(request: Request, principal: AdminCSRFChecked, context: Context, db: Database) -> Response:
+    """**Clear memory** and **Delete all memory** (#367): one member's facts, or everyone's."""
+    config = _config(context)
+    form = await request.form()
+    who = _field(form, "member") or ""
+    try:
+        member_id = None if who == EVERYONE else optional_int(who, CHOOSE)
+        if member_id is None and who != EVERYONE:
+            raise BadFormValue(CHOOSE)
+    except BadFormValue as exc:
+        return await _page(request, context, db, principal, error=str(exc), status_code=400)
+    await assistant_admin.clear_memory(db, config, principal.member, member_id, now=context.clock())
+    return local_redirect("/admin/assistant?notice=cleared#memory")

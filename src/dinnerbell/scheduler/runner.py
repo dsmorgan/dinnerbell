@@ -28,7 +28,8 @@ from dinnerbell.domain.weather import CHECK_INTERVAL
 from dinnerbell.logs import start_unit
 from dinnerbell.services import announcements, auth, backups, lifecycle, local_weather, outbox, push, recap, stuck
 from dinnerbell.services import household as household_service
-from dinnerbell.services.assistant import retention
+from dinnerbell.services.assistant import memory, retention
+from dinnerbell.services.assistant.conversation import Assistant
 from dinnerbell.services.clock import Clock
 from dinnerbell.services.health import HEARTBEAT_INTERVAL, SchedulerState
 
@@ -87,6 +88,8 @@ class JobContext:
     """One push drain at a time in this process; row claims cover other processes."""
     weather: local_weather.WeatherSource | None = None
     """Open-Meteo, for Dinnerbone's local weather (ADR 0011). None leaves it alone."""
+    assistant: Assistant | None = None
+    """The assistant, for the memory rollup (#367). None, as without the key, rolls nothing up."""
 
 
 Job = Callable[[JobContext], Awaitable[None]]
@@ -199,8 +202,23 @@ async def purge_sessions(ctx: JobContext) -> None:
 
 async def purge_conversations(ctx: JobContext) -> None:
     """Delete assistant conversations past Admin's Conversation hours, and drafts that expired
-    (ADR 0009). Runs whether or not the assistant is on, so turning it off never keeps either
-    longer. A failure in one never stops the other."""
+    (ADR 0009), and memory facts that expired (#367). Runs whether or not the assistant is on, so
+    turning it off never keeps any longer. First, with Memory on, it rolls up the conversations
+    that are due, a last try for those it deletes next. A failure in one never stops the others."""
+    try:
+        changed = await memory.roll_up_due(ctx.sessionmaker, ctx.assistant)
+    except Exception:
+        log.exception("assistant memory rollup failed")
+    else:
+        if changed:
+            log.info("assistant memory rolled up", extra={"count": changed})
+    try:
+        facts = await memory.purge_expired_facts(ctx.sessionmaker, ctx.clock())
+    except Exception:
+        log.exception("assistant memory purge failed")
+    else:
+        if facts:
+            log.info("expired assistant memory facts removed", extra={"count": facts})
     try:
         removed = await retention.purge_idle_conversations(ctx.sessionmaker, ctx.clock())
     except Exception:

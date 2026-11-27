@@ -22,6 +22,8 @@ from dinnerbell.db.meals import household_settings
 from dinnerbell.db.repositories import MemberRepository
 from dinnerbell.domain.assistant import DRAFT, USER, Conversation, Turn, assistant_settings, web_key
 from dinnerbell.domain.members import Member
+from dinnerbell.services.assistant import memory
+from dinnerbell.services.assistant.conversation import Assistant
 from dinnerbell.services.assistant.runtime import AssistantConfig, available
 from dinnerbell.services.errors import NotFound
 
@@ -87,12 +89,19 @@ def _shown(turn: Turn, restore: Callable[[str, Mapping[int, str]], str], names: 
     return Shown(False, restore(turn.text, names), draft=turn.role == DRAFT, record=turn.record)
 
 
-async def start_over(db: AsyncSession, config: AssistantConfig, member: Member, now: datetime) -> int:
+async def start_over(
+    db: AsyncSession, config: AssistantConfig, member: Member, now: datetime, *, assistant: Assistant | None = None
+) -> int:
     """**Start over**: delete ``member``'s web conversation, cancel the drafts still waiting in
     it, and delete the records of what the assistant did at once (#374), so the page starts
-    empty. What it did stays done. Returns how many drafts it cancelled."""
+    empty. What it did stays done. Returns how many drafts it cancelled.
+
+    With ``assistant`` and **Memory** on, it rolls the conversation up first (#367), so what the
+    member said is kept in memory; the conversation is deleted whether or not that works."""
     await _require(db, config, member)
     key = web_key(member.id)
+    if assistant is not None:
+        await memory.roll_up_before_start_over(db, assistant, member, key)
     repo = AssistantRepository(db)
     async with write_transaction(db):
         cancelled = 0

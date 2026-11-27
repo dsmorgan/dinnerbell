@@ -140,6 +140,7 @@ def create_app(
                 push_sender=WebPushSender(vapid, settings.base_url, push_http, clock),
                 base_url=settings.base_url,
                 weather=weather,
+                assistant=assistant,
             )
             app.state.jobs = jobs
             app.state.slack = slack

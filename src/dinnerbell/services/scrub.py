@@ -209,6 +209,7 @@ class ScrubSummary:
     assistant_turned_off: bool = False
     conversations_deleted: int = 0
     drafts_deleted: int = 0
+    memory_facts_deleted: int = 0
     shown_places_deleted: int = 0
     push_devices_deleted: int = 0
     pushes_deleted: int = 0
@@ -247,12 +248,14 @@ class ScrubSummary:
     def _assistant_lines(self) -> list[str]:
         """Only when the scrub changed something, so an install without the assistant reads
         nothing about it."""
-        if not (self.assistant_turned_off or self.conversations_deleted or self.drafts_deleted):
+        changed = self.conversations_deleted or self.drafts_deleted or self.memory_facts_deleted
+        if not (self.assistant_turned_off or changed):
             return []
         return [
             f"Assistant turned off: {'yes' if self.assistant_turned_off else 'no, it was off'}",
             f"Assistant conversations deleted: {self.conversations_deleted}",
             f"Assistant drafts deleted: {self.drafts_deleted}",
+            *([f"Assistant memory facts deleted: {self.memory_facts_deleted}"] if self.memory_facts_deleted else []),
         ]
 
 
@@ -397,6 +400,7 @@ async def _scrub(db: AsyncSession, *, instance_label: str, keep: Iterable[str], 
         assistant_turned_off=forgotten.was_on,
         conversations_deleted=forgotten.conversations,
         drafts_deleted=forgotten.drafts,
+        memory_facts_deleted=forgotten.facts,
         shown_places_deleted=shown_deleted,
         push_devices_deleted=push_devices,
         pushes_deleted=push_rows,

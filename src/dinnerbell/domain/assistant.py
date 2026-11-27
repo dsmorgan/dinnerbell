@@ -20,6 +20,10 @@ from dinnerbell.domain.members import Member
 ENABLED_KEY = "assistant_enabled"
 CAP_KEY = "assistant_monthly_cap_dollars"
 HOURS_KEY = "assistant_conversation_hours"
+MEMORY_KEY = "assistant_memory"
+ROLLUP_MODEL_KEY = "assistant_rollup_model"
+DEFAULT_ROLLUP_MODEL = "claude-haiku-5-5"
+"""The memory rollup's model until an admin picks another (#367): a twentieth of Sonnet's prices."""
 
 DEFAULT_CAP_DOLLARS = 5
 MIN_CAP_DOLLARS = 1
@@ -53,10 +57,20 @@ class AssistantSettings:
     """The most the household spends in a calendar month, in whole US dollars."""
     conversation_hours: int = DEFAULT_CONVERSATION_HOURS
     """How long Dinnerbell keeps a conversation after its last message. At 0 it keeps none."""
+    memory: bool = False
+    """**Memory** (#367, ADR 0012): a rollup keeps short facts from each member's own messages,
+    and every request carries every active member's facts. Off by default."""
+    rollup_model: str = DEFAULT_ROLLUP_MODEL
+    """The model the memory rollup calls: one of ``MODELS``."""
 
     @property
     def cap_micros(self) -> int:
         return self.cap_dollars * MICROS_PER_DOLLAR
+
+    @property
+    def remembers(self) -> bool:
+        """Whether memory works now: the assistant and **Memory** are both on."""
+        return self.enabled and self.memory
 
 
 def _whole(value: object, low: int, high: int) -> int | None:
@@ -70,10 +84,13 @@ def assistant_settings(settings: Mapping[str, Any]) -> AssistantSettings:
     value reads as its default, and the switch reads as on only when it's exactly ``true``."""
     cap = _whole(settings.get(CAP_KEY), MIN_CAP_DOLLARS, MAX_CAP_DOLLARS)
     hours = _whole(settings.get(HOURS_KEY), MIN_CONVERSATION_HOURS, MAX_CONVERSATION_HOURS)
+    rollup = settings.get(ROLLUP_MODEL_KEY)
     return AssistantSettings(
         enabled=settings.get(ENABLED_KEY) is True,
         cap_dollars=DEFAULT_CAP_DOLLARS if cap is None else cap,
         conversation_hours=DEFAULT_CONVERSATION_HOURS if hours is None else hours,
+        memory=settings.get(MEMORY_KEY) is True,
+        rollup_model=rollup if isinstance(rollup, str) and rollup in MODELS else DEFAULT_ROLLUP_MODEL,
     )
 
 
@@ -84,11 +101,27 @@ def check_assistant_settings(values: AssistantSettings) -> AssistantSettings:
         raise InvalidAssistantSettings(
             f"Conversation hours run {MIN_CONVERSATION_HOURS} to {MAX_CONVERSATION_HOURS} (a week)."
         )
+    if values.rollup_model not in MODELS:
+        raise InvalidAssistantSettings("Choose a rollup model from the list.")
+    if values.memory and values.conversation_hours == 0:
+        raise InvalidAssistantSettings(MEMORY_NEEDS_HOURS)
     return values
 
 
+MEMORY_NEEDS_HOURS = (
+    "Memory needs Conversation hours above 0: at 0, nothing is kept to remember. Turn Memory off first, or keep "
+    "some hours."
+)
+
+
 def settings_to_json(values: AssistantSettings) -> dict[str, Any]:
-    return {ENABLED_KEY: values.enabled, CAP_KEY: values.cap_dollars, HOURS_KEY: values.conversation_hours}
+    return {
+        ENABLED_KEY: values.enabled,
+        CAP_KEY: values.cap_dollars,
+        HOURS_KEY: values.conversation_hours,
+        MEMORY_KEY: values.memory,
+        ROLLUP_MODEL_KEY: values.rollup_model,
+    }
 
 
 def available(*, configured: bool, switch_on: bool, member: Member) -> bool:
@@ -464,11 +497,18 @@ class Turn:
     record: int | None = None
     """For a direct action's entry (#374), its record's ID, so the page shows the record's card,
     with **Undo** while it works, where the entry is."""
+    at: datetime | None = None
+    """For a member's message kept since #367, when it was written; None before."""
+    pending: bool = False
+    """For a member's message written while **Memory** was on (#367), whether it still waits for
+    the rollup. A message written while it was off never does."""
 
     def to_json(self) -> dict[str, Any]:
         found: dict[str, Any] = {"role": self.role, "text": self.text}
         found |= {"author": self.author} if self.author is not None else {}
         found |= {"record": self.record} if self.record is not None else {}
+        found |= {"at": self.at.isoformat()} if self.at is not None else {}
+        found |= {"pending": True} if self.pending else {}
         return found | ({"shown_to": self.shown_to} if self.shown_to is not None else {})
 
     @classmethod
@@ -485,11 +525,24 @@ class Turn:
             author if isinstance(author, str) else None,
             shown_to if role == ASSISTANT and isinstance(shown_to, str) else None,
             record if role == DRAFT and isinstance(record, int) and not isinstance(record, bool) else None,
+            _when(raw.get("at")) if role == USER else None,
+            role == USER and raw.get("pending") is True,
         )
 
     @property
     def size(self) -> int:
         return len(self.text.encode()) + len((self.author or "").encode())
+
+
+def _when(raw: object) -> datetime | None:
+    """A stored message's time: an aware ISO time, or None for anything else."""
+    if not isinstance(raw, str):
+        return None
+    try:
+        found = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    return found if found.tzinfo is not None else None
 
 
 def turns_from_json(raw: object) -> tuple[Turn, ...]:

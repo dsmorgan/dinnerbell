@@ -31,6 +31,7 @@ SHUFFLE_TABLES = {"shown_place"}
 CODE_TABLES = {"sign_in_code"}
 PUSH_TABLES = {"push_subscription", "push_queue"}
 WEATHER_TABLES = {"local_weather"}
+MEMORY_TABLES = {"assistant_memory_fact"}
 
 
 def test_migrates_an_empty_database(settings: Settings) -> None:
@@ -40,7 +41,7 @@ def test_migrates_an_empty_database(settings: Settings) -> None:
     try:
         inspector = inspect(engine)
         everything = M0_TABLES | M1_TABLES | M2_TABLES | M3_TABLES | M4_TABLES | M6_TABLES | M6_DRAFT_TABLES | M7_TABLES
-        everything |= SHUFFLE_TABLES | CODE_TABLES | PUSH_TABLES | WEATHER_TABLES
+        everything |= SHUFFLE_TABLES | CODE_TABLES | PUSH_TABLES | WEATHER_TABLES | MEMORY_TABLES
         assert set(inspector.get_table_names()) == everything | {"alembic_version"}
         for table in everything - {"household"}:
             assert "household_id" in {c["name"] for c in inspector.get_columns(table)}, table
@@ -468,7 +469,7 @@ def _snapshot(settings: Settings) -> dict[str, object]:
                     "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL "
                     "AND tbl_name NOT IN ('contribution', 'badge_award', 'slack_badge_file', 'slack_badge_composite', "
                     "'stance_edit', 'assistant_usage', 'assistant_conversation', 'assistant_draft', 'shown_place', "
-                    "'push_subscription', 'push_queue') "
+                    "'push_subscription', 'push_queue', 'assistant_memory_fact') "
                     "ORDER BY name"
                 )
             ).all()
@@ -1427,6 +1428,7 @@ def _rows_outside_m4(settings: Settings) -> dict[str, list[object]]:
                     "sign_in_code",
                     *PUSH_TABLES,
                     *WEATHER_TABLES,
+                    *MEMORY_TABLES,
                     "alembic_version",
                 }
             }

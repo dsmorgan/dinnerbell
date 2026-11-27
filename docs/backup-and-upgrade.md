@@ -20,9 +20,9 @@ After each nightly backup, Dinnerbell keeps the 14 newest nightly copies, the ne
 
 ### What a backup holds
 
-<a id="what-the-audit-log-and-backups-hold"></a>Each copy holds the whole database as it was then, so keep every copy as private as the database. That includes the audit log, with member emails and Slack user IDs; assistant conversations and drafts; devices that get notifications; and members' preferences and dietary needs.
+<a id="what-the-audit-log-and-backups-hold"></a>Each copy holds the whole database as it was then, so keep every copy as private as the database. That includes the audit log, with member emails and Slack user IDs; assistant conversations, drafts, and memory notes; devices that get notifications; and members' preferences and dietary needs.
 
-Retention settings, such as the assistant's **Conversation hours** and the 30 days for refused sign-ins, delete rows from the live database only. A copy keeps what it held until the copy is deleted.
+Retention settings, such as the assistant's **Conversation hours** and the 30 days for refused sign-ins, and **Clear memory**, delete rows from the live database only. A copy keeps what it held until the copy is deleted.
 
 ### What Dinnerbell deletes
 

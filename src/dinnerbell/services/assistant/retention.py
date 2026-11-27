@@ -12,8 +12,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from dinnerbell.db.assistant import AssistantRepository
 from dinnerbell.db.engine import write_transaction
 from dinnerbell.db.meals import household_settings
+from dinnerbell.db.memory import MemoryRepository
 from dinnerbell.db.repositories import HouseholdRepository
-from dinnerbell.domain.assistant import ENABLED_KEY, assistant_settings
+from dinnerbell.domain.assistant import ENABLED_KEY, MEMORY_KEY, assistant_settings
 from dinnerbell.services.assistant.admin import delete_expired, expiry_cutoff
 
 
@@ -57,16 +58,19 @@ class Forgotten:
     was_on: bool
     conversations: int
     drafts: int
+    facts: int = 0
 
 
 async def forget_for_test(db: AsyncSession, household_id: int) -> Forgotten:
-    """For ``scrub-test``, in its transaction: turn Admin's Assistant switch off and delete every
-    conversation and draft. Says whether the switch was on and how many of each went. Usage rows
-    stay: they hold member IDs and token counts, no text."""
+    """For ``scrub-test``, in its transaction: turn Admin's Assistant and Memory switches off and
+    delete every conversation, draft, and memory fact (#367). Says whether the assistant was on
+    and how many of each went. Usage rows stay: they hold member IDs and token counts, no text."""
     stored = await household_settings(db, household_id)
     was_on = assistant_settings(stored).enabled
-    if ENABLED_KEY in stored:
-        await HouseholdRepository(db).update_settings(household_id, stored | {ENABLED_KEY: False})
+    off = {key: False for key in (ENABLED_KEY, MEMORY_KEY) if key in stored}
+    if off:
+        await HouseholdRepository(db).update_settings(household_id, stored | off)
     repo = AssistantRepository(db)
     conversations = await repo.delete_idle(household_id, None)
-    return Forgotten(was_on, conversations, await repo.delete_drafts(household_id, None))
+    drafts = await repo.delete_drafts(household_id, None)
+    return Forgotten(was_on, conversations, drafts, await MemoryRepository(db).delete_all(household_id))

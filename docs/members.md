@@ -198,10 +198,18 @@ The conversation is private: other members and the admin don't see it. Dinnerbel
 What the assistant sees:
 
 - Each active member's display name, with a label such as "Member 2", so it can tell who you mean. Never a guest or a former member. A name you type, or one the assistant writes, stays in the conversation as written until **Conversation hours** delete it.
-- The meal log, without who ate, and each item's household hint, such as "Well liked". It never sees anyone else's preferences, ratings, or notes.
+- The meal log, without who ate, and each item's household hint, such as "Well liked". It never sees anyone else's ratings or notes, nor, with Memory off, their preferences.
 - Your own levels, ratings, feedback, away days, dietary needs, and **I can usually**, only when you ask in private, and with them nothing about anyone else.
 - For a meal you logged, who ate, as labels, only in private.
 - For a catalog edit, the item's name, kind, tags, ways, and meals; never its notes or links.
 - For a call you coordinate, who's in, as labels, with the roles they offered, how many guests are in, which picks are tied, and the plan; never anyone's vote, maybe, or out.
 
+With [Memory](configuration.md#turn-on-memory) on, it also sees every active member's notes, and in private, housemates' levels, vetoes, dietary needs, and **I can usually** when you ask about their tastes. It answers taste questions from **Preferences** first, and when you tell it something **Preferences** can hold, such as a level for a place, it can set that for you instead.
+
 [What Dinnerbell sends Anthropic](configuration.md#what-dinnerbell-sends-anthropic) has the full list.
+
+### What the assistant remembers
+
+With **Memory** on, Dinnerbell keeps short notes about your own tastes and habits from what you write to the assistant, here, in a direct message, or in a channel thread, such as "avoids raw fish" or "loved the noodles at the corner place". It keeps the food and leaves out medical reasons, and never keeps what you say about someone else. Every member's assistant reads your notes, so it might say "Sam avoids raw fish, so not the sushi place." Nobody else sees the notes themselves.
+
+Your notes show under **What the assistant remembers about you** on this page, newest first. Select **Remove** beside a note to delete it. To correct one, say so, such as "I eat dairy again"; the next rollup changes or removes it. **Start over** saves notes from the conversation first. A note about how a meal went expires after 180 days; the rest stay until you remove them, an admin clears them, or you're deactivated. When an admin turns Memory off, your notes stay here, unread, until an admin deletes them.

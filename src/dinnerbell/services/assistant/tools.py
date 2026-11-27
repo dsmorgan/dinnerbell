@@ -61,7 +61,15 @@ from dinnerbell.domain.members import InvalidMemberInput, Member
 from dinnerbell.domain.offers import DEFAULT_CAPACITY
 from dinnerbell.domain.preferences import LEVELS, InvalidPreference, Stance
 from dinnerbell.services import catalog as catalog_service
-from dinnerbell.services.assistant import call_drafts, catalog_edits, coordinating, direct, drafts, own_drafts
+from dinnerbell.services.assistant import (
+    call_drafts,
+    catalog_edits,
+    coordinating,
+    direct,
+    drafts,
+    housemates,
+    own_drafts,
+)
 from dinnerbell.services.assistant.acting import ToolRefusal, tool_actor
 from dinnerbell.services.assistant.call_drafts import DraftSpec
 from dinnerbell.services.assistant.candidates import CallRef, call_basics, find_candidates, resolve_call
@@ -134,6 +142,8 @@ class Tool:
     input_schema: Mapping[str, Any]
     run: Callable[[ToolContext, Mapping[str, Any]], Awaitable[str]]
     private_only: bool = False
+    memory_only: bool = False
+    """Offered only while **Memory** is on (#367): housemates' Preferences."""
 
     def definition(self) -> dict[str, Any]:
         """The tool as the Messages API takes it. Not strict: Anthropic compiles a request's strict
@@ -1339,6 +1349,52 @@ DRAFT_CAN_USUALLY = Tool(
 )
 
 
+# Housemates' Preferences, in private and only with Memory on (#367) -----------------------------
+
+
+async def look_up_housemates_preferences_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
+    _private(ctx)
+    _fields(raw, "member", "name")
+    who = _text(raw, "member")
+    wanted = None
+    if who:
+        wanted = catalog_edits.labeled(ctx.session.pseudonyms, who)
+        if wanted is None or wanted == ctx.actor.id:
+            raise ToolRefusal(NO_SUCH_HOUSEMATE)
+    found = await housemates.preferences(ctx.db, ctx.actor, _text(raw, "name"), wanted, ctx.session.label)
+    if wanted is not None and not found["housemates"]:
+        raise ToolRefusal(NO_SUCH_HOUSEMATE)
+    return json.dumps(found, ensure_ascii=False)
+
+
+NO_SUCH_HOUSEMATE = (
+    "That isn't a housemate on the roster. Use another active member's label, such as Member 2, or an empty "
+    "string for every housemate; the member's own are in look_up_my_preferences."
+)
+LOOK_UP_HOUSEMATES_PREFERENCES = Tool(
+    name="look_up_housemates_preferences",
+    description=(
+        "Look up housemates' Preferences: for each other active member, by label, the tags and catalog items they "
+        "set a level on (veto, or -2 to 2) whose names contain name, or all they set with an empty string; their "
+        "dietary_needs; and can_usually: whether they usually cook, pick up, and order. Read these first for a "
+        "question about what a housemate likes or would eat, before Memory. Never their ratings, feedback, or away "
+        "days. Never say whose stance kept a pick out of a call."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "member": {"type": "string", "description": "A housemate's label, such as Member 2, or an empty string."},
+            "name": {"type": "string", "description": "Text the name contains, or an empty string."},
+        },
+        "required": ["member", "name"],
+        "additionalProperties": False,
+    },
+    run=look_up_housemates_preferences_tool,
+    private_only=True,
+    memory_only=True,
+)
+
+
 # Coordinating, in private only (#252) -----------------------------------------------------------
 
 COORDINATOR = "The call's coordinator's only; the service refuses anyone else. "
@@ -1868,6 +1924,7 @@ TOOLS: tuple[Tool, ...] = (
     DRAFT_AWAY,
     DRAFT_DIETARY_NEEDS,
     DRAFT_CAN_USUALLY,
+    LOOK_UP_HOUSEMATES_PREFERENCES,
     LOOK_UP_COORDINATING,
     DRAFT_DECIDE,
     DRAFT_SHUFFLE,
@@ -1882,8 +1939,10 @@ TOOLS: tuple[Tool, ...] = (
 """Every tool, in the order requests list them. Later tools come in follow-up issues."""
 
 
-def tools_for(private: bool) -> tuple[Tool, ...]:
-    return tuple(tool for tool in TOOLS if private or not tool.private_only)
+def tools_for(private: bool, *, memory: bool = False) -> tuple[Tool, ...]:
+    """The tools a conversation offers: private-only ones only in ``private``, and housemates'
+    Preferences only with ``memory`` (#367)."""
+    return tuple(tool for tool in TOOLS if (private or not tool.private_only) and (memory or not tool.memory_only))
 
 
 REFUSALS = (
@@ -1911,12 +1970,14 @@ async def run_tool(
     private: bool,
     now: datetime,
     session: ToolSession | None = None,
+    memory: bool = False,
 ) -> ToolResult:
     """Run the tool ``name`` for the model, as ``tool_actor(member)``. A tool this conversation
     isn't offered, bad input, and a refusal from a service come back as error results for the
     model to read, never as exceptions. ``session`` is the message's; a lone call gets one for
-    the member's web conversation."""
-    tool = next((t for t in tools_for(private) if t.name == name), None)
+    the member's web conversation. ``memory`` is whether **Memory** is on (#367), for the tools
+    only it offers."""
+    tool = next((t for t in tools_for(private, memory=memory) if t.name == name), None)
     if tool is None:
         return ToolResult(f"There's no tool named {name[:40]!r} here.", is_error=True)
     if not isinstance(raw, Mapping):

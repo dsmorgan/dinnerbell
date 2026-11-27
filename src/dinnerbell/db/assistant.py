@@ -132,6 +132,15 @@ class AssistantRepository:
         )
         return None if row is None else _conversation(row)
 
+    async def conversations(self, household_id: int) -> list[Conversation]:
+        """Every stored conversation of the household, by ID."""
+        rows = await self._session.scalars(
+            select(AssistantConversationRow)
+            .where(AssistantConversationRow.household_id == household_id)
+            .order_by(AssistantConversationRow.id)
+        )
+        return [_conversation(row) for row in rows]
+
     async def save_conversation(self, household_id: int, conversation: Conversation, now: datetime) -> None:
         row = await self._session.scalar(
             select(AssistantConversationRow).where(
