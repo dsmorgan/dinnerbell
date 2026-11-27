@@ -109,10 +109,27 @@ class OfferedInstead(EventRuleViolation):
     code = "offered_instead"
 
 
-async def cooking_offer(db: AsyncSession, household_id: int, slot: Slot, day: date) -> Event | None:
-    """The live cooking offer that replaces ``slot``'s call on ``day``, if there is one (FR-5)."""
+async def cooking_offer(
+    db: AsyncSession, household_id: int, slot: Slot, day: date, *, call_at: datetime | None = None
+) -> Event | None:
+    """The live cooking offer that replaces ``slot``'s call on ``day``, if there is one (FR-5):
+    one for a time after the call opens, at ``call_at``, or else at the slot's call time that
+    day (``replaces_call``)."""
     offers = await EventRepository(db).offers_for(household_id, slot, day)
-    return next((o for o in offers if replaces_call(o)), None)
+    if not offers:
+        return None
+    if call_at is None:
+        call_at = await slot_call_time(db, household_id, slot, day)
+    return next((o for o in offers if replaces_call(o, call_at)), None)
+
+
+async def slot_call_time(db: AsyncSession, household_id: int, slot: Slot, day: date) -> datetime:
+    """When ``slot``'s call opens on ``day`` by the standing schedule, in UTC."""
+    household = await HouseholdRepository(db).get(household_id)
+    if household is None:  # pragma: no cover - events cascade with their household
+        raise NotFound("No such household.")
+    schedule = slot_schedules(await household_settings(db, household_id))[slot]
+    return schedule.opens_at(day, ZoneInfo(household.timezone))
 
 
 async def check_no_cooking_offer(db: AsyncSession, household_id: int, slot: Slot, day: date) -> None:
@@ -225,7 +242,7 @@ async def open_due_calls(db: AsyncSession, household: Household, now: datetime) 
             exists = await EventRepository(db).call_for(household.id, slot, today) is not None
             # A cooking offer stands in for the call (FR-5). Called off before the response
             # deadline, it frees the slot, and the next tick posts the call after all.
-            exists = exists or await cooking_offer(db, household.id, slot, today) is not None
+            exists = exists or await cooking_offer(db, household.id, slot, today, call_at=opens_at) is not None
             due = should_open_today(
                 enabled=schedule.enabled,
                 opens_at=opens_at,
@@ -333,7 +350,7 @@ async def _open_scheduled(db: AsyncSession, event: Event, now: datetime) -> None
     now stands in for (FR-5) is called off quietly instead of posted next to it: it was never
     posted, so nobody is told. ``offers.post_offer`` replaces a scheduled call itself; this is
     the backstop for any other way one got scheduled. Audited as ``event.replaced_by_offer``."""
-    offer = await cooking_offer(db, event.household_id, event.slot, event.day)
+    offer = await cooking_offer(db, event.household_id, event.slot, event.day, call_at=event.opens_at)
     if offer is None:
         await open_call(db, event, now)
         return

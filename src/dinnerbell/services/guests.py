@@ -21,7 +21,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.catalog import CatalogRepository
 from dinnerbell.db.engine import write_transaction
-from dinnerbell.db.events import AssignmentRepository, EventRepository, InvitationRepository, ResponseRepository
+from dinnerbell.db.events import (
+    AssignmentRepository,
+    EventRepository,
+    InvitationRepository,
+    ResponseRepository,
+    VoteRepository,
+)
 from dinnerbell.db.meals import household_settings
 from dinnerbell.db.outbox import OutboxRepository
 from dinnerbell.db.repositories import HouseholdRepository, MemberRepository, SessionRepository
@@ -148,7 +154,7 @@ async def invite(
         ctx = await load(db, event)
         sent: list[note.Notification] = []
         if guest.is_registered_guest:
-            sent.append(note.GuestInvited(cc.event_info(ctx), ctx.person(guest.id), ctx.person(actor.id)))
+            sent.append(note.GuestInvited(cc.event_info(ctx), ctx.person(guest.id), ctx.person(actor.id), now))
         else:
             answer = with_status(ctx.response_of(guest.id), guest.id, Status.IN, now)
             await ResponseRepository(db).save(actor.household_id, event.id, answer, now)
@@ -171,7 +177,7 @@ async def uninvite(db: AsyncSession, actor: Member, event_id: int, guest_id: int
         if not (actor.is_admin or ctx.invitations[guest_id] == actor.id):
             raise Forbidden("Only whoever invited them, or an admin, can take a guest off the call.")
         await InvitationRepository(db).remove(actor.household_id, event.id, guest_id)
-        await _drop_from_call(db, event, guest_id, now)
+        await drop_from_call(db, event, guest_id, now)
         await audit(
             db, actor.household_id, actor, "event.guest_uninvited", f"event:{event.id}", {"guest_id": guest_id}, now
         )
@@ -222,15 +228,20 @@ async def answer_for(
         activity.action(db, "answer_for", event, actor, guest_id=guest.id, guest=guest.display_name, **what)
 
 
-async def _drop_from_call(db: AsyncSession, event: Event, guest_id: int, now: datetime) -> None:
-    """Take a guest out of a call they no longer belong to: their answer is out, and any role they
-    had is nobody's. Updates the call's messages."""
+async def drop_from_call(db: AsyncSession, event: Event, member_id: int, now: datetime) -> None:
+    """Take someone out of a call they no longer belong to: a guest removed or uninvited, or a
+    member an admin deactivated (#331). Their answer is out, any vote they cast while voting
+    is gone, and any role they had is nobody's. Updates the call's messages, and tells whoever
+    can reassign a role that's left."""
     ctx = await load(db, event)
-    current = ctx.response_of(guest_id)
+    current = ctx.response_of(member_id)
     if current is not None and current.status is not Status.OUT:
-        out = replace(with_status(current, guest_id, Status.OUT, now), guests=0, guest_needs=frozenset())
+        out = replace(with_status(current, member_id, Status.OUT, now), guests=0, guest_needs=frozenset())
         await ResponseRepository(db).save(event.household_id, event.id, out, now)
-    vacated = tuple(a.role for a in ctx.assignments if a.member_id == guest_id and a.role in WORK_ROLES)
+    voted = [p for p, voters in ctx.votes.items() if member_id in voters] if event.state is EventState.VOTING else []
+    for proposal_id in voted:
+        await VoteRepository(db).remove(event.household_id, proposal_id, member_id)
+    vacated = tuple(a.role for a in ctx.assignments if a.member_id == member_id and a.role in WORK_ROLES)
     for role in vacated:
         await AssignmentRepository(db).unassign(event.household_id, event.id, role)
     ctx = await load(db, event)
@@ -242,9 +253,37 @@ async def _drop_from_call(db: AsyncSession, event: Event, guest_id: int, now: da
         admins = [m for m in ctx.active_members if m.is_admin]
         around = [m for m in admins if not m.away_on(ctx.event.day)]
         deciders = [coordinator] if coordinator is not None and coordinator.active else (around or admins)
-        info, left = cc.event_info(ctx), ctx.person(guest_id)
+        info, left = cc.event_info(ctx), ctx.person(member_id)
         told = [note.RoleVacated(info, ctx.person(m.id), left, vacated) for m in deciders]
-    await publish(db, ctx, cc.message_updated(ctx), *cc.decision_updated(ctx), *told, now=now)
+    tally = [cc.proposals_updated(ctx)] if voted else []
+    await publish(db, ctx, cc.message_updated(ctx), *tally, *cc.decision_updated(ctx), *told, now=now)
+
+
+async def leave_open_calls(db: AsyncSession, who: Member, now: datetime, event_ids: list[int] | None = None) -> None:
+    """``drop_from_call`` for each call among ``event_ids`` that's collecting, voting, or decided:
+    a guest's invitations. With None, a member's open calls (#331): only the ones they're in, or
+    have a role or a vote in, and never an offer, which keeps who joined it."""
+    events = EventRepository(db)
+    for event_id in event_ids if event_ids is not None else await events.open_ids(who.household_id):
+        event = await events.get(who.household_id, event_id)
+        if event is None or event.state not in OPEN_FOR_LEAVING:
+            continue
+        if event_ids is None and (event.is_offer or not _takes_part(await load(db, event), who.id)):
+            continue
+        await events.lock(who.household_id, event_id, now)
+        await drop_from_call(db, event, who.id, now)
+
+
+def _takes_part(ctx: cc.CallContext, member_id: int) -> bool:
+    answer = ctx.response_of(member_id)
+    return (
+        (answer is not None and answer.status is not Status.OUT)
+        or any(a.member_id == member_id for a in ctx.assignments)
+        or any(member_id in voters for voters in ctx.votes.values())
+    )
+
+
+OPEN_FOR_LEAVING = frozenset({EventState.COLLECTING, EventState.VOTING, EventState.DECIDED})
 
 
 # Guest records ---------------------------------------------------------------------------------
@@ -528,21 +567,12 @@ async def fold_into_member(
         folded = await members.update(
             target.household_id, target.id, now, slack_user_id=slack_id, slack_link_locked=True
         )
-    await _leave_open_calls(db, guest, now)
+    await leave_open_calls(db, guest, now, await invited_events(db, guest))
     payload: dict[str, object] = {"guest_id": guest.id, "slack_user_id": slack_id, "override": override}
     if via is not None:
         payload["via"] = via
     await audit(db, target.household_id, actor, "guest.linked_to_member", f"member:{target.id}", payload, now)
     return folded
-
-
-async def _leave_open_calls(db: AsyncSession, guest: Member, now: datetime) -> None:
-    events = EventRepository(db)
-    for event_id in await invited_events(db, guest):
-        event = await events.get(guest.household_id, event_id)
-        if event is not None and event.state in {EventState.COLLECTING, EventState.VOTING, EventState.DECIDED}:
-            await events.lock(guest.household_id, event_id, now)
-            await _drop_from_call(db, event, guest.id, now)
 
 
 async def unlinked_members(db: AsyncSession, actor: Member) -> list[Member]:
@@ -565,7 +595,7 @@ async def remove(db: AsyncSession, actor: Member, guest_id: int, *, now: datetim
     guest = await _guest(db, actor, guest_id)
     updated = await MemberRepository(db).update(actor.household_id, guest.id, now, active=False, join_refused=True)
     await SessionRepository(db).delete_for_member(guest.id)
-    await _leave_open_calls(db, guest, now)
+    await leave_open_calls(db, guest, now, await invited_events(db, guest))
     await audit(db, actor.household_id, actor, "guest.removed", f"member:{guest.id}", {}, now)
     await db.commit()
     return updated

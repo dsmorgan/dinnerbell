@@ -989,12 +989,15 @@ def test_offer_outcomes_follow_offer_path() -> None:
         at = OPENS
         return Event(1, 1, EventKind.CALL, Slot.DINNER, DAY, state, 1, at, at, 0, 0)
 
-    assert offer_outcome(None, Mode.COOK) is OfferOutcome.HOLD
-    assert offer_outcome(None, Mode.PICKUP) is OfferOutcome.ALONE
-    assert offer_outcome(call(EventState.SCHEDULED), Mode.COOK) is OfferOutcome.REPLACE
-    assert offer_outcome(call(EventState.SCHEDULED), Mode.PICKUP) is OfferOutcome.ALONE
-    assert offer_outcome(call(EventState.VOTING), Mode.PICKUP) is OfferOutcome.JOIN
-    assert offer_outcome(call(EventState.DECIDED), Mode.COOK) is OfferOutcome.ALONE
+    later, early = OPENS + timedelta(hours=3), OPENS - timedelta(hours=1)
+    assert offer_outcome(None, Mode.COOK, later, OPENS) is OfferOutcome.HOLD
+    assert offer_outcome(None, Mode.COOK, early, OPENS) is OfferOutcome.ALONE  # over before the call opens
+    assert offer_outcome(None, Mode.PICKUP, later, OPENS) is OfferOutcome.ALONE
+    assert offer_outcome(call(EventState.SCHEDULED), Mode.COOK, later, OPENS) is OfferOutcome.REPLACE
+    assert offer_outcome(call(EventState.SCHEDULED), Mode.COOK, early, OPENS) is OfferOutcome.ALONE
+    assert offer_outcome(call(EventState.SCHEDULED), Mode.PICKUP, later, OPENS) is OfferOutcome.ALONE
+    assert offer_outcome(call(EventState.VOTING), Mode.PICKUP, later, OPENS) is OfferOutcome.JOIN
+    assert offer_outcome(call(EventState.DECIDED), Mode.COOK, later, OPENS) is OfferOutcome.ALONE
 
 
 async def test_offers_service_still_posts_without_a_check(house: House) -> None:

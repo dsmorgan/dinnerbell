@@ -18,7 +18,7 @@ from dinnerbell.domain import notifications as n
 from dinnerbell.domain.catalog import ItemKind, Mode
 from dinnerbell.domain.events import AssignmentRole, EndReason, EventState, ProposalSource
 from dinnerbell.domain.meals import Slot
-from dinnerbell.domain.notifications import SUPERSEDED_BY_CALL_OFF, SUPERSEDED_BY_PROGRESS
+from dinnerbell.domain.notifications import SUPERSEDED_BY_CALL_OFF, SUPERSEDED_BY_PROGRESS, SUPERSEDED_BY_ROLE_MOVE
 from dinnerbell.services import outbox
 from dinnerbell.services.bootstrap import bootstrap
 from dinnerbell.services.database import Database, open_database
@@ -821,16 +821,52 @@ async def test_maybe_resolved_is_dropped_only_by_a_call_off(
     assert [s.kind for s in channel.sent] == (["maybe_resolved"] if sent else [])
 
 
+async def assigned(database: Database, role: str = "pickup", member_id: int = 1) -> None:
+    """Assignment 5 of call 1: ``member_id`` has ``role``."""
+    async with database.sessionmaker() as db:
+        await db.execute(
+            text(
+                "INSERT INTO assignment (id, household_id, event_id, member_id, role, created_at) "
+                "VALUES (5, 1, 1, :m, :r, '2026-10-22 20:00:00')"
+            ),
+            {"m": member_id, "r": role},
+        )
+        await db.commit()
+
+
 async def test_assignment_made_still_goes_after_the_call_is_done(database: Database, clock: FakeClock) -> None:
-    kim = n.PersonInfo(7, "Kim")
+    alex = n.PersonInfo(1, "Alex")
     decision = roles_to_choose().decision
-    await enqueue(database, n.AssignmentMade(info(1), 5, kim, (AssignmentRole.PICKUP,), decision))
+    await assigned(database)
+    await enqueue(database, n.AssignmentMade(info(1), 5, alex, (AssignmentRole.PICKUP,), decision))
     async with database.sessionmaker() as db:
         await db.execute(text("UPDATE event SET state='done' WHERE id=1"))
         await db.commit()
     channel = RecordingChannel()
     await outbox.drain(database.sessionmaker, channel, clock)
     assert [s.kind for s in channel.sent] == ["assignment_made"]
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "DELETE FROM assignment WHERE id = 5",  # the role went to someone else, or nobody
+        "UPDATE assignment SET role = 'order' WHERE id = 5",  # they no longer have a role it names
+    ],
+)
+async def test_assignment_made_closes_once_the_role_moved_on(database: Database, clock: FakeClock, change: str) -> None:
+    """A retry must never say "You're picking up" after "You're off it" (#331)."""
+    alex = n.PersonInfo(1, "Alex")
+    await assigned(database)
+    await enqueue(database, n.AssignmentMade(info(1), 5, alex, (AssignmentRole.PICKUP,), roles_to_choose().decision))
+    async with database.sessionmaker() as db:
+        await db.execute(text(change))
+        await db.commit()
+    channel = RecordingChannel()
+    result = await outbox.drain(database.sessionmaker, channel, clock)
+    assert (channel.sent, result.superseded) == ([], 1)
+    async with database.sessionmaker() as db:
+        assert (await db.execute(text("SELECT last_error FROM outbox"))).scalar_one() == SUPERSEDED_BY_ROLE_MOVE
 
 
 @pytest.mark.parametrize(

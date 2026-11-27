@@ -105,15 +105,17 @@ def test_the_path_an_offer_takes() -> None:
     def call(state: EventState) -> Event:
         return Event(1, 1, EventKind.CALL, Slot.DINNER, DAY, state, 1, MORNING, MORNING, 15, 45)
 
-    assert offer_path(None, Mode.COOK) is OfferPath.NEW
+    evening = MORNING + timedelta(hours=8)
+    assert offer_path(None, Mode.COOK, evening) is OfferPath.NEW
     for state in (EventState.COLLECTING, EventState.VOTING):
-        assert offer_path(call(state), Mode.PICKUP) is OfferPath.ATTACH
-        assert offer_path(call(state), Mode.COOK) is OfferPath.ATTACH
-    assert offer_path(call(EventState.SCHEDULED), Mode.COOK) is OfferPath.REPLACE
-    assert offer_path(call(EventState.SCHEDULED), Mode.PICKUP) is OfferPath.NEW
+        assert offer_path(call(state), Mode.PICKUP, evening) is OfferPath.ATTACH
+        assert offer_path(call(state), Mode.COOK, evening) is OfferPath.ATTACH
+    assert offer_path(call(EventState.SCHEDULED), Mode.COOK, evening) is OfferPath.REPLACE
+    assert offer_path(call(EventState.SCHEDULED), Mode.COOK, MORNING) is OfferPath.NEW  # over before it opens
+    assert offer_path(call(EventState.SCHEDULED), Mode.PICKUP, evening) is OfferPath.NEW
     for state in (EventState.DECIDED, EventState.DONE, EventState.CANCELLED, EventState.ABANDONED):
-        assert offer_path(call(state), Mode.COOK) is OfferPath.NEW
-    assert not replaces_call(call(EventState.COLLECTING))
+        assert offer_path(call(state), Mode.COOK, evening) is OfferPath.NEW
+    assert not replaces_call(call(EventState.COLLECTING), MORNING)
 
 
 # A lunch offer fills, closes, and is done ------------------------------------------------------
@@ -587,7 +589,7 @@ async def live(house: House, day: date = DAY) -> tuple[bool, bool]:
         events = EventRepository(db)
         call = await events.call_for(house.household.id, Slot.DINNER, day)
         offers_ = await events.offers_for(house.household.id, Slot.DINNER, day)
-    return any(replaces_call(o) for o in offers_), call is not None and call.state.is_open
+    return any(replaces_call(o, OPENS) for o in offers_), call is not None and call.state.is_open
 
 
 @pytest.mark.parametrize("offer_first", [True, False])

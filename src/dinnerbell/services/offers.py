@@ -188,7 +188,7 @@ async def post_offer(
         capacity = check_capacity(data.capacity)
         item = await _offered_item(db, actor, data, now)
         call = await EventRepository(db).call_for(actor.household_id, data.slot, data.day)
-        path = offer_path(call, data.mode)
+        path = offer_path(call, data.mode, at)
         if expect is not None:
             await expect(call, path)
         if path is OfferPath.ATTACH and call is not None:

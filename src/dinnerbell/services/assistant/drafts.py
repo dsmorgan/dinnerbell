@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -303,9 +303,11 @@ async def _offer_plan(
     a vote, ``NOT_A_PICK`` when the pick misses the call's filters, as a proposal draft does
     (ADR 0005); Confirm leaves both to the service. While answers are open, who's in can still
     change, so the filters wait for Confirm, and the draft says the same whoever answers (FR-29)."""
-    outcome = offer_outcome(call, request.mode)
+    schedule = slot_schedule(await household_settings(db, actor.household_id), request.slot)
+    call_at = call.opens_at if call is not None else schedule.opens_at(request.day, zone)
+    at = datetime.combine(request.day, request.at or schedule.meal_time, tzinfo=zone).astimezone(UTC)
+    outcome = offer_outcome(call, request.mode, at, call_at)
     if call is None or outcome is not OfferOutcome.JOIN:
-        schedule = slot_schedule(await household_settings(db, actor.household_id), request.slot)
         deadline = schedule.opens_at(request.day, zone) + schedule.response_window
         scheduled = schedule.enabled and (request.day > today or now < deadline)
         if call is None:

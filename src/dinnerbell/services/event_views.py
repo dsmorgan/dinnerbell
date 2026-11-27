@@ -41,6 +41,7 @@ from dinnerbell.domain.meals import MealLog, Slot
 from dinnerbell.domain.members import Member
 from dinnerbell.services import call_context as cc
 from dinnerbell.services import guests as guest_rules
+from dinnerbell.services import lifecycle
 from dinnerbell.services.call_context import CallContext, load
 from dinnerbell.services.errors import NotFound
 from dinnerbell.services.variety import household_today
@@ -279,6 +280,8 @@ class TodayView:
     today: date
     events: list[EventView]
     slots: tuple[Slot, ...]
+    held: frozenset[Slot] = frozenset()
+    """Slots whose call today a live cooking offer stands in for (FR-5, ``replaces_call``)."""
 
     @property
     def current(self) -> list[EventView]:
@@ -587,8 +590,16 @@ async def today_view(db: AsyncSession, actor: Member, *, now: datetime, any_time
     if actor.is_guest:  # only the calls they're invited to (#38)
         invited = set(await guest_rules.invited_events(db, actor)) if actor.active else set()
         events = [e for e in events if e.id in invited]
+    held = {
+        e.slot
+        for e in events
+        if e.is_offer
+        and e.day == today
+        and offers.replaces_call(e, await lifecycle.slot_call_time(db, actor.household_id, e.slot, today))
+    }
     return TodayView(
         today=today,
         events=[view(await load(db, event), actor, today, now, any_time=any_time) for event in events],
         slots=tuple(Slot),
+        held=frozenset(held),
     )

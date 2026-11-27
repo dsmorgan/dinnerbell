@@ -77,7 +77,7 @@ from dinnerbell.domain.guests import GuestInput
 from dinnerbell.domain.labels import ROLE_WHO
 from dinnerbell.domain.meals import CALL_ORDER, PICK_SLOT, MealInput, Slot
 from dinnerbell.domain.members import MAX_DISPLAY_NAME_LENGTH, Member
-from dinnerbell.domain.offers import MAX_CAPACITY, replaces_call
+from dinnerbell.domain.offers import MAX_CAPACITY
 from dinnerbell.services.coordinator import Adjustment
 from dinnerbell.services.event_views import EventView, RolesChoice, TodayView
 from dinnerbell.services.feedback import MAX_AWAITING, Awaiting, FeedbackForm
@@ -1448,7 +1448,7 @@ def home_view(
     upcoming = [_upcoming_card(v, links) for v in today.upcoming if v.event.day >= today.today]
     todays = [v.event for v in today.events if v.event.day == today.today]
     # A cooking offer stands in for that slot's call (FR-5), so there's no call to start.
-    started = {e.slot for e in todays if not e.is_offer or replaces_call(e)}
+    started = {e.slot for e in todays if not e.is_offer} | today.held
     called_off = {v.event.slot for v in today.events if v.event.day == today.today and v.can.restart}
     starts: list[Block] = [button("Make an offer", ids.MAKE_OFFER, ids.MAKE_OFFER)]
     for slot in CALL_ORDER:
