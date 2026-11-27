@@ -367,6 +367,13 @@ def test_blank_fillers_are_hidden_characters(blank: str) -> None:
         ("loves our family", True),
         ("orders off the kids menu: they hate sushi", True),  # a food phrase can't hide the rest
         ("loves the family-style place, but he hates it", True),
+        ("my Wife hates cilantro", True),  # capitalized, but after a possessive: a person
+        ("cooks what The Kids like", True),
+        ("mom and pop hate sushi", True),  # no place after it: two people
+        ("Mom-and-pop hate sushi", True),
+        ("family style hates sushi", True),  # no food after it: people
+        ("loves family-style dinners", False),
+        ("prefers mom-and-pop shops", False),
         ("orders off the kids menu", False),
         ("orders from the kid's menu", False),
         ("orders from the kids' menu", False),
