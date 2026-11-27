@@ -13,17 +13,17 @@ The assistant forgets everything when **Conversation hours** delete a conversati
 
 ## Decision
 
-**A rollup keeps typed facts for each member.** A model call answers with changes to one member's facts. A fact is one sentence of at most 160 characters with a kind (like, dislike, usual, experience, belief, or routine). Each member keeps at most 20, and a pass adds at most 5; past 20, code drops the oldest experience, then the oldest of the rest, beliefs last. Experiences expire after 180 days; other kinds never do.
+**A rollup keeps typed facts for each member.** A model call answers with changes to one member's facts. A fact is one sentence of at most 160 characters with a kind (like, dislike, usual, experience, belief, or routine). Each member keeps at most 20, a pass adds at most 5, and past 20 the oldest experience goes first, beliefs last. Experiences expire after 180 days; other kinds never do.
 
-**A pass reads the member's own messages, with the assistant's replies as context in private conversations only:** a channel thread's replies can echo housemates' words. Code guarantees that each fact lands only in its author's record and quotes at least three words of the author's own message. It also checks, on NFKC text with hidden characters, stray marks, and mixed-script words rejected and common lookalikes folded, that most of the fact's distinct content words are in that message, and that it holds no member label, link, listed instruction word ("everyone", "vote"), or word for others ("wife", "kids") outside a food phrase or brand. The prompt is left with what lists miss: a name or nickname ("Theo hates sushi"), an instruction in plain taste words, a medical reason, and what Preferences hold. Known limits: words split by a space ("every one") and domains in other scripts.
+**A pass reads the member's own messages, with the assistant's replies as context in private conversations only:** a channel thread's replies can echo housemates' words. Code guarantees that each fact lands only in its author's record and quotes at least 3 words of the author's own message, or 6 characters in a script without spaces. It also checks, on NFKC text with hidden characters, stray marks, and mixed-script words rejected and common lookalikes folded, that most of the fact's distinct content words are in that message, and that it holds no member label, link, listed instruction word ("everyone", "vote"), or word for others ("wife", "kids") outside a food phrase or brand. The prompt is left with what lists miss: a name or nickname ("Theo hates sushi"), an instruction in plain taste words, a medical reason, and what Preferences hold. Known limits remain, such as split words ("every one"), typos ("Membr 2"), spelled-out or other-script domains ("evil dot com"), and partly folded Greek ("κιδς").
 
-**When it runs.** The 5-minute purge job rolls a conversation up 15 minutes before its oldest waiting turn reaches Conversation hours, at 24,000 waiting bytes, before long replies cut a waiting turn, or as a last try. A failed pass puts its turns off 10, then 20 minutes; after 3 failures they stop waiting, logged. **Start over** removes the conversation at once; the next purge run gives it a last pass and deletes it. Admin refuses Conversation hours 0 while Memory is on.
+**When it runs.** The 5-minute purge job rolls a conversation up 15 minutes before its oldest waiting turn reaches Conversation hours, at 24,000 waiting bytes, before long replies cut a waiting turn, or as a last try. A failed pass puts its turns off 10, then 20 minutes; after 3 failures they stop waiting, logged. **Start over** removes the conversation at once; the next purge run, normally within 5 minutes, gives it a last pass and deletes it. Admin refuses Conversation hours 0 while Memory is on.
 
 **Every request carries every active member's facts** as tagged data at the start of the member's message, in private conversations and channel threads, within 16,000 bytes, the asker's first. The assistant works a housemate's taste in plainly and never says whose stance kept a pick out.
 
 **Housemates' Preferences, through a tool.** While Memory is on, private conversations offer a lookup of housemates' Preferences; channel threads don't. The prompt says to answer taste questions from Preferences first, and to set what Preferences hold with the own-data tools, not memory.
 
-**Switches and controls.** **Memory** on Admin > Assistant, off by default, and its own **Rollup model**, Claude Haiku 5.5 by default, are audited. Rollup calls go through the monthly cap. Each member sees their own facts on the Assistant page with **Remove**. An admin's **Clear memory**, for one member or all, is audited. Turning Memory off stops passes and sending facts; stored facts stay until deleted. Deactivation, `reset-history`, and `scrub-test` delete facts.
+**Switches and controls.** **Memory** on Admin > Assistant, off by default, and its own **Rollup model**, Claude Haiku 5.5 by default, are audited. Rollup calls count toward the cap. Each member sees their own facts on the Assistant page with **Remove**. An admin's **Clear memory**, for one member or all, is audited. Turning Memory off stops passes and sending facts; stored facts stay until deleted. Deactivation, `reset-history`, and `scrub-test` delete facts.
 
 **Memory never feeds filters, vetoes, or ranking** (ADR 0005), only what the assistant says.
 
@@ -50,8 +50,7 @@ The gap that remains: an instruction in plain taste words, in the member's own m
 
 - **Typed facts let code check a model's work:** the quote check dropped a forged transcript that fooled both models every time. Tying facts to the member's words loses some reply-only facts ("loved it"), the safer side.
 - **All facts, not retrieval:** four full records are about 15 percent of a request.
-- **Haiku 5.5** costs a twentieth of Sonnet 5.5 and passed the safety cases.
-- **Preferences first** keeps memory from drifting from the structured data.
+- **Haiku 5.5** costs a twentieth of Sonnet 5.5.
 - **Off by default:** it changes ADR 0009's privacy stance for the whole household.
 
 ## Consequences
