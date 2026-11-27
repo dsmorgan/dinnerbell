@@ -66,8 +66,8 @@ class JobContext:
     state: SchedulerState
     clock: Clock
     zone: ZoneInfo
-    """The household's time zone, for the nightly backup. ``follow_zone`` changes it when the
-    household's does (#334)."""
+    """The household's time zone, for the nightly backup and outbox prune. ``follow_zone``
+    changes it when the household's does (#334)."""
     database_path: Path
     backup_dir: Path
     sessionmaker: async_sessionmaker[AsyncSession]
@@ -145,10 +145,15 @@ def _backup_trigger(zone: ZoneInfo) -> CronTrigger:
     return CronTrigger(hour=BACKUP_HOUR, minute=BACKUP_MINUTE, timezone=zone)
 
 
+def _prune_trigger(zone: ZoneInfo) -> CronTrigger:
+    return CronTrigger(hour=PRUNE_HOUR, minute=PRUNE_MINUTE, timezone=zone)
+
+
 async def follow_zone(ctx: JobContext, scheduler: AsyncIOScheduler) -> None:
-    """Move the nightly backup to the household's time zone once ``dinnerbell set-timezone``
-    changes it (#334), so the change takes effect within a minute, with no restart. The backup is
-    the only job that keeps a zone: everything else reads the household row each time.
+    """Move the nightly backup and the nightly outbox prune to the household's time zone once
+    ``dinnerbell set-timezone`` changes it (#334), so the change takes effect within a minute,
+    with no restart. They are the only jobs that keep a zone: everything else reads the
+    household row each time.
 
     Backups are one per date in the household's zone, so after a move west the next night's
     date may already have its copy, taken in the old zone, and that run writes nothing. The gap
@@ -164,11 +169,12 @@ async def follow_zone(ctx: JobContext, scheduler: AsyncIOScheduler) -> None:
         return
     try:
         scheduler.reschedule_job("nightly_backup", trigger=_backup_trigger(zone))
+        scheduler.reschedule_job("prune_outbox", trigger=_prune_trigger(zone))
     except JobLookupError:  # shutting down: stop_scheduler removed the jobs
         return
     ctx.zone = zone
     log.info(
-        "the nightly backup now runs in the household's new time zone",
+        "the nightly backup and outbox prune now run in the household's new time zone",
         extra={"household_id": household.id, "zone": zone.key},
     )
 
@@ -322,8 +328,8 @@ async def stop_scheduler(
 
 
 def build_scheduler(ctx: JobContext) -> AsyncIOScheduler:
-    # UTC, not the household's zone: only the nightly backup's trigger has a zone, and
-    # follow_zone keeps it current, so no job is left on an old zone (#334).
+    # UTC, not the household's zone: only the nightly backup's and outbox prune's triggers have
+    # a zone, and follow_zone keeps both current, so no job is left on an old zone (#334).
     scheduler = AsyncIOScheduler(
         timezone=UTC,
         job_defaults={"coalesce": True, "max_instances": 1, "misfire_grace_time": 3600},
@@ -390,7 +396,7 @@ def build_scheduler(ctx: JobContext) -> AsyncIOScheduler:
     # No misfire grace, as for the backup: a host asleep at 04:15 prunes when it wakes.
     scheduler.add_job(
         _tracked(prune_outbox),
-        CronTrigger(hour=PRUNE_HOUR, minute=PRUNE_MINUTE, timezone=ctx.zone),
+        _prune_trigger(ctx.zone),
         args=[ctx],
         id="prune_outbox",
         misfire_grace_time=None,
