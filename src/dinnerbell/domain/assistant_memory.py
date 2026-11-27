@@ -380,29 +380,50 @@ _UNSPACED = frozenset({"THAI", "LAO", "KHMER", "MYANMAR", "CJK", "HIRAGANA", "KA
 """Scripts written without spaces between words."""
 
 
+_VENUES = frozenset({"diner", "shop", "store", "restaurant", "place", "spot", "joint", "bakery", "cafe", "deli"})
+"""What "mom-and-pop" must come before to name a kind of place, not two people."""
+_CUISINES = frozenset(
+    {"italian", "chinese", "mexican", "thai", "indian", "korean", "japanese", "greek", "bbq", "barbecue"}
+    | {"food", "dinner", "dinners", "dining", "meal", "meals", "restaurant", "restaurants", "place", "places"}
+    | {"pasta", "pizza", "dishes", "platters", "portions", "servings"}
+)
+"""What "family-style" must come before to name a way of serving food."""
 _IDIOMS = re.compile(
     r"\b(?:kids?'?s?|children'?s?)\s+menus?\b"
-    r"|\bfamily[\s-]+(?:style|size|sized|pack|meal|meals|platter|recipe|recipes)\b"
-    r"|\bmom[\s-]+(?:and|&|n)[\s-]+pop\b"
+    r"|\bfamily[\s-]+(?:size|sized|pack|platter|recipe|recipes)\b"
+    r"|\bfamily[\s-]+style(?=[\s-]+(?:" + "|".join(sorted(_CUISINES)) + r")\b)"
+    r"|\bmom[\s-]+(?:and|&|n)[\s-]+pop(?=[\s-]+(?:" + "|".join(sorted(_VENUES)) + r")s?\b)"
     r"|\b(?:mother|father|grand(?:mother|father|parent)s?)'?s?\s+day\b",
 )
 """Food and occasion phrases with a word for others in them: "the kids menu", "family-style",
-"mom-and-pop", "Father's Day". They name no one."""
+"mom-and-pop diners", "Father's Day". They name no one. "Family-style" and "mom-and-pop" count
+only before a food or a place, so "mom and pop hate sushi" still names someone."""
+
+
+def _owned(before: str) -> bool:
+    """Whether the word before a capitalized one is a possessive or an article: "my Wife" and
+    "The Kids" are people, whatever their case."""
+    return bool(set(_words(skeleton(before))) & _OWNERS)
+
+
+_OWNERS = frozenset({"my", "our", "his", "her", "their", "the", "your", "a", "an"})
 
 
 def about_others(text: str) -> bool:
     """Whether a fact's text names someone else or the house: any word of ``OTHERS_WORDS``,
     even spelled in lookalike letters ("kids hate sushi", "my wife"), except inside a food or
     occasion phrase (``_IDIOMS``), or capitalized after the fact's first word, as a name or a
-    brand is ("Sister Pie", "Brother Jimmy's"). A capitalized first word still counts ("Mom
-    hates sushi"), and so does each use beyond the capitalized ones ("loves Sister Pie, but my
+    brand is ("Sister Pie", "Brother Jimmy's"), unless a possessive or an article comes right
+    before it ("my Wife", "The Kids"). A capitalized first word still counts ("Mom hates
+    sushi"), and so does each use beyond the capitalized ones ("loves Sister Pie, but my
     sister hates it")."""
     found = Counter(w for w in _words(_IDIOMS.sub(" ", skeleton(text))) if w in OTHERS_WORDS)
+    shown = _tokens(clean(text))
     named = Counter(
         word
-        for n, shown in enumerate(_tokens(clean(text)))
-        if n > 0 and shown[:1].isupper()
-        for word in _words(skeleton(shown))[:1]
+        for n, token in enumerate(shown)
+        if n > 0 and token[:1].isupper() and not _owned(shown[n - 1])
+        for word in _words(skeleton(token))[:1]
     )
     return any(count > named[word] for word, count in found.items())
 
