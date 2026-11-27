@@ -135,8 +135,8 @@ def _parser() -> argparse.ArgumentParser:
         help="change the household's time zone",
         description="Change the household's time zone to ZONE. Refuses while a call is open, scheduled calls "
         "included. Prints the old and new zone, and writes an audit row. The running app moves the nightly "
-        "backup to the new zone within a minute. Set DINNERBELL_TIMEZONE to ZONE too, or each start warns that "
-        "it differs. Run it in the running container.",
+        "backup and the nightly notification prune to the new zone within a minute. Set DINNERBELL_TIMEZONE "
+        "to ZONE too, or each start warns that it differs. Run it in the running container.",
     )
     set_timezone.add_argument("zone", metavar="ZONE", help="an IANA time zone name, such as America/Chicago")
     set_name = commands.add_parser(
@@ -594,7 +594,7 @@ def _set_household(settings: Settings, command: str, value: str) -> int:
         print(f"The household's time zone is already {result.after}. Nothing changed.")
     elif timezone:
         print(f"Changed the household's time zone from {result.before} to {result.after}.")
-        print("The running app moves the nightly backup to the new zone within a minute.")
+        print("The running app moves the nightly backup and notification prune to the new zone within a minute.")
         print(f"Set DINNERBELL_TIMEZONE={result.after} in your env file too, or each start warns that it differs.")
     elif not result.changed:
         print(f"The household is already named {result.after!r}. Nothing changed.")
