@@ -6,6 +6,8 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-11-27
+
 ### Added
 
 - **The Assistant page shows a reply while the assistant writes it** (#370), as Slack DMs do. The text appears as it's written, from the first word (#372, #377), and text the assistant drops for a tool call disappears, and the thinking indicator comes back. When the reply is done, the page shows it as a reload would, with its draft cards after it. If you leave the page mid-reply, the reply is still kept and shows when you come back, unless **Conversation hours** is 0, where nothing is kept. If the connection drops after your message arrived, as when an iPhone locks, the page keeps your message and says the assistant's reply is still on its way, so you don't send it twice; at **Conversation hours** 0, where it can't come back, the page says to send it again. Screen readers hear the finished reply once. Without JavaScript, or in a browser that can't read a response as it arrives, the page works as before. If a proxy buffers the reply, it arrives all at once; see [Let the Assistant's replies stream](docs/troubleshooting.md#let-the-assistants-replies-stream).
@@ -28,6 +30,14 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 - **The README and setup docs cover the web app, and the setup guide is shorter** (#354). The README says members can answer in the installed web app with push notifications, or sign in with a code instead of Slack, and its diagram shows the push services. The setup guide writes `.env` with `dinnerbell init`, as the quick install does, and is about half as long: backups, upgrades, rollbacks, restoring on a new host, and verifying an image moved to [Back up and upgrade](docs/backup-and-upgrade.md), and linking Slack accounts moved to [members.md](docs/members.md#link-slack-accounts). [Add a member without Slack](docs/members.md#add-a-member-without-slack) gives the steps. Old links to the moved sections still land on a pointer.
 - **Shorter household guides** (#354, #359). [Coordinating a meal](docs/coordinating.md), [How Dinnerbell picks proposals](docs/ranking.md), [Contributions and badges](docs/contributions.md), and [Members and guests](docs/members.md) are about a fifth shorter. Each rule now lives on the page that owns it: badge corrections on Contributions, the assistant's coordinator actions on Members, and the tie order on Ranking. Audit action names, log lines, and notes about earlier versions are gone, and nothing Dinnerbell does has changed.
 - **Shorter operator docs** (#358, follow-up to #354). [configuration.md](docs/configuration.md), [troubleshooting.md](docs/troubleshooting.md), [hardening.md](docs/hardening.md), [test-instance.md](docs/test-instance.md), [switch-install.md](docs/switch-install.md), and [catalog-format.md](docs/catalog-format.md) say the same things in fewer words. A rule stated on two pages now lives on the one that owns it, such as the outbound connection rules in [Outbound connections](docs/configuration.md#outbound-connections), and the catalog example uses placeholder names. The maintainer sections of hardening.md, securing your GitHub account and what CI enforces, moved to [CONTRIBUTING.md](CONTRIBUTING.md#what-ci-enforces). No setting or step was dropped. Outbound connections now says that a menu link the assistant reads follows up to 5 redirects, checking each address, instead of saying no request follows a redirect.
+
+### Upgrade notes
+
+- **Migration 0046** adds two columns to `assistant_draft` in place: `direct`, false for every existing row, and `undone_at`, empty (#374). Nothing is rebuilt. A downgrade to 0045 drops both, and the assistant's **Done** records then read as confirmed drafts until they expire.
+- **This upgrade backs itself up.** Before migrating, `serve` writes `pre-migrate-0045-to-0046-<time>.db` to `/data/backups`, and stops if it can't. To roll back, run 0.19.0 on that copy.
+- **The assistant changes things without Confirm** (#374). On the Assistant page and in DMs, a member's own answers, votes, roles, and some preferences now happen at once, with **Undo**. No setting turns this off. Let your household know; [What the assistant does at once](docs/members.md#what-the-assistant-does-at-once) lists what changed. Channel threads still draft everything.
+- **Streamed replies need an unbuffered proxy** (#370, #377). The Assistant page reads its reply as `text/event-stream`. If your reverse proxy buffers or compresses that response, replies arrive all at once, as before. See [Let the Assistant's replies stream](docs/troubleshooting.md#let-the-assistants-replies-stream).
+- **Test instance:** nothing to do.
 
 ## [0.19.0] - 2026-11-23
 
@@ -823,7 +833,8 @@ The source-built version, never published as an image. It covers milestones M0 t
 - **M1:** the catalog with file import, preferences and vetoes, meal history, and the members admin page.
 - **M2:** dinner calls in Slack: the scheduled call, reminders, ranked proposals and votes, the decision, assignments, the abandon path, admin overrides, App Home, and `/dinnerbell call`.
 
-[Unreleased]: https://github.com/dsmorgan/dinnerbell/compare/v0.19.0...HEAD
+[Unreleased]: https://github.com/dsmorgan/dinnerbell/compare/v0.20.0...HEAD
+[0.20.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.20.0
 [0.19.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.19.0
 [0.18.1]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.18.1
 [0.18.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.18.0
