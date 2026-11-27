@@ -94,7 +94,7 @@
     </li>
     {% endfor %}
   </ul>
-  <p class="small muted">The newest {{ failed|length }}, newest first. A notification that waits more than 24 hours fails instead of arriving late. Failed pushes stay listed for a week.</p>
+  <p class="small muted">The newest {{ failed|length }}, newest first. A notification that waits more than 24 hours fails instead of arriving late. Slack failures go about {{ slack_keep_days }} days after their call ends, and failed pushes after {{ push_keep_days }} days.</p>
   {% else %}
   <p class="small muted">None. Every notification went out, or is still waiting.</p>
   {% endif %}

@@ -297,6 +297,7 @@ def test_the_page_shows_status_failures_and_the_audit_log(admin: TestClient, mig
     assert "<dt>Slack notifications that failed</dt><dd>0</dd>" in status
     assert "<dt>Version</dt>" in status
     assert "None. Every notification went out" in html
+    assert "Slack failures go about" not in html  # the footnote comes with a list
     audit = html.split('id="audit"', 1)[1]
     assert f'<strong>Member invited</strong>: <a href="/admin/members/{sam}">Sam</a>' in audit
     assert "<strong>Sign-in refused</strong></div>" in audit
@@ -417,6 +418,7 @@ def test_a_failure_names_its_call_and_a_call_thats_gone_has_no_link(
     monkeypatch.setattr(health_routes, "health_details", details)
     failed = page(admin.get("/admin/health")).split('id="failed"', 1)[1].split("</section>", 1)[0]
     assert "for The channel · Call 7</div>" in failed
+    assert "Slack failures go about 90 days after their call ends, and failed pushes after 7 days." in failed
     assert "/events/7" not in failed
 
 

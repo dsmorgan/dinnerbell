@@ -17,6 +17,8 @@ from starlette.responses import Response
 
 from dinnerbell.services.admin_health import health_details
 from dinnerbell.services.health import BACKUP_STALE_AFTER, check_health
+from dinnerbell.services.outbox import KEEP_FOR
+from dinnerbell.services.push import PURGE_AFTER
 from dinnerbell.web.auth import AdminPrincipal, Context, Database
 from dinnerbell.web.render import render
 
@@ -77,6 +79,8 @@ async def admin_health(request: Request, principal: AdminPrincipal, context: Con
         "backup_stale_hours": int(BACKUP_STALE_AFTER.total_seconds() // 3600),
         "dms_dropped": context.slack_state.dms_dropped,
         "failed": details.failed,
+        "slack_keep_days": KEEP_FOR.days,  # the nightly prune (#340)
+        "push_keep_days": PURGE_AFTER.days,
         "audit": details.audit,
     }
     return await render(request, "admin_health.html", page)
