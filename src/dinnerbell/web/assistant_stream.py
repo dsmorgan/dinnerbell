@@ -12,7 +12,8 @@ back only whitespace at the end and a label's start that could still change, and
 round's text. Its methods only put onto a queue, so they never block the model's events. The
 answer runs in a task of its own (``Answers.start``) with its own database session, never the
 request's: when the member leaves the page, Starlette cancels only the response, and the reply
-still finishes and is stored. Shutdown cancels what's still running (``Answers.settle``) before the database closes.
+still finishes and is stored. Shutdown cancels what's still running (``Answers.settle``) before
+the database closes.
 
 The events, in order:
 

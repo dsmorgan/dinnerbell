@@ -16,7 +16,8 @@ included (#377). Its last line's open code span, bold, italics, or strikethrough
 shows styled while the model writes it, not as the characters typed. What the next characters
 could still make something else waits for them: markers at the line's end that show as typed, a
 backslash, a last line that's only a list, heading, rule, or code block's marker so far (or a
-number, which could be a numbered item's), and the start of a code block's closing fence. A
+number, which could be a numbered item's), a rule until its line ends, and the start of a code
+block's closing fence. A
 ``[``, ``>``, ``|``, or ``&`` needs nothing: links, block quotes, tables, and entities always show
 as typed, so a half-written one is just the text so far."""
 
@@ -25,6 +26,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from collections.abc import Iterator
+from functools import lru_cache
 
 from markupsafe import Markup, escape
 
@@ -77,6 +79,13 @@ def inline(text: str) -> str:
     return "".join(parts)
 
 
+@lru_cache(maxsize=8)
+def _inline_once(line: str) -> str:
+    """``inline(line)``, for the tries at a last line still being written, which style the
+    same few lines more than once."""
+    return inline(line)
+
+
 _CLOSERS = ("**", "*", "`", "_", "__", "~~", "***", "``")
 """What ``_closed`` tries at the end of a line still being written, best first."""
 _CODE_SPAN = re.compile(r"<code>.*?</code>")
@@ -97,31 +106,36 @@ def _kind(line: str) -> tuple[bool, ...]:
     return tuple(bool(p.match(line)) for p in (_FENCE, _RULE, _HEADING, _BULLET, _NUMBERED))
 
 
+def _typed_markers(styled: str) -> list[str]:
+    """The marker characters ``styled``, a line from ``inline``, shows as typed outside code."""
+    return _MARKER.findall(_TAG.sub("", _CODE_SPAN.sub("", styled)))
+
+
 def _literal_markers(styled: str) -> int:
-    """How many marker characters ``styled``, a line from ``inline``, shows as typed outside
-    code."""
-    return len(_MARKER.findall(_TAG.sub("", _CODE_SPAN.sub("", styled))))
+    """How many marker characters ``styled`` shows as typed outside code."""
+    return len(_typed_markers(styled))
 
 
 def _best_closer(line: str) -> tuple[str, int]:
     """``line`` with the closer from ``_CLOSERS`` that leaves the fewest markers showing as typed
     outside code, if any leaves fewer, and how many it leaves. A closer must keep the line the
     kind of block it is, and make no span of markers alone that the line doesn't have already.
-    Each try styles the line once, so only closers whose characters the line has are tried, and
-    the first that leaves none wins."""
-    styled = inline(line)
+    Each try styles the line once, so only closers whose characters show as typed are tried,
+    and the first that leaves none wins."""
+    styled = _inline_once(line)
     empty = Counter(_EMPTY_SPAN.findall(styled))
-    fewest = _literal_markers(styled)
+    typed = _typed_markers(styled)
+    fewest = len(typed)
     best = line
     for closer in _CLOSERS:
         if not fewest:
             break
-        if closer[0] not in line:
+        if closer[0] not in typed:
             continue
         candidate = line + closer
         if _kind(candidate) != _kind(line):
             continue
-        styled = inline(candidate)
+        styled = _inline_once(candidate)
         if Counter(_EMPTY_SPAN.findall(styled)) - empty:
             continue
         shown = _literal_markers(styled)
@@ -132,39 +146,69 @@ def _best_closer(line: str) -> tuple[str, int]:
 
 def _held(line: str) -> str:
     """``line``, the last of a reply still being written, without what the next delta could still
-    make something else: a backslash that could escape what comes next, and markers at the end
-    that show as typed, such as the ``*`` of "a *" or "**bold*", which could be a span's start
-    or end. A line that would be a rule only without them is held whole."""
+    make something else: a backslash that could escape what comes next, and the markers at the
+    end that show as typed, such as the ``*`` of "a *" or "**bold*", which could be a span's
+    start or end, with the whitespace around them. Markers that close a span, or that a
+    backslash escapes, stay. A line that's a rule so far is held whole: more of the line can
+    make it text. It styles the line once."""
     if len(line) > MAX_STYLED:
         return line
-    held, before = line, None
-    while held != before:  # each turn makes it shorter
-        before = held
-        if (len(held) - len(held.rstrip("\\"))) % 2:
-            held = held[:-1]
-        styled = inline(held)
-        if styled and _MARKER.match(styled[-1]):
-            held = _TRAILING_MARKERS.sub("", held)
-    return "" if _RULE.match(held) and not _RULE.match(line) else held
+    held = line
+    if (len(held) - len(held.rstrip("\\"))) % 2:
+        held = held[:-1].rstrip()
+    # The styled line ends with the line's own last characters, unless they made a tag or an
+    # entity, which a marker or whitespace never does.
+    tail = _TRAILING_MARKERS.search(_inline_once(held))
+    if tail is not None and _MARKER.search(tail.group()):
+        held = held[: len(held) - len(tail.group())]
+    return "" if _RULE.match(held) else held
+
+
+def _shown_as_typed(line: str, opener: re.Match[str], typed: int) -> bool:
+    """Whether the markers ``opener`` matched, at the same place in ``line``, show as typed
+    there: with them gone, ``typed``, how many markers ``line`` shows as typed, drops by as many.
+    Markers that open a span that closes don't: with them gone, their closer shows as typed."""
+    gone = line[: opener.start()] + "\0" * len(opener.group()) + line[opener.end() :]
+    return _literal_markers(_inline_once(gone)) <= typed - len(opener.group())
+
+
+_OPENERS_TRIED = 2
+"""How many of a line's last openers ``_closed`` looks at, each styling the line once."""
 
 
 def _closed(line: str) -> str:
     """``line``, the last of a reply still being written (and ``_held``), with its open bold,
-    italics, strikethrough, or code closed, as ``_best_closer`` finds. When markers still show as
-    typed, as in "*a* and **b _c", where no one closer does, the line ends instead before the
-    last marker that could open a span, if that shows fewer and cuts off no code: that span
-    shows once it closes."""
+    italics, strikethrough, or code closed. ``_best_closer`` tries one closer; when markers
+    still show as typed, as in "**bold _ital", the line's last unclosed openers are closed
+    together, innermost first. When markers still show as typed after that, the line ends
+    instead before the last marker that opens a span that doesn't close, if that shows fewer
+    and cuts off no code: that span shows once it closes. Markers that open nothing, as in
+    "john_doe" or "2*3", never cut it."""
     if len(line) > MAX_STYLED or not line:
         return line
     best, fewest = _best_closer(line)
-    if fewest:
-        openers = [opener.start() for opener in _OPENER.finditer(line)]
-        if openers and "`" not in line[openers[-1] :]:
-            shorter = line[: openers[-1]].rstrip()
-            if shorter and _kind(shorter) == _kind(line):
-                closed, left = _best_closer(shorter)
-                if left < fewest:
-                    return closed
+    if not fewest:
+        return best
+    openers = list(_OPENER.finditer(line))[-_OPENERS_TRIED:][::-1]  # the last first
+    typed = _literal_markers(_inline_once(line))
+    unclosed = [opener for opener in openers if _shown_as_typed(line, opener, typed)]
+    if len(unclosed) > 1:
+        candidate = line + "".join(opener.group()[::-1] for opener in unclosed)
+        styled = _inline_once(candidate)
+        left = _literal_markers(styled)
+        made = Counter(_EMPTY_SPAN.findall(styled)) - Counter(_EMPTY_SPAN.findall(_inline_once(line)))
+        if left < fewest and _kind(candidate) == _kind(line) and not made:
+            best, fewest = candidate, left
+            if not fewest:
+                return best
+    for opener in unclosed:
+        if not _shown_as_typed(best, opener, fewest):  # the closer closed it
+            continue
+        shorter = line[: opener.start()].rstrip()
+        if "`" in line[opener.start() :] or not shorter or _kind(shorter) != _kind(line):
+            break
+        closed, left = _best_closer(shorter)
+        return closed if left < fewest else best
     return best
 
 

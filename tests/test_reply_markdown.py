@@ -179,9 +179,23 @@ def test_an_entity_the_model_wrote_stays_text() -> None:
         # Bold never spans code, finished or not.
         ("**Note: use `uv`", "".join(reply_blocks("**Note: use `uv`"))),
         ("**bold** and **", "<p><strong>bold</strong> and</p>"),
-        # Where no one closer closes it all, the line waits before the last marker that opens.
-        ("*a* and **b _c", "<p><em>a</em> and <strong>b</strong></p>"),
-        ("Use **bold _it", "<p>Use <strong>bold</strong></p>"),
+        # Where no one closer closes it all, the open spans close together, innermost first.
+        ("*a* and **b _c", "<p><em>a</em> and <strong>b <em>c</em></strong></p>"),
+        ("Use **bold _it", "<p>Use <strong>bold <em>it</em></strong></p>"),
+        ("**1.5 _the a_b", "<p><strong>1.5 <em>the a_b</em></strong></p>"),
+        # Markers the closer can't fix, as in "john_doe", never hide what's before them.
+        (
+            "Thursday: **tacos** won, and john_do",
+            "<p>Thursday: <strong>tacos</strong> won, and john_do</p>",
+        ),
+        ("Use 2*3 and **six** or a_b", "<p>Use 2*3 and <strong>six</strong> or a_b</p>"),
+        # Markers at the end that close a span, or that a backslash escapes, stay.
+        ("**bold _and italic_*", "<p><strong>bold <em>and italic</em></strong></p>"),
+        ("- 5 \\* *", "<ul><li>5 &#42;</li></ul>"),
+        ("*\\* *", "<p><em>&#42;</em></p>"),
+        # A backslash waits with the whitespace before it.
+        ("_tacos \\", "<p><em>tacos</em></p>"),
+        ("Plan:\n3. tacos\n4. \\", '<p>Plan:</p><ol start="3"><li>tacos</li></ol>'),
         # But never to cut off code (see "**Note: use `uv`" above), or at a marker that can't
         # open, as in "2*3".
         ("**a 2*3", "".join(reply_blocks("**a 2*3**"))),
@@ -236,9 +250,12 @@ def test_a_finished_replys_blocks_are_its_markdown() -> None:
         ("```\nx = 1\n``", "<pre><code>x = 1</code></pre>"),
         ("~~~\nx = 1\n~", "<pre><code>x = 1</code></pre>"),
         ("````\nx = 1\n```", "<pre><code>x = 1</code></pre>"),
+        # A rule waits for its line to end: more of it can make it text.
+        ("Plan:\n---", "<p>Plan:</p>"),
+        ("b\n-- -", "<p>b</p>"),
+        ("b\n-- -\n", "<p>b</p><hr>"),
         # Once it's more than a marker, it shows as the block it is.
         ("Plan:\n12 people", "<p>Plan:<br>12 people</p>"),
-        ("Plan:\n---", "<p>Plan:</p><hr>"),
         ("Plan:\n```py\nx", "<p>Plan:</p><pre><code>x</code></pre>"),
         ("Plan:\n## Monday", "<p>Plan:</p><p><strong>Monday</strong></p>"),
         # A block quote's marker is text, as in the finished reply.
@@ -255,8 +272,8 @@ def test_a_marker_line_waits_only_while_its_last() -> None:
 
 
 def test_closing_a_line_styles_it_only_as_often_as_it_needs(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Each closer tried styles the whole line again, so only closers whose characters the line
-    has are tried, and the first that leaves no marker showing ends the search."""
+    """Each closer tried styles the whole line again, so only closers whose characters show as
+    typed are tried, and the first that leaves no marker showing ends the search."""
     calls = []
     styled = markdown_module.inline
 
@@ -265,15 +282,44 @@ def test_closing_a_line_styles_it_only_as_often_as_it_needs(monkeypatch: pytest.
         return styled(text)
 
     monkeypatch.setattr(markdown_module, "inline", counted)
+    markdown_module._inline_once.cache_clear()  # another test may have styled the same lines
     assert markdown_module._closed("plain words") == "plain words"
     assert len(calls) == 1
     calls.clear()
     assert markdown_module._closed("Tonight: **Siam") == "Tonight: **Siam**"
     assert len(calls) == 2  # the line, then ** leaves none
     calls.clear()
-    # Nothing closes it all: only the * closers, then again without the last "*a".
+    # Nothing closes it all: as many tries for a long line as for a short one.
     markdown_module._closed("*a " * 600 + "*a")
-    assert len(calls) == 8
+    long = len(calls)
+    calls.clear()
+    markdown_module._inline_once.cache_clear()
+    markdown_module._closed("*a " * 6 + "*a")
+    assert long == len(calls) < 20
+
+
+@pytest.mark.parametrize("tail", ["\\ *", "\\ *\\ _", "\\* *", "a\\ ~~"])
+def test_a_last_line_still_being_written_is_styled_a_fixed_number_of_times(
+    monkeypatch: pytest.MonkeyPatch, tail: str
+) -> None:
+    """What's held at the end of a line is found in one look, however the line ends: a line
+    built to be held a piece at a time costs no more than any other."""
+    calls = []
+    styled = markdown_module.inline
+
+    def counted(text: str) -> str:
+        calls.append(text)
+        return styled(text)
+
+    monkeypatch.setattr(markdown_module, "inline", counted)
+    markdown_module._inline_once.cache_clear()  # another test may have styled the same lines
+    counts = []
+    for repeat in (5, 300):  # under MAX_STYLED, so styled
+        calls.clear()
+        markdown_module._inline_once.cache_clear()
+        reply_blocks("x" + tail * repeat, unfinished=True)
+        counts.append(len(calls))
+    assert counts[0] == counts[1] < 30
 
 
 REPLIES = [
@@ -290,6 +336,9 @@ REPLIES = [
     "*Italic with **bold** inside* and **bold with _italic_ inside** and ~~struck **bold**~~.",
     "- **Mon:** *pasta* (`$12`)\n  - nested **item**\n* **Tue:** ~~tacos~~ pho\n\n---\n\n> Tip: vote early.",
     "~~~\nfenced with tildes\n~~~\nafter",
+    "Thursday: **tacos** won, and john_doe cooks at 6pm. Everyone else is in.",
+    "Use 2*3 and **six** or a_b ok, and **1.5 _the a_b_c_** then.",
+    "Plan:\n3. tacos\n4. \\* pizza \\\n\nb\n-- - x\n\n**bold _and italic_** - 5 \\* *x*",
 ]
 
 
@@ -302,9 +351,11 @@ def test_a_reply_cut_at_any_character_shows_only_what_it_will_show(text: str) ->
     """Each prefix a delta can end a piece at (anything but whitespace at the end) shows the
     renderer's tags only, the blocks the finished reply shows before its last, never more blocks
     than it, and in the last block a prefix of the finished block's text: no stray marker, half a
-    closing fence, or a backslash that's about to escape something."""
+    closing fence, or a backslash that's about to escape something. And each shows all the text
+    the one before it showed: nothing shown goes away again."""
     done = reply_blocks(text)
     count = 0
+    before = ""
     for cut in range(1, len(text) + 1):
         if text[cut - 1].isspace():
             continue
@@ -317,6 +368,9 @@ def test_a_reply_cut_at_any_character_shows_only_what_it_will_show(text: str) ->
             assert shown[:last] == done[:last], text[:cut]
             assert shown[last][:3] == done[last][:3], text[:cut]  # the same kind of block
             assert _visible(done[last]).startswith(_visible(shown[last])), text[:cut]
+        now = _visible("".join(shown))
+        assert now.startswith(before), (text[:cut], before, now)
+        before = now
 
 
 def test_a_long_last_line_still_being_written_shows_as_text() -> None:
