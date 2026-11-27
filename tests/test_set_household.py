@@ -181,10 +181,11 @@ async def test_the_nightly_backup_follows_a_changed_zone(
     scheduler = runner.build_scheduler(job_context)
     scheduler.start(paused=True)
     try:
-        assert str(scheduler.timezone) == "UTC"  # no job but the backup keeps a zone
+        assert str(scheduler.timezone) == "UTC"  # only the backup and the outbox prune keep a zone
         assert scheduler.get_job("follow_zone").trigger.interval == runner.ZONE_CHECK_INTERVAL
         await runner.follow_zone(job_context, scheduler)  # nothing changed
         assert str(backup_job(scheduler).trigger.timezone) == ZONE
+        assert str(scheduler.get_job("prune_outbox").trigger.timezone) == ZONE
         assert "new time zone" not in caplog.text
 
         await set_zone(house, "Asia/Tokyo")
@@ -195,7 +196,11 @@ async def test_the_nightly_backup_follows_a_changed_zone(
         nightly = job.next_run_time.astimezone(ZoneInfo("Asia/Tokyo"))
         assert (nightly.hour, nightly.minute) == (runner.BACKUP_HOUR, runner.BACKUP_MINUTE)
         assert nightly - datetime.now(UTC) < timedelta(days=1)
-        assert "the nightly backup now runs in the household's new time zone" in caplog.text
+        prune = scheduler.get_job("prune_outbox")  # #340: the prune moves with it
+        assert str(prune.trigger.timezone) == "Asia/Tokyo"
+        nightly = prune.next_run_time.astimezone(ZoneInfo("Asia/Tokyo"))
+        assert (nightly.hour, nightly.minute) == (runner.PRUNE_HOUR, runner.PRUNE_MINUTE)
+        assert "the nightly backup and outbox prune now run in the household's new time zone" in caplog.text
     finally:
         scheduler.shutdown(wait=False)
 
