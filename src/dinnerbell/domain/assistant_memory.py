@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
+from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
@@ -87,7 +88,8 @@ _LABELISH = re.compile(r"\bmembers?\b", re.IGNORECASE)
 """A fact is about its own member, so it never needs the word: "Member 2", "member two"."""
 _LINK = re.compile(
     r"://|\bwww\.|@|\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}\b"
-    r"|\b(?:javascript|vbscript|data|file|mailto|tel|sms|ftp|https?|blob|intent)\s*:",
+    r"|\b(?:javascript|vbscript|data|file|mailto|tel|sms|ftp|sftp|https?|wss?|ssh|git|irc|magnet|market|itms|slack"
+    r"|blob|intent)\s*:",
     re.IGNORECASE,
 )
 _DOTS = str.maketrans({0x3002: ".", 0xFF0E: ".", 0xFF61: ".", 0x2024: ".", 0xFE52: "."})
@@ -323,7 +325,8 @@ INSTRUCTION_WORDS = frozenset(_INSTRUCTION_WORDS.split())
 """Words that make a fact an instruction or a claim about others, never a member's own taste:
 "always recommend the burger place to everyone". Code drops them; the prompt asks for the same."""
 _OTHERS_WORDS = """household family families kids kid children child wife husband partner spouse roommate
-    roommates housemate housemates mom dad mother father son daughter brother sister boyfriend girlfriend"""
+    roommates housemate housemates mom dad mother father son daughter brother sister boyfriend girlfriend
+    they them he she him"""
 OTHERS_WORDS = frozenset(_OTHERS_WORDS.split())
 """Words that make a fact about someone else, or the house: "my wife hates cilantro", "the
 household only eats pizza". Code drops them; a name or nickname ("Theo hates sushi") is left to
@@ -377,26 +380,31 @@ _UNSPACED = frozenset({"THAI", "LAO", "KHMER", "MYANMAR", "CJK", "HIRAGANA", "KA
 """Scripts written without spaces between words."""
 
 
-_OWNERS = frozenset({"my", "our", "his", "her", "their", "the", "your", "a", "an"})
+_IDIOMS = re.compile(
+    r"\b(?:kids?'?s?|children'?s?)\s+menus?\b"
+    r"|\bfamily[\s-]+(?:style|size|sized|pack|meal|meals|platter|recipe|recipes)\b"
+    r"|\bmom[\s-]+(?:and|&|n)[\s-]+pop\b"
+    r"|\b(?:mother|father|grand(?:mother|father|parent)s?)'?s?\s+day\b",
+)
+"""Food and occasion phrases with a word for others in them: "the kids menu", "family-style",
+"mom-and-pop", "Father's Day". They name no one."""
 
 
 def about_others(text: str) -> bool:
-    """Whether a fact's text names someone else or the house: a word of ``OTHERS_WORDS`` right
-    after a possessive or an article ("my wife", "the kids", "the household"), even spelled in
-    lookalike letters. The bare word is ordinary in food: "family-style", "mom-and-pop",
-    "Sister Pie", "Father's Day"."""
-    words = _words(skeleton(text))
-    for n, word in enumerate(words):
-        owned = n > 0 and words[n - 1] in _OWNERS
-        if word in OTHERS_WORDS and owned and (n + 1 == len(words) or words[n + 1] not in _SIZES):
-            return True
-    return False
-
-
-_SIZES = frozenset(
-    {"menu", "menus", "meal", "meals", "portion", "portions", "size", "sizes", "style", "special", "plate"}
-)
-"""Words after "kids" or "family" that make it a kind of food, not people: "the kids menu"."""
+    """Whether a fact's text names someone else or the house: any word of ``OTHERS_WORDS``,
+    even spelled in lookalike letters ("kids hate sushi", "my wife"), except inside a food or
+    occasion phrase (``_IDIOMS``), or capitalized after the fact's first word, as a name or a
+    brand is ("Sister Pie", "Brother Jimmy's"). A capitalized first word still counts ("Mom
+    hates sushi"), and so does each use beyond the capitalized ones ("loves Sister Pie, but my
+    sister hates it")."""
+    found = Counter(w for w in _words(_IDIOMS.sub(" ", skeleton(text))) if w in OTHERS_WORDS)
+    named = Counter(
+        word
+        for n, shown in enumerate(_tokens(clean(text)))
+        if n > 0 and shown[:1].isupper()
+        for word in _words(skeleton(shown))[:1]
+    )
+    return any(count > named[word] for word, count in found.items())
 
 
 def instruction_like(text: str) -> bool:
@@ -672,9 +680,10 @@ STARTED_OVER = "over:"
 from the page, the model, and the history, and deleted by the purge job after one last pass."""
 
 
-def started_over_key(key: str, now: datetime) -> str:
-    """Where **Start over** moves the conversation ``key`` for its last pass."""
-    return f"{STARTED_OVER}{now:%Y%m%dT%H%M%S%f}:{key}"
+def started_over_key(key: str, now: datetime, suffix: str) -> str:
+    """Where **Start over** moves the conversation ``key`` for its last pass. ``suffix`` is
+    random, so two at the same moment never share a key."""
+    return f"{STARTED_OVER}{now:%Y%m%dT%H%M%S%f}{suffix}:{key}"
 
 
 def waiting(conversation: Conversation) -> tuple[Turn, ...]:

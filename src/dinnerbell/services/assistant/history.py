@@ -10,6 +10,7 @@ reads it or starts it over. Both raise NotFound while the assistant doesn't answ
 from __future__ import annotations
 
 import logging
+import secrets
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -108,7 +109,7 @@ async def start_over(db: AsyncSession, config: AssistantConfig, member: Member, 
         stored = await repo.conversation(member.household_id, key)
         settings = assistant_settings(await household_settings(db, member.household_id))
         if stored is not None and settings.remembers and waiting(stored):
-            await repo.move_conversation(member.household_id, key, started_over_key(key, now))
+            await repo.move_conversation(member.household_id, key, started_over_key(key, now, secrets.token_hex(4)))
         else:
             await repo.delete_conversation(member.household_id, key)
         await db.commit()

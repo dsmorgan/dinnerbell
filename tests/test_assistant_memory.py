@@ -356,21 +356,34 @@ def test_blank_fillers_are_hidden_characters(blank: str) -> None:
 @pytest.mark.parametrize(
     ("text", "about"),
     [
-        ("loves family-style Italian", False),
-        ("orders off the kids menu", False),
-        ("prefers mom-and-pop diners", False),
-        ("loves Brother Jimmy's BBQ", False),
-        ("loves Sister Pie", False),
-        ("drinks Dad's root beer", False),
-        ("has brunch on Father's Day", False),
-        ("skips household-brand cereal", False),
+        ("kids hate sushi", True),
+        ("wife can't stand cilantro", True),
+        ("my kids love pho", True),
+        ("the household only eats tacos", True),
         ("cooks what my wife likes", True),
-        ("orders what the kids want", True),
-        ("eats what the household eats", True),
+        ("Mom hates sushi", True),  # capitalized, but the first word: still someone else
+        ("Kids hate sushi", True),
+        ("loves Sister Pie, but my sister hates it", True),  # one use is a name, the other isn't
         ("loves our family", True),
+        ("orders off the kids menu: they hate sushi", True),  # a food phrase can't hide the rest
+        ("loves the family-style place, but he hates it", True),
+        ("orders off the kids menu", False),
+        ("orders from the kid's menu", False),
+        ("orders from the kids' menu", False),
+        ("orders from the children's menu", False),
+        ("loves family-style Italian", False),
+        ("loves family style Italian", False),
+        ("buys the family-size pizza", False),
+        ("prefers mom-and-pop diners", False),
+        ("prefers mom and pop diners", False),
+        ("has brunch on Father's Day", False),
+        ("has brunch on Mother's Day", False),
+        ("loves Sister Pie", False),
+        ("loves Brother Jimmy's BBQ", False),
+        ("drinks Dad's Root Beer", False),
     ],
 )
-def test_words_about_others_count_only_with_an_owner(text: str, about: bool) -> None:
+def test_words_about_others_drop_a_fact_unless_an_idiom_or_a_name(text: str, about: bool) -> None:
     assert am.about_others(text) is about
 
 
@@ -388,6 +401,11 @@ def test_words_about_others_count_only_with_an_owner(text: str, about: bool) -> 
         ("favorite:pho", None),
         ("loves javascript:alert(1)", "link"),
         ("loves data :text", "link"),
+        ("follows wss://evil", "link"),
+        ("joins ssh:evil", "link"),
+        ("opens magnet:?xt=evil", "link"),
+        ("opens slack:open", "link"),
+        ("opens itms:apps", "link"),
     ],
 )
 def test_counted_markup_and_ordinary_colons_are_kept(text: str, problem: str | None) -> None:
@@ -719,6 +737,71 @@ async def test_a_started_over_conversation_is_read_by_nothing_but_its_last_pass(
     await roll(house, helper, web_key(house["Kim"].id))
     await start_over(house, helper, "Kim")  # nothing waits: deleted at once
     assert await stored_keys(house) == []
+
+
+async def test_a_started_over_pass_that_raises_still_deletes_its_copy_and_goes_on(
+    house: House, helper: Assistant, model: Attacker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Start over copy whose pass raises is deleted anyway, and the next copy still gets its
+    pass, so a broken copy never waits out Conversation hours or blocks the run."""
+    await remember(house, helper)
+    await say(house, helper, "Sam", "I love pho a lot")
+    await say(house, helper, "Kim", "I love ramen a lot")
+    await start_over(house, helper, "Sam")
+    await start_over(house, helper, "Kim")
+    real = memory.roll_up
+    calls: list[str] = []
+
+    async def breaking(db: Any, assistant: Any, household_id: int, key: str, **kwargs: Any) -> memory.Pass:
+        calls.append(key)
+        if len(calls) == 1:
+            raise RuntimeError("the database is locked")
+        return await real(db, assistant, household_id, key, **kwargs)
+
+    monkeypatch.setattr(memory, "roll_up", breaking)
+    model.rollups = [rollup_answer({"text": "loves ramen", "quote": "I love ramen"})]
+    await memory.roll_up_due(house.sessionmaker, helper)
+    assert len(calls) == 2 and await stored_keys(house) == []
+    assert len(model.rolling) == 1
+
+
+async def test_a_started_over_copy_is_deleted_even_when_its_pass_is_cancelled(
+    house: House, helper: Assistant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Shutdown cancels the purge job mid-pass: the copy still goes, so it never waits out
+    Conversation hours."""
+    await remember(house, helper)
+    await say(house, helper, "Sam", "I love pho a lot")
+    await start_over(house, helper)
+
+    async def cancelled(*args: Any, **kwargs: Any) -> memory.Pass:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(memory, "roll_up", cancelled)
+    with pytest.raises(asyncio.CancelledError):
+        await memory.roll_up_due(house.sessionmaker, helper)
+    assert await stored_keys(house) == []
+
+
+async def test_a_started_over_pass_ignores_the_backoff(house: House, helper: Assistant, model: Attacker) -> None:
+    await remember(house, helper)
+    await say(house, helper, "Sam", "I love pho a lot")
+    model.rollups = [conversation.ModelCallFailed(maybe_billed=False)]
+    await roll(house, helper, web_key(house["Sam"].id))  # put off 10 minutes
+    await start_over(house, helper)
+    model.rollups = [rollup_answer({"text": "loves pho", "quote": "I love pho"})]
+    await memory.roll_up_due(house.sessionmaker, helper)  # within the 10 minutes
+    assert len(model.rolling) == 2 and await facts_of(house, "Sam") == ["loves pho"]
+
+
+async def test_two_start_overs_at_the_same_moment_never_share_a_key(house: House, helper: Assistant) -> None:
+    await remember(house, helper)
+    await say(house, helper, "Sam", "I love pho a lot")
+    await start_over(house, helper)
+    await say(house, helper, "Sam", "I love ramen a lot")
+    await start_over(house, helper)  # the clock hasn't moved
+    keys = await stored_keys(house)
+    assert len(keys) == 2 and all(k.startswith(am.STARTED_OVER) for k in keys)
 
 
 async def test_the_last_try_before_deletion_ignores_the_backoff(
