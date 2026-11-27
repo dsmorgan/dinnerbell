@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dinnerbell.db.assistant import AssistantRepository
 from dinnerbell.db.engine import write_transaction
 from dinnerbell.db.meals import household_settings
+from dinnerbell.db.memory import MemoryRepository
 from dinnerbell.db.repositories import HouseholdRepository, MemberRepository
 from dinnerbell.domain.assistant import (
     AssistantSettings,
@@ -28,6 +29,8 @@ from dinnerbell.services.assistant.runtime import AssistantConfig
 from dinnerbell.services.common import audit, require_admin
 from dinnerbell.services.errors import NotFound
 
+NO_SUCH_MEMBER = "There's no member with that ID."
+
 ADMINS_ONLY = "Only the household admin can change the assistant's settings."
 NOT_CONFIGURED = "The assistant isn't set up on this server."
 FORMER_MEMBER = "A former member"
@@ -37,6 +40,13 @@ FORMER_MEMBER = "A former member"
 class MemberUsage:
     name: str
     micros: int
+
+
+@dataclass(frozen=True, slots=True)
+class MemberFacts:
+    member_id: int
+    name: str
+    facts: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +66,12 @@ class AssistantAdmin:
     least_channel_call_micros: int = 0
     """The same for a message in a channel thread, which offers fewer tools. A cap below it
     answers no message at all."""
+    memory: tuple[MemberFacts, ...] = ()
+    """How many facts the assistant's memory keeps for each member who has any (#367)."""
+
+    @property
+    def facts(self) -> int:
+        return sum(m.facts for m in self.memory)
 
     @property
     def cap_below_one_call(self) -> bool:
@@ -100,16 +116,24 @@ async def assistant_admin(db: AsyncSession, config: AssistantConfig, actor: Memb
     repo = AssistantRepository(db)
     members = await MemberRepository(db).list(household.id)
     names = {m.id: m.display_name for m in members}
+    settings = assistant_settings(await household_settings(db, household.id))
+    counts = await MemoryRepository(db).counts(household.id)
     return AssistantAdmin(
-        settings=assistant_settings(await household_settings(db, household.id)),
+        settings=settings,
         month=month,
         spent_micros=await repo.month_total(household.id, month),
         by_member=tuple(
             MemberUsage(names.get(member_id, FORMER_MEMBER) if member_id is not None else FORMER_MEMBER, micros)
             for member_id, micros in await repo.by_member(household.id, month)
         ),
-        least_call_micros=least_private_call_micros(config.model, members),
-        least_channel_call_micros=least_call_micros(config.model, private=False, members=members),
+        least_call_micros=least_private_call_micros(config.model, members, memory=settings.remembers),
+        least_channel_call_micros=least_call_micros(
+            config.model, private=False, members=members, memory=settings.remembers
+        ),
+        memory=tuple(
+            MemberFacts(member_id, names.get(member_id, FORMER_MEMBER), count)
+            for member_id, count in sorted(counts.items(), key=lambda item: (names.get(item[0], ""), item[0]))
+        ),
     )
 
 
@@ -154,3 +178,22 @@ async def delete_expired(db: AsyncSession, household_id: int, hours: int, now: d
     """Delete the conversations whose last message is ``hours`` or more ago (all of them at 0),
     in the caller's transaction."""
     return await AssistantRepository(db).delete_idle(household_id, expiry_cutoff(hours, now))
+
+
+async def clear_memory(
+    db: AsyncSession, config: AssistantConfig, actor: Member, member_id: int | None, *, now: datetime
+) -> int:
+    """**Clear memory** (#367): delete every fact the assistant's memory keeps about the member
+    ``member_id``, or about everyone when it's None, whether Memory is on or off. Audited as
+    ``household.assistant_memory_cleared`` with the member, or ``all``, and how many facts went,
+    never their text. Returns how many."""
+    _require(config, actor)
+    async with write_transaction(db):
+        if member_id is not None and await MemberRepository(db).get(actor.household_id, member_id) is None:
+            raise NotFound(NO_SUCH_MEMBER)
+        removed = await MemoryRepository(db).delete_all(actor.household_id, member_id)
+        target = f"member:{member_id}" if member_id is not None else f"household:{actor.household_id}"
+        payload = {"member": member_id if member_id is not None else "all", "facts": removed}
+        await audit(db, actor.household_id, actor, "household.assistant_memory_cleared", target, payload, now)
+        await db.commit()
+    return removed

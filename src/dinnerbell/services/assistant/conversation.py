@@ -40,6 +40,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dinnerbell.db.assistant import AssistantRepository
 from dinnerbell.db.engine import write_transaction
 from dinnerbell.db.meals import household_settings
+from dinnerbell.db.memory import MemoryRepository
 from dinnerbell.db.repositories import HouseholdRepository, MemberRepository
 from dinnerbell.domain.assistant import (
     DRAFT,
@@ -62,6 +63,7 @@ from dinnerbell.domain.assistant import (
     web_key,
 )
 from dinnerbell.domain.assistant_drafts import MAX_OPEN_DRAFTS
+from dinnerbell.domain.assistant_memory import MAX_BLOCK_BYTES, Fact, cut_waiting, memory_block
 from dinnerbell.domain.members import Member
 from dinnerbell.services.assistant import direct
 from dinnerbell.services.assistant.acting import ToolRefusal
@@ -238,11 +240,12 @@ def _add_user(messages: list[dict[str, Any]], message: dict[str, Any]) -> None:
         messages.append(message)
 
 
-def _messages(history: Sequence[Turn], current: Turn) -> list[dict[str, Any]]:
+def _messages(history: Sequence[Turn], current: Turn, memory: str = "") -> list[dict[str, Any]]:
     """The request's messages: ``history``, then ``current``. Each draft entry goes at the start
     of the member's message after it, so the model reads it before what came next. Two members'
     messages with no reply between, in a channel thread whose reply went only to its member, go
-    as one."""
+    as one. ``memory``, the memory block (#367), goes at the very start of ``current``, framed as
+    data: rebuilt for each request and never stored, so a rollup never reads it back."""
     messages: list[dict[str, Any]] = []
     used: list[Turn] = []
     for turn in history:
@@ -253,7 +256,10 @@ def _messages(history: Sequence[Turn], current: Turn) -> list[dict[str, Any]]:
         else:
             _add_user(messages, _user_message(turn, current.author, current=False, used=used))
             used = []
-    _add_user(messages, _user_message(current, current.author, current=True, used=used))
+    asked = _user_message(current, current.author, current=True, used=used)
+    if memory:
+        asked = {"role": "user", "content": f"{memory}\n\n{asked['content']}"}
+    _add_user(messages, asked)
     return messages
 
 
@@ -264,6 +270,7 @@ def build_request(
     *,
     keeps_history: bool,
     roster: Roster,
+    memory: bool = False,
 ) -> dict[str, Any]:
     """One request, as the Messages API's keyword arguments: what's measured, reserved, and sent.
     The system prompt is two text blocks: the fixed prompt, then the roster. The roster comes
@@ -274,7 +281,7 @@ def build_request(
         "model": model,
         "max_tokens": MAX_OUTPUT_TOKENS,
         "system": [
-            {"type": "text", "text": system_prompt(keeps_history=keeps_history)},
+            {"type": "text", "text": system_prompt(keeps_history=keeps_history, memory=memory)},
             {"type": "text", "text": roster_text(roster)},
         ],
         "messages": list(messages),
@@ -287,22 +294,29 @@ def build_request(
     return with_fallback(request)
 
 
-def least_call_micros(model: str, *, private: bool, members: Sequence[Member]) -> int:
+def least_call_micros(model: str, *, private: bool, members: Sequence[Member], memory: bool = False) -> int:
     """What the smallest message's first call reserves with ``model``: an empty message, no
     history, the roster of ``members`` (the household's, as they are now), and every tool a
     private conversation, or a channel thread, offers, by ``_call``'s own reservation. A cap below
     it can't answer any such message (``CAP_BELOW_ONE_CALL``). A conversation's roster is never
-    shorter: it has the same names, and labels at least as high."""
+    shorter: it has the same names, and labels at least as high. With ``memory`` (#367), the
+    message carries a full memory block too, as one may, with the Memory prompt and tools."""
     roster = roster_of(with_roster(Pseudonyms(), members), members)
+    block = "x" * MAX_BLOCK_BYTES if memory else ""
     request = build_request(
-        model, tools_for(private), _messages((), Turn("user", "", "Member 1")), keeps_history=True, roster=roster
+        model,
+        tools_for(private, memory=memory),
+        _messages((), Turn("user", "", "Member 1"), block),
+        keeps_history=True,
+        roster=roster,
+        memory=memory,
     )
     return reservation_micros(model, payload_bytes=request_bytes(request), max_tokens=int(request["max_tokens"]))
 
 
-def least_private_call_micros(model: str, members: Sequence[Member]) -> int:
+def least_private_call_micros(model: str, members: Sequence[Member], *, memory: bool = False) -> int:
     """``least_call_micros`` for a private message: the larger, since it offers more tools."""
-    return least_call_micros(model, private=True, members=members)
+    return least_call_micros(model, private=True, members=members, memory=memory)
 
 
 def request_bytes(request: Mapping[str, Any]) -> int:
@@ -385,7 +399,11 @@ async def _call(
         month = month_key(now, zone)
         spent = await repo.month_total(household_id, month)
         if spent + reserved > settings.cap_micros:
-            raise _Refused(await _over_cap(db, assistant, member, spent, settings.cap_micros, private=private))
+            raise _Refused(
+                await _over_cap(
+                    db, assistant, member, spent, settings.cap_micros, private=private, memory=settings.remembers
+                )
+            )
         usage_id = await repo.reserve(household_id, member.id, model, month, reserved, now)
         await db.commit()
 
@@ -490,9 +508,10 @@ async def _check_room(
         month = month_key(assistant.clock(), zone)
         spent = await repo.month_total(household_id, month)
         if spent + reserved > settings.cap_micros:
-            raise _Refused(
-                _for_link(await _over_cap(db, assistant, member, spent, settings.cap_micros, private=private))
+            over = await _over_cap(
+                db, assistant, member, spent, settings.cap_micros, private=private, memory=settings.remembers
             )
+            raise _Refused(_for_link(over))
 
 
 def _for_link(reply: str) -> str:
@@ -501,13 +520,20 @@ def _for_link(reply: str) -> str:
 
 
 async def _over_cap(
-    db: AsyncSession, assistant: Assistant, member: Member, spent: int, cap: int, *, private: bool
+    db: AsyncSession,
+    assistant: Assistant,
+    member: Member,
+    spent: int,
+    cap: int,
+    *,
+    private: bool,
+    memory: bool = False,
 ) -> str:
     """Why a reservation that won't fit under ``cap`` with ``spent`` is refused: ``AT_CAP`` when
     what's left can't cover the smallest message of this kind (``least_call_micros``), so nothing
     will fit until next month, and otherwise ``NEAR_CAP``, since a smaller request may (#362)."""
     members = await MemberRepository(db).list(member.household_id)
-    if spent + least_call_micros(assistant.config.model, private=private, members=members) > cap:
+    if spent + least_call_micros(assistant.config.model, private=private, members=members, memory=memory) > cap:
         log.info("assistant at its monthly cap", extra={"member_id": member.id})
         return AT_CAP
     log.info("assistant too near its monthly cap for this request", extra={"member_id": member.id})
@@ -620,17 +646,24 @@ async def _keep(
         pseudonyms = sent.onto(latest.pseudonyms if latest else Pseudonyms())
         # The member's own words keep their labels' meaning, as mentions put them there.
         label = pseudonyms.label(member.id)
-        asked = Turn(asked.role, sent.relabel(asked.text, pseudonyms, unknown=None), label)
+        # It records when it was written, and waits for the rollup while Memory is on (#367).
+        asked = Turn(
+            asked.role, sent.relabel(asked.text, pseudonyms, unknown=None), label, at=now, pending=settings.memory
+        )
         answered = Turn(
             answered.role, sent.relabel(answered.text, pseudonyms), shown_to=label if only_to_asker else None
         )
         history = latest.turns if latest else ()
+        everything = [*history, asked, answered]
+        turns = recent_turns(everything, MAX_STORED_BYTES)
+        if lost := cut_waiting(everything, turns):
+            log.warning("assistant memory messages cut before the rollup", extra={"count": lost})
         kept = Conversation(
             key=key,
             private=private,
             owner_member_id=member.id if private else None,
             pseudonyms=pseudonyms,
-            turns=recent_turns([*history, asked, answered], MAX_STORED_BYTES),
+            turns=turns,
             last_message_at=now,
         )
         await repo.save_conversation(household_id, kept, now)
@@ -657,12 +690,14 @@ async def _run_loop(
     roster: Roster,
     names: Mapping[int, str],
     stream: ReplyStream | None = None,
+    memory: bool = False,
 ) -> tuple[str, bool]:
     """The model and tool loop. Returns the reply text, and whether the model answered (so the
     exchange is worth keeping) rather than Dinnerbell replying for it. Every call stops at
     ``deadline`` and sends ``roster``. With ``stream``, each call's text also goes there as it's
-    written, with ``names`` put back (``streaming``)."""
-    tools = tools_for(private)
+    written, with ``names`` put back (``streaming``). With ``memory`` (#367), the prompt has its
+    Memory paragraph and the tools include housemates' Preferences."""
+    tools = tools_for(private, memory=memory)
     written = 0  # output tokens of this message's calls so far
     over = False  # a call billed more attempts than its reservation covered
     links = _LinkCalls(db, assistant, member, zone, deadline, private=private)
@@ -670,7 +705,9 @@ async def _run_loop(
     for _ in range(MAX_MODEL_CALLS):
         if over or links.over:
             return FAILED, False  # refuse further calls in this message
-        request = build_request(assistant.config.model, tools, messages, keeps_history=keeps_history, roster=roster)
+        request = build_request(
+            assistant.config.model, tools, messages, keeps_history=keeps_history, roster=roster, memory=memory
+        )
         events = None
         if stream is not None:
             events = CallText(stream, lambda text: session.pseudonyms.restore_names(text, names))
@@ -718,6 +755,7 @@ async def _run_loop(
                         private=private,
                         now=assistant.clock(),
                         session=session,
+                        memory=memory,
                     )
             except TimeoutError:
                 log.warning("assistant tool ran out of time", extra={"member_id": member.id})
@@ -734,6 +772,29 @@ def _theirs(stored: Conversation, member: Member, *, private: bool) -> bool:
     """Whether ``member`` may add to ``stored``: it's as private as the new message, and a
     private one is their own."""
     return stored.private == private and (not private or stored.owner_member_id == member.id)
+
+
+async def call_outside_message(
+    db: AsyncSession,
+    assistant: Assistant,
+    member: Member,
+    zone: ZoneInfo,
+    request: Mapping[str, Any],
+    *,
+    seconds: float,
+) -> ModelReply | None:
+    """One model call that isn't part of a member's message, such as a memory rollup (#367):
+    reserved before and settled after under the monthly cap, as ``_call`` does every call, and
+    counted under ``member``. None when it didn't run or didn't finish: the cap, the switch, a
+    failure, ``seconds`` passing, or a reply that cost more than its reservation."""
+    deadline = assistant.clock() + timedelta(seconds=seconds)
+    try:
+        reply, overran = await _call(db, assistant, member, zone, request, private=True, deadline=deadline)
+    except _Refused:
+        return None
+    if overran or _over_covered(reply, str(request["model"]), member):
+        return None
+    return reply
 
 
 async def may_converse(db: AsyncSession, member: Member, key: str, *, private: bool) -> bool:
@@ -783,7 +844,8 @@ async def converse(
     household = await HouseholdRepository(db).get(member.household_id)
     if household is None:  # pragma: no cover - members cascade with their household
         raise NotFound("No such household.")
-    hours = assistant_settings(await household_settings(db, household.id)).conversation_hours
+    settings = assistant_settings(await household_settings(db, household.id))
+    hours, memory = settings.conversation_hours, settings.remembers
     repo = AssistantRepository(db)
     stored = await repo.conversation(household.id, key)
     if stored is not None:
@@ -811,12 +873,13 @@ async def converse(
     sent = recent_turns(history, MAX_HISTORY_BYTES - current.size)
     zone = ZoneInfo(household.timezone)
     names = {m.id: m.display_name for m in members}
+    block = await _memory(db, member, session.pseudonyms, members, assistant.clock()) if memory else ""
     answer, answered = await _run_loop(
         db,
         assistant,
         member,
         zone,
-        _messages(sent, current),
+        _messages(sent, current, block),
         private=private,
         keeps_history=hours > 0,
         session=session,
@@ -824,6 +887,7 @@ async def converse(
         roster=roster_of(session.pseudonyms, members),
         names=names,
         stream=stream,
+        memory=memory,
     )
     pseudonyms = session.pseudonyms  # with anyone the tools named
     if not answered and answer == NEAR_CAP and sent:
@@ -841,6 +905,27 @@ async def converse(
     return Reply(pseudonyms.restore_names(answer, names), tuple(session.drafts), only_to_member=alone)
 
 
+async def _memory(
+    db: AsyncSession, member: Member, pseudonyms: Pseudonyms, members: Sequence[Member], now: datetime
+) -> str:
+    """The memory block for a request answering ``member`` (#367): every active member's facts
+    under their labels, ``member``'s first, then the rest by label. A guest or former member's
+    facts never go, and nor do those of anyone the conversation has no label for."""
+    by_member: dict[int, list[Fact]] = {}
+    for fact in await MemoryRepository(db).facts(member.household_id, now):
+        by_member.setdefault(fact.member_id, []).append(fact)
+    active = sorted(
+        (m for m in members if m.is_member and m.id in by_member),
+        key=lambda m: (m.id != member.id, pseudonyms.numbers.get(m.id, 0)),
+    )
+    sections = [
+        (label, other.id == member.id, by_member[other.id])
+        for other in active
+        if (label := pseudonyms.label(other.id)) is not None
+    ]
+    return memory_block(sections)
+
+
 async def at_cap_notice(db: AsyncSession, config: AssistantConfig, member: Member, now: datetime) -> str | None:
     """What the Assistant page says above the composer when no private message can be answered
     this month (#362): ``PAGE_CAP_TOO_LOW`` when the whole cap is below the smallest private
@@ -850,8 +935,11 @@ async def at_cap_notice(db: AsyncSession, config: AssistantConfig, member: Membe
     household = await HouseholdRepository(db).get(member.household_id)
     if household is None:  # pragma: no cover - members cascade with their household
         raise NotFound("No such household.")
-    cap = assistant_settings(await household_settings(db, household.id)).cap_micros
-    least = least_private_call_micros(config.model, await MemberRepository(db).list(household.id))
+    settings = assistant_settings(await household_settings(db, household.id))
+    cap = settings.cap_micros
+    least = least_private_call_micros(
+        config.model, await MemberRepository(db).list(household.id), memory=settings.remembers
+    )
     if least > cap:
         return PAGE_CAP_TOO_LOW
     spent = await AssistantRepository(db).month_total(household.id, month_key(now, ZoneInfo(household.timezone)))

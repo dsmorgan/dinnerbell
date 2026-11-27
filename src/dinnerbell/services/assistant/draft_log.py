@@ -13,6 +13,7 @@ nothing then.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,8 +34,11 @@ from dinnerbell.domain.assistant import (
 from dinnerbell.domain.assistant_catalog import NOT_SHOWN
 from dinnerbell.domain.assistant_coordinating import with_held, with_people
 from dinnerbell.domain.assistant_drafts import Draft
+from dinnerbell.domain.assistant_memory import cut_waiting
 from dinnerbell.domain.members import Member
 from dinnerbell.services.variety import household_today
+
+log = logging.getLogger(__name__)
 
 
 async def record_use(
@@ -81,12 +85,15 @@ async def record_use(
         text = used_draft_text(told(draft.title), confirmed=confirmed, day=day, outcome=told(outcome), verb=verb)
         record = draft.id if draft.direct and verb == "Done" else None
         entry = Turn(DRAFT, text, pseudonyms.label(member.id), record=record)
+        turns = recent_turns([*stored.turns, entry], MAX_STORED_BYTES)
+        if lost := cut_waiting(stored.turns, turns):
+            log.warning("assistant memory messages cut before the rollup", extra={"count": lost})
         kept = Conversation(
             key=stored.key,
             private=stored.private,
             owner_member_id=stored.owner_member_id,
             pseudonyms=pseudonyms,
-            turns=recent_turns([*stored.turns, entry], MAX_STORED_BYTES),
+            turns=turns,
             last_message_at=stored.last_message_at,
         )
         await repo.save_conversation(household_id, kept, now)

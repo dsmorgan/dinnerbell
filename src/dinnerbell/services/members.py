@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.events import EventRepository
+from dinnerbell.db.memory import MemoryRepository
 from dinnerbell.db.repositories import MemberRepository, SessionRepository
 from dinnerbell.db.sign_in_codes import SignInCodeRepository
 from dinnerbell.domain.events import EventState
@@ -158,6 +159,8 @@ async def set_member_active(db: AsyncSession, actor: Member, member_id: int, act
         await SessionRepository(db).delete_for_member(target.id)
         # Reactivated within 15 minutes, they still couldn't use a code made before (spec 6.15).
         await SignInCodeRepository(db).delete_for_member(target.id)
+        # The assistant's memory never keeps a former member's facts (#367).
+        await MemoryRepository(db).delete_all(actor.household_id, target.id)
         await _stop_coordinating(db, actor, target, now)
         # Out of every open call, as a removed guest is (#331): their answer, vote, and roles
         # stop counting. Reactivating them puts none of it back; they answer again.

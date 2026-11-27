@@ -33,7 +33,7 @@ from dinnerbell.domain.events import EventRuleViolation, IllegalTransition, Inva
 from dinnerbell.domain.members import Member
 from dinnerbell.domain.offers import OfferPath
 from dinnerbell.services import activity
-from dinnerbell.services.assistant import direct, drafts
+from dinnerbell.services.assistant import direct, drafts, memory
 from dinnerbell.services.assistant import history as web_history
 from dinnerbell.services.assistant.call_drafts import ActionConfirmed
 from dinnerbell.services.assistant.conversation import MAX_MESSAGE_CHARS, Assistant, Reply, at_cap_notice, converse
@@ -68,7 +68,8 @@ SEND_TIMEOUT_MS = 120_000
 NOTICES = {
     "cleared": (
         "Started over. The conversation is gone, and its drafts are cancelled. What the assistant did stays done."
-    )
+    ),
+    "forgot": "Removed. The assistant won't read that note again.",
 }
 SERVICE_REFUSALS = (EventRuleViolation, InvalidResponse, Forbidden)
 
@@ -130,6 +131,7 @@ async def _page(
         "notice": notice,
         "outcome": outcome,
         "cap_notice": await at_cap_notice(db, assistant.config, member, now),
+        "memory": await memory.my_memory(db, assistant.config, member, now),
         "send_timeout": SEND_TIMEOUT_MS,
         "max_chars": MAX_MESSAGE_CHARS,
     }
@@ -240,7 +242,7 @@ async def _streamed(
 @router.post("/start-over")
 async def start_over(request: Request, principal: CSRFChecked, context: Context, db: Database) -> Response:
     assistant = await _require(request, db, principal)
-    await web_history.start_over(db, assistant.config, principal.member, context.clock())
+    await web_history.start_over(db, assistant.config, principal.member, context.clock(), assistant=assistant)
     return local_redirect("/assistant?notice=cleared")
 
 
@@ -381,3 +383,16 @@ async def _record_card(
         record = DraftView(id=record_id, kind="", title="", confirm_lines=(), record=True)
     page = {"r": record, "outcome": outcome}
     return await render(request, "_assistant_record.html", page, status_code=status_code)
+
+
+# Memory (#367) ----------------------------------------------------------------------------------
+
+
+@router.post("/memory/{fact_id}/remove")
+async def remove_fact(
+    request: Request, principal: CSRFChecked, context: Context, db: Database, fact_id: RowId
+) -> Response:
+    """**Remove** one of the member's own notes. Someone else's, or one that's gone, changes nothing."""
+    assistant = await _require(request, db, principal)
+    await memory.remove_my_fact(db, assistant.config, principal.member, fact_id)
+    return local_redirect("/assistant?notice=forgot#memory")

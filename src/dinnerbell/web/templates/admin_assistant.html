@@ -8,7 +8,7 @@
 <h1>Assistant</h1>
 {% if notice %}<p class="alert ok" role="status">{{ notice }}</p>{% endif %}
 {% if error %}<p class="alert error" role="alert">{{ error }}</p>{% endif %}
-<p class="small muted">The assistant answers members' questions with Anthropic's {{ model }} model, acting only as the member asking, never with admin rights. It changes nothing until they confirm. Anthropic gets the conversation, what the assistant looks up, and active members' names, never emails or Slack IDs. A member's own preferences, ratings, and dietary needs, which can reveal health or religion, go only when they ask in private.</p>
+<p class="small muted">The assistant answers members' questions with Anthropic's {{ model }} model, acting only as the member asking, never with admin rights. It changes nothing until they confirm. Anthropic gets the conversation, what the assistant looks up, and active members' names, never emails or Slack IDs. A member's own preferences, ratings, and dietary needs, which can reveal health or religion, go only when they ask in private{% if values['memory'] %}, and, with Memory on, every member's remembered tastes go with every request, and housemates' Preferences go in private when someone asks{% endif %}.</p>
 <form method="post" action="/admin/assistant" class="stack">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <fieldset class="card">
@@ -20,9 +20,37 @@
     <p class="small muted" id="cap-help">${{ limits['cap'][0] }} to ${{ limits['cap'][1] }}. At the cap, the assistant stops until next month; nothing else does.</p>
     <label class="field"><span>Conversation hours</span><input type="number" inputmode="numeric" min="{{ limits['hours'][0] }}" max="{{ limits['hours'][1] }}" name="conversation_hours" value="{{ values['conversation_hours'] }}" aria-describedby="hours-help" required></label>
     <p class="small muted" id="hours-help">How long a conversation is kept after its last message, 0 to {{ limits['hours'][1] }} (a week). At 0, each message stands alone. Lowering it deletes older ones at once.</p>
+    <label class="check"><input type="checkbox" name="memory" aria-describedby="memory-help"{% if values['memory'] %} checked{% endif %}> Turn on Memory</label>
+    <p class="small muted" id="memory-help">Before a conversation is deleted, a rollup keeps short notes from each member's own messages about their tastes and habits, up to 20 each, and the assistant reads every member's notes when it answers anyone, in direct messages, on the Assistant page, and in channel threads. It also reads housemates' Preferences (levels, vetoes, dietary needs, and I can usually) when a member asks in private. Memory never changes ranking or filters. Each member sees and removes their own notes on the Assistant page. It adds API cost, and needs Conversation hours above 0. Turning it off stops new notes and sends none; the notes it kept stay until you clear them below.</p>
+    <label class="field"><span>Rollup model</span><select name="rollup_model" aria-describedby="rollup-help">{% for m in models %}<option value="{{ m }}"{% if m == values['rollup_model'] %} selected{% endif %}>{{ m }}</option>{% endfor %}</select></label>
+    <p class="small muted" id="rollup-help">The model that writes Memory's notes. Each rollup call counts toward the monthly cap, under the member whose messages it reads.</p>
     <button type="submit" class="button admin block">{{ key_icon() }}Save assistant settings</button>
   </fieldset>
 </form>
+<section class="card stack" id="memory" aria-labelledby="memory-title">
+  <h2 id="memory-title">Memory</h2>
+  {% if memory %}
+  <p>{{ facts }} note{{ "" if facts == 1 else "s" }} kept{% if not values['memory'] %}, while Memory is off: none go with requests{% endif %}.</p>
+  <dl class="counts">
+    {% for member_id, name, count in memory %}<div><dt>{{ name }}</dt><dd>{{ count }}</dd></div>{% endfor %}
+  </dl>
+  <form method="post" action="/admin/assistant/memory/clear" class="stack">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label class="field"><span>Whose notes</span><select name="member">{% for member_id, name, count in memory %}<option value="{{ member_id }}">{{ name }}</option>{% endfor %}<option value="{{ everyone }}">Everyone</option></select></label>
+    <p class="small muted">Deletes the notes at once. It can't be undone.</p>
+    <button type="submit" class="button danger block">{{ key_icon() }}Clear memory</button>
+  </form>
+  {% if not values['memory'] %}
+  <form method="post" action="/admin/assistant/memory/clear">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="member" value="{{ everyone }}">
+    <button type="submit" class="button danger block">{{ key_icon() }}Delete all memory</button>
+  </form>
+  {% endif %}
+  {% else %}
+  <p class="small muted">Memory keeps no notes.</p>
+  {% endif %}
+</section>
 <section class="card" aria-labelledby="usage-title">
   <h2 id="usage-title">Usage in {{ month }}</h2>
   <p>{{ spent }} of {{ cap }} this month.</p>

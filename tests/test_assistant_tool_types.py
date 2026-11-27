@@ -260,6 +260,7 @@ BASELINES: dict[str, tuple[Baseline, ...]] = {
     ),
     "draft_call": (Baseline(nothing, {"slot": "lunch", "day": "tomorrow"}),),
     "look_up_my_preferences": (Baseline(nothing, {"name": ""}),),
+    "look_up_housemates_preferences": (Baseline(nothing, {"member": "", "name": ""}),),
     "draft_preference": (Baseline(nothing, {"what": "", "name": "Taqueria", "level": "veto"}),),
     "look_up_my_feedback": (Baseline(eaten, {"name": ""}),),
     "draft_feedback": (
@@ -341,7 +342,9 @@ async def run(house: House, name: str, raw: Mapping[str, Any]) -> ToolResult:
         )
     )
     async with house.sessionmaker() as db:
-        return await tools.run_tool(name, raw, db=db, member=member, private=True, now=house.clock(), session=session)
+        return await tools.run_tool(
+            name, raw, db=db, member=member, private=True, now=house.clock(), session=session, memory=True
+        )
 
 
 def breaks(spec: Mapping[str, Any], baseline: object) -> list[tuple[str, object]]:

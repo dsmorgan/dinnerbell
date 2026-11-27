@@ -328,7 +328,7 @@ async def test_veto_mushrooms_sets_the_level_at_once_through_preferences_and_und
 async def test_exactly_the_own_data_tools_are_private_only() -> None:
     """A new tool that reads or changes the member's own data must be private-only, and the
     tests below cover each one, from the registry."""
-    own = {t.name for t in tools.TOOLS if t.private_only} - COORDINATING_TOOLS
+    own = {t.name for t in tools.TOOLS if t.private_only and not t.memory_only} - COORDINATING_TOOLS
     assert own == OWN_TOOLS == set(SAMPLES)
     assert {t.name for t in tools.tools_for(False)}.isdisjoint(OWN_TOOLS)
     assert {t.name for t in tools.tools_for(True)} >= OWN_TOOLS

@@ -281,7 +281,7 @@ async def test_a_conversation_stored_before_draft_entries_still_loads(
     await confirm(house, helper, "Kim", offer.id)
     assert await transcript(house, key) == [
         *old,
-        {"role": "user", "text": "Offer it", "author": "Member 1"},
+        {"role": "user", "text": "Offer it", "author": "Member 1", "at": house.clock().isoformat()},
         {"role": "assistant", "text": "Drafted."},
         {"role": "draft", "text": OFFERED, "author": "Member 1"},
     ]

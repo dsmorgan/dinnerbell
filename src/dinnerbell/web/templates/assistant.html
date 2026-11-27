@@ -1,5 +1,5 @@
 {#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
-{#- Expects: conversation (hours, keeps_history), turns (what the log shows), records (direct actions' cards by ID, #374, shown where their entries are), drafts (cards still waiting, and records no entry shows), notice, outcome (a draft's result, for a page posted without HTMX), cap_notice (why no message can be answered this month, or none), send_timeout, max_chars. -#}
+{#- Expects: memory (the member's own notes, #367), conversation (hours, keeps_history), turns (what the log shows), records (direct actions' cards by ID, #374, shown where their entries are), drafts (cards still waiting, and records no entry shows), notice, outcome (a draft's result, for a page posted without HTMX), cap_notice (why no message can be answered this month, or none), send_timeout, max_chars. -#}
 {% extends "base.html" %}
 {% block title %}Assistant{% endblock %}
 {% block content %}
@@ -38,11 +38,33 @@
   </form>
 </section>
 
+{% if memory.on or memory.facts %}
+<section class="card stack" id="memory" aria-labelledby="memory-heading">
+  <h2 id="memory-heading">What the assistant remembers about you</h2>
+  <p class="small muted">{% if memory.on %}Dinnerbell keeps short notes from your own messages about your tastes and habits, and the assistant reads everyone's notes when it answers anyone in the household. Remove any you don't want kept.{% else %}Memory is off: the assistant doesn't read these notes, and keeps no new ones. An admin can delete them.{% endif %}</p>
+  {% if memory.facts %}
+  <ul class="memory-facts">
+    {% for f in memory.facts %}
+    <li>
+      <form method="post" action="/assistant/memory/{{ f.id }}/remove" class="button-row">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <span>{{ f.text }} <span class="small muted">({{ f.kind }}, {{ f.written_at|local_date(principal.household.timezone)|day }})</span></span>
+        <button type="submit" class="button danger">Remove</button>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="small muted">No notes yet.</p>
+  {% endif %}
+</section>
+{% endif %}
+
 {% if conversation.keeps_history or drafts or records %}
 <form method="post" action="/assistant/start-over" class="card stack">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <h2>Start over</h2>
-  <p class="small muted">Deletes this conversation and cancels its drafts. What the assistant did stays done. Your next message starts fresh.</p>
+  <p class="small muted">Deletes this conversation and cancels its drafts. What the assistant did stays done.{% if memory.on %} Memory keeps notes from it first.{% endif %} Your next message starts fresh.</p>
   <div class="button-row"><button type="submit" class="button danger">Start over</button></div>
 </form>
 {% endif %}

@@ -895,6 +895,35 @@ class AssistantDraftRow(Base):
     """When **Undo** used a direct action's record; None while it hasn't."""
 
 
+class AssistantMemoryFactRow(Base):
+    """One fact the assistant's memory keeps about a member (#367, ADR 0012, spec 6.14
+    **Memory**): a ``kind`` (like, dislike, usual, experience, belief, or routine) and one short
+    ``text``, written by the rollup from that member's own messages. ``source_key`` is the
+    conversation the message was in; the message itself isn't kept. ``written_at`` is when it was
+    written or last replaced. An experience expires 180 days after; every other kind has no
+    ``expires_at``. IDs are AUTOINCREMENT, so an old page's **Remove** can never remove a newer
+    fact."""
+
+    __tablename__ = "assistant_memory_fact"
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('like', 'dislike', 'usual', 'experience', 'belief', 'routine')",
+            name="kind",
+        ),
+        Index("ix_assistant_memory_fact_household_member", "household_id", "member_id"),
+        {"sqlite_autoincrement": True},
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    household_id: Mapped[int] = mapped_column(ForeignKey("household.id", ondelete="CASCADE"))
+    member_id: Mapped[int] = mapped_column(ForeignKey("member.id", ondelete="CASCADE"))
+    kind: Mapped[str] = mapped_column(String(16))
+    text: Mapped[str] = mapped_column(String(160))
+    source_key: Mapped[str] = mapped_column(String(80))
+    written_at: Mapped[datetime] = mapped_column(UTCDateTime())
+    expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+
 class LocalWeatherRow(Base):
     """Dinnerbone's local weather (#319, ADR 0011): Admin's setting, the place it found, and the
     last answer from Open-Meteo. One row per household, only once an admin has saved the setting.
