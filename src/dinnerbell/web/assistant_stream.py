@@ -6,13 +6,13 @@
 every proxy on the way recognizes as a stream (``docs/troubleshooting.md``). Without that
 header, HTMX and the plain form post get what they always got.
 
-``WebStream`` is a ``services.assistant.streaming.ReplyStream`` in words (#372): ``CallText``
-holds each call's first ``WORDS_HOLD_CHARS`` characters, passes on the rest a word at a time
-with names put back, and drops or marks a tool round's text. Its methods only put onto a queue,
-so they never block the model's events. The answer runs in a task of its own
-(``Answers.start``) with its own database session, never the request's: when the member leaves
-the page, Starlette cancels only the response, and the reply still finishes and is stored.
-Shutdown cancels what's still running (``Answers.settle``) before the database closes.
+``WebStream`` is a ``services.assistant.streaming.ReplyStream`` in deltas (#377): ``CallText``
+passes on each call's text as each delta comes, from the first, with names put back, holding
+back only whitespace at the end and a label's start that could still change, and marks a tool
+round's text. Its methods only put onto a queue, so they never block the model's events. The
+answer runs in a task of its own (``Answers.start``) with its own database session, never the
+request's: when the member leaves the page, Starlette cancels only the response, and the reply
+still finishes and is stored. Shutdown cancels what's still running (``Answers.settle``) before the database closes.
 
 The events, in order:
 
@@ -63,7 +63,7 @@ HEARTBEAT = ": still working\n\n"
 
 
 TEXT_SECONDS = 0.05
-"""The least time between two ``text`` events: 20 a second, a word or two each at the model's
+"""The least time between two ``text`` events: 20 a second, a few tokens each at the model's
 usual pace. Text that comes meanwhile goes in the next one."""
 TEXT_BYTES_PER_SECOND = 16_000
 """The most ``text`` events carry a second: after a large one, the next waits longer than
@@ -98,8 +98,8 @@ class WebStream:
     """A ``ReplyStream`` into a queue that ``events`` reads. Once ``events`` stops listening, as
     when the member leaves the page, nothing more is queued."""
 
-    cut = Cut.WORDS
-    """Words: the page shows the reply as it's written, not a line at a time (#372)."""
+    cut = Cut.DELTAS
+    """Deltas: the page shows the reply as it's written, a token at a time (#377)."""
 
     def __init__(self) -> None:
         self.queue: asyncio.Queue[_Text | _Mark] = asyncio.Queue()
@@ -239,7 +239,7 @@ async def events[T](
             if item is None:  # the wait for ``waiting`` is over
                 item, waiting = waiting, None
             elif isinstance(item, _Text) and item is not waiting and loop.time() < ready_at:
-                waiting = item  # the latest call's text; more words may come meanwhile
+                waiting = item  # the latest call's text; more text may come meanwhile
                 continue
             if isinstance(item, _Text):
                 waiting = None

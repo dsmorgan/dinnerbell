@@ -11,11 +11,14 @@ Everything else stays text: links, images, tables, block quotes, and HTML. The t
 first, so the only tags in the result are the fixed ones this module writes, and a link is never
 clickable (ADR 0009).
 
-A reply still being written (``reply_blocks`` with ``unfinished``, #372) gets its last line's
-open code span, bold, italics, or strikethrough closed, so it shows styled while the model writes
-it, not as the characters typed. A last line that's only a list, heading, rule, or code block's
-marker so far is left out until its first word comes. A ``[`` or ``>`` needs nothing: links and
-block quotes always show as typed."""
+A reply still being written (``reply_blocks`` with ``unfinished``, #372) can end anywhere, mid-word
+included (#377). Its last line's open code span, bold, italics, or strikethrough is closed, so it
+shows styled while the model writes it, not as the characters typed. What the next characters
+could still make something else waits for them: markers at the line's end that show as typed, a
+backslash, a last line that's only a list, heading, rule, or code block's marker so far (or a
+number, which could be a numbered item's), and the start of a code block's closing fence. A
+``[``, ``>``, ``|``, or ``&`` needs nothing: links, block quotes, tables, and entities always show
+as typed, so a half-written one is just the text so far."""
 
 from __future__ import annotations
 
@@ -81,8 +84,13 @@ _TAG = re.compile(r"<[^>]*>")
 _MARKER = re.compile(r"[*_~`]")
 _EMPTY_SPAN = re.compile(r"<(?:strong|em|del|code)>(?:<[^>]*>|[\s*_~`])*</")
 """A span with nothing in it but markers or whitespace: a closer made it from markers alone."""
-_JUST_MARKER = re.compile(r"\s{0,3}(?:[-*+•]|\d{1,9}[.)]|#{1,6}|([-*_])\s*\1?|`{3,}.*|~{3,}.*)")
-"""A last line that's only what starts a list item, heading, rule, or code block, so far."""
+_JUST_MARKER = re.compile(r"\s{0,3}(?:[-*+•]|\d{1,9}[.)]?|#{1,6}|([-*_])\s*\1?|`{3,}.*|~{3,}.*)?")
+"""A last line that's only what starts a list item, heading, rule, or code block, so far, or
+could be: a number could be a numbered item's."""
+_TRAILING_MARKERS = re.compile(r"[\s*_~`]+\Z")
+_OPENER = re.compile(r"(?<![\\\w])[*_~]+(?=[^\s*_~`])|(?<=\w)(?:\*\*|~~)(?=[^\s*_~`])")
+"""Markers that could open bold, italics, or strikethrough: not after a backslash, and after a
+word character only if they're not a single ``*`` or ``_``, as in "2*3" or "snake_case"."""
 
 
 def _kind(line: str) -> tuple[bool, ...]:
@@ -95,18 +103,13 @@ def _literal_markers(styled: str) -> int:
     return len(_MARKER.findall(_TAG.sub("", _CODE_SPAN.sub("", styled))))
 
 
-def _closed(line: str) -> str:
-    """``line``, the last of a reply still being written, with the closer from ``_CLOSERS`` that
-    leaves the fewest markers showing as typed outside code, if any leaves fewer. A closer must
-    keep the line the kind of block it is, and make no span of markers alone that the line
-    doesn't have already. A line that ends in markers shown as typed, such as "a **", gets none
-    and shows as typed until its next word comes. Each try styles the line once, so only
-    closers whose characters the line has are tried, and the first that leaves none wins."""
-    if len(line) > MAX_STYLED or not line:
-        return line
+def _best_closer(line: str) -> tuple[str, int]:
+    """``line`` with the closer from ``_CLOSERS`` that leaves the fewest markers showing as typed
+    outside code, if any leaves fewer, and how many it leaves. A closer must keep the line the
+    kind of block it is, and make no span of markers alone that the line doesn't have already.
+    Each try styles the line once, so only closers whose characters the line has are tried, and
+    the first that leaves none wins."""
     styled = inline(line)
-    if _MARKER.match(styled[-1]):
-        return line
     empty = Counter(_EMPTY_SPAN.findall(styled))
     fewest = _literal_markers(styled)
     best = line
@@ -124,6 +127,44 @@ def _closed(line: str) -> str:
         shown = _literal_markers(styled)
         if shown < fewest:
             best, fewest = candidate, shown
+    return best, fewest
+
+
+def _held(line: str) -> str:
+    """``line``, the last of a reply still being written, without what the next delta could still
+    make something else: a backslash that could escape what comes next, and markers at the end
+    that show as typed, such as the ``*`` of "a *" or "**bold*", which could be a span's start
+    or end. A line that would be a rule only without them is held whole."""
+    if len(line) > MAX_STYLED:
+        return line
+    held, before = line, None
+    while held != before:  # each turn makes it shorter
+        before = held
+        if (len(held) - len(held.rstrip("\\"))) % 2:
+            held = held[:-1]
+        styled = inline(held)
+        if styled and _MARKER.match(styled[-1]):
+            held = _TRAILING_MARKERS.sub("", held)
+    return "" if _RULE.match(held) and not _RULE.match(line) else held
+
+
+def _closed(line: str) -> str:
+    """``line``, the last of a reply still being written (and ``_held``), with its open bold,
+    italics, strikethrough, or code closed, as ``_best_closer`` finds. When markers still show as
+    typed, as in "*a* and **b _c", where no one closer does, the line ends instead before the
+    last marker that could open a span, if that shows fewer and cuts off no code: that span
+    shows once it closes."""
+    if len(line) > MAX_STYLED or not line:
+        return line
+    best, fewest = _best_closer(line)
+    if fewest:
+        openers = [opener.start() for opener in _OPENER.finditer(line)]
+        if openers and "`" not in line[openers[-1] :]:
+            shorter = line[: openers[-1]].rstrip()
+            if shorter and _kind(shorter) == _kind(line):
+                closed, left = _best_closer(shorter)
+                if left < fewest:
+                    return closed
     return best
 
 
@@ -149,6 +190,7 @@ def _blocks(lines: list[str], *, unfinished: bool = False) -> Iterator[str]:
         line = lines[index]
         index += 1
         if unfinished and index == len(lines):  # a fence's last line never comes here
+            line = _held(line)
             if _JUST_MARKER.fullmatch(line):
                 continue  # it shows once its first word does, as the block it starts
             line = _closed(line)
@@ -159,6 +201,9 @@ def _blocks(lines: list[str], *, unfinished: bool = False) -> Iterator[str]:
             while index < len(lines) and not lines[index].lstrip().startswith(fence.group(1)):
                 body.append(lines[index])
                 index += 1
+            tail = body[-1].strip() if unfinished and index == len(lines) and body else ""
+            if tail and fence.group(1).startswith(tail):
+                body.pop()  # the start of the closing fence, so far
             index += 1  # the closing fence, or past the end
             yield f"<pre><code>{escape(chr(10).join(body))}</code></pre>"
             continue

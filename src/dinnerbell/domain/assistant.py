@@ -300,18 +300,34 @@ def format_dollars(micros: int) -> str:
 # Pseudonyms ------------------------------------------------------------------------------------
 
 _LABEL = re.compile(r"\bMember (\d{1,4})\b")
-_LABEL_HEAD = re.compile(r"\bMember\Z")
-_LABEL_REST = re.compile(r" ?\Z| \d")
+_LABEL_START = re.compile(r"\bM(?:e(?:m(?:b(?:e(?:r(?: \d{0,4})?)?)?)?)?)?")
+"""As much of a label as there is: the most of "Member 1234" that matches, at a word's start."""
+_LABEL_LONGEST = len("Member 1234")
 
 
-def label_may_span(text: str, end: int) -> bool:
-    """Whether a member label could run across ``end`` in ``text``, now or once more is
-    written: ``text[:end]`` ends with the word "Member", and what follows it so far is the rest of
-    a label or could still grow into one. A reply shown while it's written is cut only just
-    before whitespace; where this is False, names put back into the two sides apart are what
-    they'd be in the whole (``services.assistant.streaming``)."""
-    head = _LABEL_HEAD.search(text, max(0, end - len("Member")), end)  # \b still sees text[:pos]
-    return head is not None and _LABEL_REST.match(text, end) is not None
+def label_across(text: str, end: int) -> int | None:
+    """Where a member label starts that a cut at ``end`` in ``text`` could break, now or once
+    more is written, or None. A reply shown while it's written can be cut anywhere
+    (``services.assistant.streaming``): where this is None, names put back into ``text[:end]``
+    and into what follows apart are the names the whole text gets, whatever comes next, as long
+    as what follows is read after a word character when ``text[:end]`` ends in one ("xMember 1"
+    has no label).
+
+    A cut breaks a label when ``text[:end]`` ends with the start of one, such as "Mem" or
+    "Member 1", and the label could cross ``end`` ("Member 12") or end there in ``text[:end]``
+    only ("Member 1x"). Where what follows can't make one, as in "Member Services", it can't."""
+    for start in range(max(0, end - _LABEL_LONGEST), end):
+        head = _LABEL_START.match(text, start, end)  # \b still sees text[:start]
+        if head is None or head.end() != end:
+            continue
+        rest = _LABEL_START.match(text, start)
+        if rest is not None and rest.end() == len(text):
+            return start  # all that follows could still be part of it
+        whole = _LABEL.match(text, start)
+        before = _LABEL.match(text, start, end)  # as if the text stopped at the cut
+        if (whole is None) != (before is None) or (whole is not None and whole.end() > end):
+            return start
+    return None
 
 
 @dataclass(frozen=True, slots=True)

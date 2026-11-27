@@ -44,7 +44,7 @@ After you fix a setting, recreate the service: `podman-compose down && podman-co
 
 ## Let the Assistant's replies stream
 
-On the **Assistant** page, a reply shows while the model writes it: the page reads the response to its message as it arrives (`Content-Type: text/event-stream`). It updates up to 20 times a second, a word or two at a time. Every proxy on the way must pass each piece on as it comes, without buffering or compressing the response. If one doesn't, the reply still arrives, all at once when it's done, as before. If it arrives in bursts of many words, a proxy is holding pieces back; check the same settings.
+On the **Assistant** page, a reply shows while the model writes it: the page reads the response to its message as it arrives (`Content-Type: text/event-stream`). It updates up to 20 times a second, a few characters or words at a time, from the first. Every proxy on the way must pass each piece on as it comes, without buffering or compressing the response. If one doesn't, the reply still arrives, all at once when it's done, as before. If it arrives in bursts of many words, a proxy is holding pieces back; check the same settings.
 
 - **Pangolin or Traefik:** Traefik flushes an event stream as it comes, with no setting. Don't attach a `compress` middleware to Dinnerbell's router, or add `text/event-stream` to its `excludedContentTypes`.
 - **Cloudflare Tunnel:** `cloudflared` and Cloudflare pass an event stream on as it comes. If you set **Response Body Buffering** in a configuration rule, leave it at **None** for Dinnerbell's hostname.
