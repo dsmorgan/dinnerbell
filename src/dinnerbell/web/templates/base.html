@@ -87,6 +87,9 @@
     {% endif %}
   </header>
   <div id="save-error" class="alert error save-banner" role="alert" hidden></div>
+  {#- What a card's action changed, for a screen reader (#336): app.js writes a swapped-in card's
+      data-announce here. It's on the page before any swap, so it's announced, once and politely. #}
+  <div id="saved-status" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
   <main class="page{% if admin_page %} admin-page{% endif %}" id="content" tabindex="-1">
     {#- Inside the installed app, push.js shows this until the member answers the permission
         prompt on Preferences (spec 6.15). -#}

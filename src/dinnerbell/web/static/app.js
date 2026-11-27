@@ -142,6 +142,42 @@
     alert.scrollIntoView({ block: "nearest", behavior: still ? "instant" : "smooth" });
   });
 
+  // A card's action that works says what changed (#336). The server marks the card it swaps in
+  // with data-announce, such as "You're in.", and this puts the words in the page's status line
+  // (#saved-status in base.html, role="status"). The line is on the page before the swap, so a
+  // screen reader hears it once, politely, and focus stays where it was. A refusal has its own
+  // alert, and a refresh says nothing. The line empties first, so the same words twice in a row
+  // are heard twice, and again after a while, so nobody comes across old news there.
+  var STATUS_CLEAR_MS = 8000;
+  var statusTimer = 0;
+
+  function announce(text) {
+    var line = document.getElementById("saved-status");
+    if (!line) {
+      return;
+    }
+    window.clearTimeout(statusTimer);
+    line.textContent = "";
+    statusTimer = window.setTimeout(function () {
+      line.textContent = text;
+      statusTimer = window.setTimeout(function () {
+        line.textContent = "";
+      }, STATUS_CLEAR_MS);
+    }, 50);
+  }
+
+  document.addEventListener("htmx:afterSettle", function (event) {
+    var card = event.target;
+    if (!(card instanceof Element) || !card.hasAttribute("data-announce")) {
+      return;
+    }
+    var text = card.getAttribute("data-announce");
+    card.removeAttribute("data-announce"); // once
+    if (isSave(event) && text) {
+      announce(text);
+    }
+  });
+
   // A file over the server's limit usually ends in a reset connection rather than a readable
   // 413, so check the size before sending. Inputs opt in with data-max-bytes and name the
   // element for the message with data-size-error.
@@ -612,12 +648,18 @@
 
   // Calls still in progress (scheduled, collecting, voting, or decided) carry data-poll, the URL
   // of their card. Refresh them now and then, so a page left open shows the call opening,
-  // voting, the decision, and Mark done at meal time. Skip a card while someone is using it: an
-  // open form, typing in a field, a field changed and not saved yet in a form that's showing, or
-  // a request in flight. Those last two don't rely on focus, which Safari doesn't give a tapped
-  // checkbox or button. A focused button, checkbox, or radio doesn't count: Chrome focuses a
-  // tapped one, and HTMX keeps that focus across the swap. A save swaps in a new card, whose
-  // fields start unchanged; a closed form's changes are dropped. Skip hidden tabs.
+  // voting, the decision, and Mark done at meal time. Skip a card while someone is using it, so
+  // a refresh never replaces it under them or a screen reader (#336): an open form, typing in a
+  // field, a field changed and not saved yet in a form that's showing, a request in flight, a
+  // pointer pressed on it, a tap or click in it in the last 45 seconds, or focus that a keyboard,
+  // a screen reader, or a switch put in it. The changed field, the request, and the tap don't
+  // rely on focus, which Safari doesn't give a tapped checkbox or button, and VoiceOver on an
+  // iPhone can read a card without moving it. A button, checkbox, or radio focused by a tap or
+  // click holds the card no longer than that: Chrome focuses a tapped one and keeps it there,
+  // and HTMX keeps that focus across the swap, so the card would never refresh. A card skipped
+  // while focus is in it refreshes as soon as focus leaves, if nothing else holds it. A save
+  // swaps in a new card, whose fields start unchanged; a closed form's changes are dropped. Skip
+  // hidden tabs.
   //
   // The card is the poll's source, so it shares the card's hx-sync: a tap replaces a poll in
   // flight, and its answer can't overwrite the tap's. A poll never starts while a save is in
@@ -701,6 +743,51 @@
   window.addEventListener("online", backToNormal);
 
   var TYPING = "textarea, select, input:not([type=hidden]):not([type=radio]):not([type=checkbox])";
+  var POINTER_FOCUS_MS = 1000; // focus this soon after a pointer goes down or up is the pointer's
+
+  var pressing = null; // what a pointer is pressed on, until it lifts
+  var pointerAt = 0; // when a pointer last went down or up
+  var focusByPointer = false; // whether the focus now came from a tap or click
+  var focusId = "";
+  var usedAt = {}; // card id: when a tap or click was last in it
+  var due = {}; // card id: a refresh skipped it, so it's waiting
+
+  function noteUse(event) {
+    var card = event.target instanceof Element ? event.target.closest("[data-poll]") : null;
+    if (card && card.id) {
+      usedAt[card.id] = Date.now();
+    }
+  }
+  document.addEventListener(
+    "pointerdown",
+    function (event) {
+      pressing = event.target;
+      pointerAt = Date.now();
+      noteUse(event);
+    },
+    true
+  );
+  function lifted() {
+    pressing = null;
+    pointerAt = Date.now();
+  }
+  document.addEventListener("pointerup", lifted, true);
+  document.addEventListener("pointercancel", lifted, true);
+  // VoiceOver and TalkBack activate a control with a click and no pointer, and so do Enter and
+  // Space on a button.
+  document.addEventListener("click", noteUse, true);
+  document.addEventListener(
+    "focusin",
+    function (event) {
+      var id = event.target instanceof Element ? event.target.id : "";
+      // HTMX puts focus back on the control with the same id in the card it swaps in: the same
+      // focus as before, however long the save took.
+      var same = Boolean(id) && id === focusId && focusByPointer;
+      focusByPointer = Date.now() - pointerAt < POINTER_FOCUS_MS || same;
+      focusId = id;
+    },
+    true
+  );
 
   // The option a drop-down select shows until someone picks another: the last one marked
   // selected, or else the first one that isn't disabled. This assumes a drop-down: a list box
@@ -747,6 +834,27 @@
     return false;
   }
 
+  // Focus in the card that holds it: typing in a field, or any focus a pointer didn't put there.
+  function focusHolds(card) {
+    var focused = document.activeElement;
+    return Boolean(focused && card.contains(focused) && (focused.matches(TYPING) || !focusByPointer));
+  }
+
+  // sinceUse: whether a tap or click in the last 45 seconds holds the card.
+  function inUse(card, sinceUse) {
+    var busy = card.classList.contains("htmx-request") || card.querySelector(".htmx-request");
+    var pressed = pressing instanceof Node && card.contains(pressing);
+    var recent = sinceUse && Date.now() - (usedAt[card.id] || 0) < POLL_MS;
+    return Boolean(
+      busy || pressed || recent || focusHolds(card) || card.querySelector("details[open]") || unsavedIn(card)
+    );
+  }
+
+  function refresh(card) {
+    delete due[card.id];
+    window.htmx.ajax("GET", card.getAttribute("data-poll"), { source: card, target: card, swap: "outerHTML" });
+  }
+
   function pollRound() {
     pollStarted = Date.now();
     slowed = false;
@@ -757,15 +865,29 @@
     }
     var cards = document.querySelectorAll("[data-poll]");
     for (var i = 0; i < cards.length; i += 1) {
-      var card = cards[i];
-      var busy = card.classList.contains("htmx-request") || card.querySelector(".htmx-request");
-      var typing = card.contains(document.activeElement) && document.activeElement.matches(TYPING);
-      if (busy || typing || card.querySelector("details[open]") || unsavedIn(card)) {
-        continue;
+      if (inUse(cards[i], true)) {
+        due[cards[i].id] = true;
+      } else {
+        refresh(cards[i]);
       }
-      window.htmx.ajax("GET", card.getAttribute("data-poll"), { source: card, target: card, swap: "outerHTML" });
     }
   }
+
+  // Focus leaving a card a refresh skipped: refresh it now, unless something else holds it, such
+  // as an open form. A tap in the last 45 seconds doesn't: whoever tapped it has moved on.
+  document.addEventListener("focusout", function (event) {
+    var card = event.target instanceof Element ? event.target.closest("[data-poll]") : null;
+    var next = event.relatedTarget;
+    if (!card || !due[card.id] || (next instanceof Node && card.contains(next))) {
+      return;
+    }
+    window.setTimeout(function () {
+      var open = card.isConnected && card.hasAttribute("data-poll");
+      if (open && !document.hidden && window.htmx && !inUse(card, false)) {
+        refresh(card);
+      }
+    }, 0);
+  });
 
   pollStarted = Date.now();
   nextRound();

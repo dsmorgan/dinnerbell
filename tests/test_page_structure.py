@@ -24,6 +24,8 @@ from tests.test_theme import CSS, block, rules, tokens
 __all__ = ["admin", "provider", "voting"]  # fixtures, imported for pytest
 
 SKIP = '<a class="skip-link" href="#content">Skip to content</a>'
+STATUS = '<div id="saved-status" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>'
+"""The status line a card's action speaks in (#336): empty, and on every page before any swap."""
 VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"}
 
 
@@ -77,7 +79,8 @@ def outline(html: str) -> Outline:
 
 
 def check_structure(where: str, html: str) -> None:
-    """A full page has one h1, the skip link first, and a ``<main>`` it can land on."""
+    """A full page has one h1, the skip link first, a ``<main>`` it can land on, and one empty
+    status line for what a card's action changed."""
     parsed = outline(html)
     assert parsed.h1 == 1, f"{where}: {parsed.h1} h1 headings"
     assert SKIP in html, f"{where}: no skip link"
@@ -86,25 +89,28 @@ def check_structure(where: str, html: str) -> None:
     assert (tag, attrs.get("class"), attrs.get("href")) == ("a", "skip-link", "#content"), where
     assert parsed.main is not None and parsed.main.get("id") == "content", where
     assert parsed.main.get("tabindex") == "-1", where
+    assert html.count(STATUS) == 1 and html.count('id="saved-status"') == 1, f"{where}: no status line"
 
 
 # The check itself ----------------------------------------------------------------------------
 
 
 def test_the_check_finds_a_page_without_an_h1_or_with_two() -> None:
-    body = f'<body>{SKIP}<header><a href="/">Home</a></header><main id="content" tabindex="-1">'
+    body = f'<body>{SKIP}{STATUS}<header><a href="/">Home</a></header><main id="content" tabindex="-1">'
     with pytest.raises(AssertionError, match="0 h1"):
         check_structure("none", body + "<h2>Dinner</h2></main></body>")
     with pytest.raises(AssertionError, match="2 h1"):
         check_structure("two", body + "<h1>Hi</h1><h1>Hi</h1></main></body>")
     check_structure("one", body + "<h1>Hi</h1></main></body>")
+    with pytest.raises(AssertionError, match="no status line"):
+        check_structure("no status line", body.replace(STATUS, "") + "<h1>Hi</h1></main></body>")
 
 
 def test_the_check_finds_a_link_before_the_skip_link() -> None:
     html = f'<body><a href="/">Home</a>{SKIP}<main id="content" tabindex="-1"><h1>Hi</h1></main></body>'
     with pytest.raises(AssertionError, match="a link first"):
         check_structure("a link first", html)
-    hidden = f'<body><div hidden><a href="/">Home</a></div>{SKIP}<main id="content" tabindex="-1"><h1>Hi</h1>'
+    hidden = f'<body><div hidden><a href="/">Home</a></div>{SKIP}{STATUS}<main id="content" tabindex="-1"><h1>Hi</h1>'
     check_structure("hidden first", hidden + "</main></body>")  # a hidden link isn't reached
 
 
