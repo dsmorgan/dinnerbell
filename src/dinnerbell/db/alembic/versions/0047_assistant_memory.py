@@ -61,8 +61,10 @@ def upgrade() -> None:
         sqlite_autoincrement=True,
     )
     op.create_index("ix_assistant_memory_fact_household_member", "assistant_memory_fact", ["household_id", "member_id"])
+    op.create_index(op.f("ix_assistant_memory_fact_member_id"), "assistant_memory_fact", ["member_id"])
 
 
 def downgrade() -> None:
+    op.drop_index(op.f("ix_assistant_memory_fact_member_id"), table_name="assistant_memory_fact")
     op.drop_index("ix_assistant_memory_fact_household_member", table_name="assistant_memory_fact")
     op.drop_table("assistant_memory_fact")

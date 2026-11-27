@@ -48,6 +48,7 @@ from dinnerbell.domain.assistant_memory import (
     check_changes,
     due,
     expiry,
+    failed,
     pass_input,
     plan,
     rolled,
@@ -68,7 +69,9 @@ from dinnerbell.services.errors import NotFound
 log = logging.getLogger(__name__)
 
 ROLLUP_SECONDS = 60.0
-"""The most one member's rollup call runs."""
+"""The most one member's rollup call runs, from the purge job."""
+START_OVER_SECONDS = 10.0
+"""The most **Start over**'s rollup call runs, since the member's page waits for it."""
 ROLLUP_MAX_TOKENS = 4_000
 """Each rollup call's ``max_tokens``: room for 20 facts' changes, and any thinking."""
 NOT_HERE = "That page doesn't exist."
@@ -92,6 +95,7 @@ def _answer(content: Sequence[Any]) -> object:
     try:
         return json.loads(text)
     except ValueError:
+        log.warning("assistant memory rollup answered without JSON")
         return None
 
 
@@ -103,9 +107,21 @@ class Pass:
     waiting: int = 0
 
 
-async def roll_up(db: AsyncSession, assistant: Assistant, household_id: int, key: str) -> Pass:
+async def roll_up(
+    db: AsyncSession,
+    assistant: Assistant,
+    household_id: int,
+    key: str,
+    *,
+    last: bool = False,
+    seconds: float = ROLLUP_SECONDS,
+) -> Pass:
     """One pass over the conversation ``key``: each member's waiting messages it takes, one call
-    for each member. Idempotent: a message rolled up stops waiting, so a second run finds nothing."""
+    for each member, each within ``seconds``. With ``last``, its last try before it's deleted, it
+    takes them whatever a failure put off. Idempotent: a message rolled up stops waiting, so a
+    second run finds nothing. A failed call puts its messages off, and after ``MAX_TRIES``
+    failures they stop waiting (``domain.assistant_memory.failed``), so a call that keeps failing
+    on the same messages, as a cut-off or refused answer does, never retries without end."""
     result = Pass()
     settings = assistant_settings(await household_settings(db, household_id))
     stored = await AssistantRepository(db).conversation(household_id, key)
@@ -115,14 +131,16 @@ async def roll_up(db: AsyncSession, assistant: Assistant, household_id: int, key
     if household is None:  # pragma: no cover - conversations cascade with their household
         return result
     by_label = {f"Member {n}": member_id for member_id, n in stored.pseudonyms.numbers.items()}
-    batch = taken(stored)
+    now = assistant.clock()
+    batch = taken(stored) if last else taken(stored, now)
     for author in dict.fromkeys(t.author for t in batch if t.author is not None):
         mine = [t for t in batch if t.author == author]
         member = await MemberRepository(db).get(household_id, by_label.get(author, 0))
         if member is None or not member.is_member:
             await _done(db, household_id, key, mine, None, (), (), assistant.clock())  # nobody to remember them for
             continue
-        if await _one(db, assistant, member, ZoneInfo(household.timezone), stored, author, mine, settings.rollup_model):
+        zone = ZoneInfo(household.timezone)
+        if await _one(db, assistant, member, zone, stored, author, mine, settings.rollup_model, seconds):
             result.changed += 1
         else:
             result.waiting += len(mine)
@@ -138,6 +156,7 @@ async def _one(
     author: str,
     mine: Sequence[Turn],
     model: str,
+    seconds: float,
 ) -> bool:
     """Roll up ``member``'s messages ``mine``. Returns whether they're done."""
     household_id = member.household_id
@@ -149,9 +168,10 @@ async def _one(
     if not await _room(db, assistant, member, zone, request):
         log.info("assistant memory waits for room under the cap", extra={"member_id": member.id})
         return False
-    reply = await call_outside_message(db, assistant, member, zone, request, seconds=ROLLUP_SECONDS)
+    reply = await call_outside_message(db, assistant, member, zone, request, seconds=seconds)
     if reply is None or reply.stop_reason not in ("end_turn", "stop_sequence"):
         log.warning("assistant memory rollup failed", extra={"member_id": member.id})
+        await _failed(db, household_id, stored.key, mine, member, assistant.clock())
         return False
     checked = check_changes(_answer(reply.content), part.messages, facts)
     if checked.dropped:
@@ -225,6 +245,33 @@ async def _done(
     return True
 
 
+async def _failed(
+    db: AsyncSession, household_id: int, key: str, mine: Sequence[Turn], member: Member, now: datetime
+) -> None:
+    """Under the write lock: count a failed try on ``mine`` and put them off, or stop them waiting
+    after ``MAX_TRIES``, logging how many."""
+    repo = AssistantRepository(db)
+    async with write_transaction(db):
+        stored = await repo.conversation(household_id, key)
+        if stored is None:
+            return
+        turns, given_up = failed(stored.turns, mine, now)
+        kept = Conversation(
+            key=stored.key,
+            private=stored.private,
+            owner_member_id=stored.owner_member_id,
+            pseudonyms=stored.pseudonyms,
+            turns=turns,
+            last_message_at=stored.last_message_at,
+        )
+        await repo.save_conversation(household_id, kept, now)
+        await db.commit()
+    if given_up:
+        log.warning(
+            "assistant memory messages given up after failed rollups", extra={"member_id": member.id, "count": given_up}
+        )
+
+
 async def roll_up_due(sessionmaker: async_sessionmaker[AsyncSession], assistant: Assistant | None) -> int:
     """For the purge job, before it deletes anything: roll up every conversation that's due
     (``domain.assistant_memory.due``), in every household with **Memory** on. A conversation past
@@ -244,7 +291,8 @@ async def roll_up_due(sessionmaker: async_sessionmaker[AsyncSession], assistant:
             for conversation in await AssistantRepository(db).conversations(household.id):
                 if not due(conversation, now, settings.conversation_hours):
                     continue
-                result = await roll_up(db, assistant, household.id, conversation.key)
+                last = conversation.expired(now, settings.conversation_hours)
+                result = await roll_up(db, assistant, household.id, conversation.key, last=last)
                 changed += result.changed
                 if result.waiting and conversation.expired(now, settings.conversation_hours):
                     log.warning("assistant memory messages deleted before the rollup", extra={"count": result.waiting})
@@ -259,7 +307,7 @@ async def roll_up_before_start_over(db: AsyncSession, assistant: Assistant, memb
     settings = assistant_settings(await household_settings(db, member.household_id))
     if stored is None or not settings.remembers or not waiting(stored):
         return
-    result = await roll_up(db, assistant, member.household_id, key)
+    result = await roll_up(db, assistant, member.household_id, key, last=True, seconds=START_OVER_SECONDS)
     if result.waiting:
         log.warning("assistant memory messages deleted before the rollup", extra={"count": result.waiting})
 
