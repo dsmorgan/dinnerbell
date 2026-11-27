@@ -95,7 +95,7 @@ By default, `compose.yaml` publishes port 8013 on `127.0.0.1`. If the proxy runs
    Check these before you start:
 
    - The hostname must be the one people type. If the browser's address differs, such as a LAN IP, every form fails with "Cross-origin request refused".
-   - Dinnerbell reads the household name and time zone on first start only, and ignores later changes, with a warning in the log ([#334](https://github.com/dsmorgan/dinnerbell/issues/334)). The time zone sets when calls go out.
+   - Dinnerbell reads the household name and time zone on first start only, and ignores later changes, with a warning in the log. The time zone sets when calls go out. To change either later, see [Change the name or time zone](configuration.md#change-the-name-or-time-zone).
 
    Dinnerbell logs a warning for each secret in `.env`. To keep them in files instead, see [Keep secrets in files](#keep-secrets-in-files).
 

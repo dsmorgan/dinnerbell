@@ -76,14 +76,15 @@ async def bootstrap(
 
 
 def _warn_on_ignored_settings(household: Household, *, household_name: str, timezone: str) -> None:
-    """The settings only seed the household row, so say when they no longer match it (issue 334).
+    """The settings only seed the household row, so say when they no longer match it, and which
+    command changes the row (issue 334).
     The time zone is named; the household name isn't, because it identifies the household (SEC-5)."""
     extra = {"household_id": household.id}
     if timezone != household.timezone:
         log.warning(
             "DINNERBELL_TIMEZONE is %s, but the household's time zone is %s, which Dinnerbell keeps using: it "
-            "reads the setting on first start only, and the time zone can't be changed after that yet. To stop "
-            "this warning, set DINNERBELL_TIMEZONE to the household's zone; see docs/configuration.md.",
+            "reads the setting on first start only. To change the household's zone, run dinnerbell set-timezone "
+            "ZONE. To stop this warning, set DINNERBELL_TIMEZONE to the household's zone; see docs/configuration.md.",
             timezone,
             household.timezone,
             extra=extra,
@@ -91,7 +92,7 @@ def _warn_on_ignored_settings(household: Household, *, household_name: str, time
     if household_name != household.name:
         log.warning(
             "DINNERBELL_HOUSEHOLD_NAME differs from the household's name, which Dinnerbell keeps using: it reads "
-            "the setting on first start only, and the name can't be changed after that yet. To stop this warning, "
-            "set DINNERBELL_HOUSEHOLD_NAME to the name the app shows; see docs/configuration.md.",
+            "the setting on first start only. To rename the household, run dinnerbell set-household-name NAME. To "
+            "stop this warning, set DINNERBELL_HOUSEHOLD_NAME to the name the app shows; see docs/configuration.md.",
             extra=extra,
         )

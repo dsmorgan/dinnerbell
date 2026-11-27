@@ -13,7 +13,6 @@ from functools import cached_property
 from pathlib import Path
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import Field, SecretStr, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -23,6 +22,7 @@ from sqlalchemy.exc import ArgumentError
 from dinnerbell import __version__
 from dinnerbell.domain import flags
 from dinnerbell.domain.assistant import DEFAULT_MODEL, MODELS
+from dinnerbell.domain.household import NAME_MAX_LENGTH, is_timezone
 from dinnerbell.domain.members import InvalidMemberInput, normalize_email
 
 ENV_PREFIX = "DINNERBELL_"
@@ -162,7 +162,7 @@ class Settings(BaseSettings):
     base_url: str
     secret_key: SecretStr
     admin_email: str
-    household_name: str = Field(default="Home", min_length=1, max_length=80)
+    household_name: str = Field(default="Home", min_length=1, max_length=NAME_MAX_LENGTH)
     oidc_issuer: str
     oidc_client_id: str = Field(min_length=1)
     oidc_client_secret: SecretStr
@@ -253,10 +253,8 @@ class Settings(BaseSettings):
     @field_validator("timezone")
     @classmethod
     def _check_timezone(cls, value: str) -> str:
-        try:
-            ZoneInfo(value)
-        except (ZoneInfoNotFoundError, ValueError):
-            raise ValueError("must be an IANA time zone name such as America/Chicago") from None
+        if not is_timezone(value):
+            raise ValueError("must be an IANA time zone name such as America/Chicago")
         return value
 
     @field_validator("log_level", mode="before")

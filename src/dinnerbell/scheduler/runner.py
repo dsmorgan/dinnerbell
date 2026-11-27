@@ -16,6 +16,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from apscheduler.events import EVENT_SCHEDULER_SHUTDOWN
+from apscheduler.jobstores.base import JobLookupError
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
@@ -26,6 +27,7 @@ from dinnerbell.domain.push import PushSender
 from dinnerbell.domain.weather import CHECK_INTERVAL
 from dinnerbell.logs import start_unit
 from dinnerbell.services import announcements, auth, backups, lifecycle, local_weather, outbox, push, recap, stuck
+from dinnerbell.services import household as household_service
 from dinnerbell.services.assistant import retention
 from dinnerbell.services.clock import Clock
 from dinnerbell.services.health import HEARTBEAT_INTERVAL, SchedulerState
@@ -51,13 +53,17 @@ WEATHER_INTERVAL = CHECK_INTERVAL
 """How often the scheduler looks for local weather that's due (ADR 0011). Each household asks only
 when its own randomized wait is over; ``domain.weather.next_fetch`` leaves room for this, so on
 schedule a fetch comes at most 3 hours after the last. A late or skipped run can stretch that."""
+ZONE_CHECK_INTERVAL = timedelta(minutes=1)
+"""How often the scheduler looks for a time zone that ``dinnerbell set-timezone`` changed (#334)."""
 
 
-@dataclass(frozen=True)
+@dataclass
 class JobContext:
     state: SchedulerState
     clock: Clock
     zone: ZoneInfo
+    """The household's time zone, for the nightly backup. ``follow_zone`` changes it when the
+    household's does (#334)."""
     database_path: Path
     backup_dir: Path
     sessionmaker: async_sessionmaker[AsyncSession]
@@ -129,6 +135,34 @@ async def nightly_backup(ctx: JobContext) -> None:
         return
     ctx.state.backup_failing = False
     ctx.state.last_backup = backups.last_backup_time(ctx.backup_dir)
+
+
+def _backup_trigger(zone: ZoneInfo) -> CronTrigger:
+    return CronTrigger(hour=BACKUP_HOUR, minute=BACKUP_MINUTE, timezone=zone)
+
+
+async def follow_zone(ctx: JobContext, scheduler: AsyncIOScheduler) -> None:
+    """Move the nightly backup to the household's time zone once ``dinnerbell set-timezone``
+    changes it (#334), so the change takes effect within a minute, with no restart. The backup is
+    the only job that keeps a zone: everything else reads the household row each time."""
+    try:
+        async with ctx.sessionmaker() as db:
+            household = await household_service.current_household(db)
+    except Exception:
+        log.exception("time zone check failed")
+        return
+    if household.timezone == ctx.zone.key:
+        return
+    zone = ZoneInfo(household.timezone)
+    try:
+        scheduler.reschedule_job("nightly_backup", trigger=_backup_trigger(zone))
+    except JobLookupError:  # shutting down: stop_scheduler removed the jobs
+        return
+    ctx.zone = zone
+    log.info(
+        "the nightly backup now runs in the household's new time zone",
+        extra={"household_id": household.id, "zone": zone.key},
+    )
 
 
 async def purge_sessions(ctx: JobContext) -> None:
@@ -269,8 +303,10 @@ async def stop_scheduler(
 
 
 def build_scheduler(ctx: JobContext) -> AsyncIOScheduler:
+    # UTC, not the household's zone: only the nightly backup's trigger has a zone, and
+    # follow_zone keeps it current, so no job is left on an old zone (#334).
     scheduler = AsyncIOScheduler(
-        timezone=ctx.zone,
+        timezone=UTC,
         job_defaults={"coalesce": True, "max_instances": 1, "misfire_grace_time": 3600},
     )
     # APScheduler times jobs by the wall clock; ctx.clock only stamps what the jobs record.
@@ -292,7 +328,7 @@ def build_scheduler(ctx: JobContext) -> AsyncIOScheduler:
     catch_up = ctx.state.last_backup is None or ctx.clock() - ctx.state.last_backup > BACKUP_CATCH_UP_AFTER
     scheduler.add_job(
         _tracked(nightly_backup),
-        CronTrigger(hour=BACKUP_HOUR, minute=BACKUP_MINUTE, timezone=ctx.zone),
+        _backup_trigger(ctx.zone),
         args=[ctx],
         id="nightly_backup",
         misfire_grace_time=None,
@@ -338,5 +374,15 @@ def build_scheduler(ctx: JobContext) -> AsyncIOScheduler:
         args=[ctx],
         id="refresh_weather",
         next_run_time=start,
+    )
+
+    async def follow(job_ctx: JobContext) -> None:
+        await follow_zone(job_ctx, scheduler)
+
+    scheduler.add_job(
+        _tracked(follow),
+        IntervalTrigger(seconds=ZONE_CHECK_INTERVAL.total_seconds()),
+        args=[ctx],
+        id="follow_zone",
     )
     return scheduler

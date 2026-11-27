@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The ``dinnerbell`` command: ``serve``, ``migrate``, ``backup``, ``init``, ``config``, ``catalog``,
-``slack``, ``reset-history``, ``admin``, and, on a test instance only, ``scrub-test`` and ``discard-call``."""
+``slack``, ``reset-history``, ``set-timezone``, ``set-household-name``, ``admin``, and, on a test
+instance only, ``scrub-test`` and ``discard-call``."""
 
 from __future__ import annotations
 
@@ -129,6 +130,23 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="skip the typed confirmation, after checking what it will delete; needed without a terminal",
     )
+    set_timezone = commands.add_parser(
+        "set-timezone",
+        help="change the household's time zone",
+        description="Change the household's time zone to ZONE. Refuses while a call is open, scheduled calls "
+        "included. Prints the old and new zone, and writes an audit row. The running app moves the nightly "
+        "backup to the new zone within a minute. Set DINNERBELL_TIMEZONE to ZONE too, or each start warns that "
+        "it differs. Run it in the running container.",
+    )
+    set_timezone.add_argument("zone", metavar="ZONE", help="an IANA time zone name, such as America/Chicago")
+    set_name = commands.add_parser(
+        "set-household-name",
+        help="rename the household",
+        description="Change the name the app shows to NAME, up to 80 characters. Prints the old and new name, and "
+        "writes an audit row. Pages show it on their next load. Set DINNERBELL_HOUSEHOLD_NAME to NAME too, or "
+        "each start warns that it differs. Run it in the running container.",
+    )
+    set_name.add_argument("name", metavar="NAME", help="the new name; quote it if it has spaces")
     admin = commands.add_parser("admin", help="emergency admin tools, for when no admin can sign in")
     admin_commands = admin.add_subparsers(dest="admin_command", required=True, metavar="COMMAND")
     add_admin = admin_commands.add_parser(
@@ -248,6 +266,10 @@ def _migrate(settings: Settings, *, back_up: bool = False) -> bool:
         return False
     return True
 
+
+NEEDS_HOUSEHOLD = frozenset({"admin", "set-timezone", "set-household-name"})
+"""The commands that change an existing household, which refuse without a database instead of
+migrating an empty one into being."""
 
 CONFIRM_WORD = "scrub"
 
@@ -538,6 +560,50 @@ def _admin_add(settings: Settings, email: str) -> int:
     return 0
 
 
+def _set_household(settings: Settings, command: str, value: str) -> int:
+    """``set-timezone`` and ``set-household-name`` (#334): change what the settings only seeded."""
+    from dinnerbell.domain.household import InvalidHouseholdInput
+    from dinnerbell.services import household
+    from dinnerbell.services.clock import utc_now
+    from dinnerbell.services.database import open_database
+
+    timezone = command == "set-timezone"
+
+    async def run() -> household.Changed:
+        database = open_database(settings.async_database_url)
+        try:
+            async with database.sessionmaker() as db:
+                if timezone:
+                    return await household.set_timezone(db, value, now=utc_now())
+                return await household.set_name(db, value, now=utc_now())
+        finally:
+            await database.close()
+
+    try:
+        result = asyncio.run(run())
+    except InvalidHouseholdInput as exc:
+        print(f"{exc} Nothing changed.", file=sys.stderr)
+        return 2
+    except household.NoHousehold:
+        print("The database has no household yet. Start Dinnerbell once, then run this again.", file=sys.stderr)
+        return 1
+    except household.TimezoneRefused as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    if timezone and not result.changed:
+        print(f"The household's time zone is already {result.after}. Nothing changed.")
+    elif timezone:
+        print(f"Changed the household's time zone from {result.before} to {result.after}.")
+        print("The running app moves the nightly backup to the new zone within a minute.")
+        print(f"Set DINNERBELL_TIMEZONE={result.after} in your env file too, or each start warns that it differs.")
+    elif not result.changed:
+        print(f"The household is already named {result.after!r}. Nothing changed.")
+    else:
+        print(f"Renamed the household from {result.before!r} to {result.after!r}. Pages show it on their next load.")
+        print("Set DINNERBELL_HOUSEHOLD_NAME to it in your env file too, or each start warns that it differs.")
+    return 0
+
+
 def _serve(settings: Settings, host: str, port: int) -> None:
     import uvicorn
 
@@ -615,7 +681,7 @@ def _command(args: argparse.Namespace, settings: Settings) -> int:
         return _backup_now(settings)
     if args.command == "scrub-test" and not _confirm_scrub(settings, args.yes):
         return 1
-    if args.command == "admin" and not settings.database_path.is_file():
+    if args.command in NEEDS_HOUSEHOLD and not settings.database_path.is_file():
         print(f"No database at {settings.database_path}. Nothing changed.", file=sys.stderr)
         return 1  # before migrating, which would create an empty one
     backup: Path | None = None
@@ -638,6 +704,10 @@ def _command(args: argparse.Namespace, settings: Settings) -> int:
         return _reset_history(settings, backup)
     if args.command == "admin":
         return _admin_add(settings, args.email)
+    if args.command == "set-timezone":
+        return _set_household(settings, args.command, args.zone)
+    if args.command == "set-household-name":
+        return _set_household(settings, args.command, args.name)
     return 0
 
 
