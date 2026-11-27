@@ -6,8 +6,8 @@ DINNERBELL_HOUSEHOLD_NAME and DINNERBELL_TIMEZONE only seed it on first start. A
 with no actor, as ``admin add`` is: whoever runs them has a shell on the host.
 
 Everything reads the zone from the row when it needs it, except the scheduler, which reads it at
-start for the nightly backup; ``scheduler.runner.follow_zone`` moves the backup to a changed zone
-within a minute, so nobody needs to restart.
+start for the nightly backup and outbox prune; ``scheduler.runner.follow_zone`` moves both to a
+changed zone within a minute, so nobody needs to restart.
 """
 
 from __future__ import annotations
