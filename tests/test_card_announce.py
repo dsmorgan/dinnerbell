@@ -9,17 +9,22 @@ from __future__ import annotations
 import re
 from datetime import date, timedelta
 from html import unescape
+from types import SimpleNamespace
+from typing import cast
 
 import httpx
 from fastapi.testclient import TestClient
 
 from dinnerbell.config import Settings
+from dinnerbell.db.models import EventRow
+from dinnerbell.domain.events import EventState
+from dinnerbell.services import event_views
 from dinnerbell.web.routes import events
 from tests.conftest import invite, page
 from tests.support.clock import FakeClock
 from tests.support.fake_oidc import FakeProvider
 from tests.support.web import htmx, submit
-from tests.test_auth_flow import member
+from tests.test_auth_flow import member, rows
 from tests.test_events_web import admin, proposal_ids, sign_in_as, start, tick
 from tests.test_offers_web import make
 
@@ -174,11 +179,81 @@ def test_the_words_for_each_shape_of_form() -> None:
     assert events._joined("0") == events._joined("") == events._joined("x") == "You're in."
     assert events._joined("1") == "You're in, with 1 guest."
     assert events._joined(" 3 ") == "You're in, with 3 guests."
-    assert events._moved("vote", "minus15") == "Voting closes 15 minutes earlier."
-    assert events._moved("respond", "close") == "Answers closed."
-    assert events._moved("vote", "close") == "Voting closed."
-    assert events._moved("respond", "sideways") == events._moved("later", "plus15") == events.SAVED
-    assert events._moved("later", "close") == events.SAVED
+    assert events._late(True, "joined", "voted")(view(late=True)) == "joined"
+    assert events._late(True, "joined", "voted")(view(late=False)) == "voted"  # in already
+    assert events._late(False, "joined", "voted")(view(late=True)) == "voted"
+
+
+def view(*, state: EventState = EventState.VOTING, late: bool = False) -> event_views.EventView:
+    """Just enough of a card for the words that depend on it."""
+    mine = SimpleNamespace(late=late)
+    return cast(event_views.EventView, SimpleNamespace(event=SimpleNamespace(state=state), mine=mine))
+
+
+def test_moved_deadlines_say_what_the_call_did() -> None:
+    """The words follow the call after the move, not the button: an earlier time that has
+    already passed closes the window."""
+    assert events._moved("vote", "minus15")(view()) == "Voting closes 15 minutes earlier."
+    assert events._moved("vote", "minus15")(view(state=EventState.DECIDED)) == "Voting closed."
+    assert events._moved("vote", "minus15")(view(state=EventState.ABANDONED)) == "Voting closed."
+    assert events._moved("respond", "minus15")(view(state=EventState.SCHEDULED)) == "Answers close 15 minutes earlier."
+    assert events._moved("respond", "plus15")(view(state=EventState.VOTING)) == "Answers closed."
+    assert events._moved("respond", "close")(view(state=EventState.COLLECTING)) == "Answers closed."
+    assert events._moved("vote", "close")(view()) == "Voting closed."
+    assert events._moved("respond", "sideways")(view(state=EventState.COLLECTING)) == events.SAVED
+    assert events._moved("later", "plus15")(view()) == events._moved("later", "close")(view()) == events.SAVED
+
+
+def test_an_earlier_decision_time_that_has_passed_says_voting_closed(
+    admin: TestClient, clock: FakeClock, migrated: Settings
+) -> None:
+    event_id = start(admin)
+    submit(admin, f"/events/{event_id}/respond", {"status": "in"})
+    submit(admin, f"/events/{event_id}/offer", {"role": "pickup", "offered": "1"})
+    submit(admin, f"/events/{event_id}/guests", {"name": "Jo", "run": "1"})
+    submit(admin, f"/events/{event_id}/coordinate")
+    clock.advance(timedelta(minutes=90))
+    tick(admin, clock)
+    voting = next(e for e in rows(migrated, EventRow) if e.id == event_id)
+    assert voting.state == "voting" and voting.vote_deadline is not None
+    clock.advance(voting.vote_deadline - clock.now - timedelta(minutes=10))  # 10 minutes left
+    moved = act(admin, event_id, "decision-time", {"shift": "minus15", "run": "1"})
+    assert next(e for e in rows(migrated, EventRow) if e.id == event_id).state != "voting"
+    assert moved == "Voting closed."
+
+
+def test_an_earlier_deadline_that_has_passed_says_answers_closed(
+    admin: TestClient, clock: FakeClock, migrated: Settings
+) -> None:
+    event_id = start(admin)
+    deadline = next(e for e in rows(migrated, EventRow) if e.id == event_id).respond_deadline
+    clock.advance(deadline - clock.now - timedelta(minutes=10))
+    moved = act(admin, event_id, "admin/deadline", {"window": "respond", "shift": "minus15"})
+    assert next(e for e in rows(migrated, EventRow) if e.id == event_id).state != "collecting"
+    assert moved == "Answers closed."
+    early = start_other(admin)
+    assert act(admin, early, "admin/deadline", {"window": "respond", "shift": "minus15"}) == (
+        "Answers close 15 minutes earlier."
+    )
+
+
+def card_section(html: str, event_id: int) -> str:
+    found = re.search(rf'<section class="card event[^>]*id="event-{event_id}".*?</section>', html, re.S)
+    assert found is not None
+    return found.group(0)
+
+
+def test_a_refresh_of_an_unchanged_card_sends_the_card_the_page_has(admin: TestClient) -> None:
+    """app.js skips a refresh that brings the card exactly as the page got it, so the page's card
+    and the refresh's card must match byte for byte when nothing changed, on Today and on the
+    call's page. The den's state comes after the card, out of band."""
+    event_id = start(admin)
+    act(admin, event_id, "respond", {"status": "in"})
+    for came_from, path in (("today", "/"), ("event", f"/events/{event_id}")):
+        shown = card_section(admin.get(path).text, event_id)
+        refreshed = admin.get(f"/events/{event_id}/card?from={came_from}", headers={"HX-Request": "true"}).text
+        assert card_section(refreshed, event_id) == shown, came_from
+        assert 'id="den-state"' not in shown
 
 
 def test_app_js_speaks_once_in_the_status_line_and_spares_a_card_in_use(client: TestClient) -> None:
@@ -191,9 +266,21 @@ def test_app_js_speaks_once_in_the_status_line_and_spares_a_card_in_use(client: 
     assert ".focus(" not in script.split("function announce")[1].split("});")[0]  # focus stays put
     # The refresh skips a card in use, and refreshes one it skipped once focus leaves it.
     assert "if (inUse(cards[i], true)) { due[cards[i].id] = true; } else { refresh(cards[i]); }" in script
-    assert "focused.matches(TYPING) || !focusByPointer" in script
-    assert "var pressed = pressing instanceof Node && card.contains(pressing);" in script
+    assert "return focused.matches(TYPING) || !focusByPointer;" in script
+    assert "var pressed = pressing instanceof Node && card.contains(pressing)" in script
     assert "var recent = sinceUse && Date.now() - (usedAt[card.id] || 0) < POLL_MS;" in script
     assert 'document.addEventListener("click", noteUse, true);' in script
     assert 'document.addEventListener("focusout", function (event) {' in script
     assert "!inUse(card, false)" in script
+    # Focus holds a card only while the window has it, and for 3 minutes after the last key or
+    # focus move; a press only until a menu, leaving the window, or 30 seconds (review of #382).
+    assert "if (!focused || !card.contains(focused) || !document.hasFocus()) {" in script
+    assert "if (Date.now() - (keptAt[card.id] || 0) >= FOCUS_HOLD_MS) {" in script
+    assert "var FOCUS_HOLD_MS = 180000;" in script and "var PRESS_MAX_MS = 30000;" in script
+    assert 'document.addEventListener("contextmenu", released, true);' in script
+    assert 'window.addEventListener("blur", released);' in script
+    assert "card.contains(pressing) && Date.now() - pointerAt < PRESS_MAX_MS" in script
+    # A refresh that brings the card as the server last sent it swaps only the den's state.
+    skip = 'if (isPoll(event) && html !== null && html === served[target.id]) { event.detail.swapOverride = "none"; }'
+    assert skip in script
+    assert 'copy.removeAttribute("data-announce");' in script

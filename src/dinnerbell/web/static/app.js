@@ -651,15 +651,17 @@
   // voting, the decision, and Mark done at meal time. Skip a card while someone is using it, so
   // a refresh never replaces it under them or a screen reader (#336): an open form, typing in a
   // field, a field changed and not saved yet in a form that's showing, a request in flight, a
-  // pointer pressed on it, a tap or click in it in the last 45 seconds, or focus that a keyboard,
-  // a screen reader, or a switch put in it. The changed field, the request, and the tap don't
-  // rely on focus, which Safari doesn't give a tapped checkbox or button, and VoiceOver on an
-  // iPhone can read a card without moving it. A button, checkbox, or radio focused by a tap or
-  // click holds the card no longer than that: Chrome focuses a tapped one and keeps it there,
-  // and HTMX keeps that focus across the swap, so the card would never refresh. A card skipped
-  // while focus is in it refreshes as soon as focus leaves, if nothing else holds it. A save
-  // swaps in a new card, whose fields start unchanged; a closed form's changes are dropped. Skip
-  // hidden tabs.
+  // pointer pressed on it (for up to 30 seconds), a tap or click in it in the last 45 seconds, or
+  // focus that a keyboard, a screen reader, or a switch put in it, while the window has focus and
+  // for up to 3 minutes after the last key or focus move in the card. The changed field, the
+  // request, and the tap don't rely on focus, which Safari doesn't give a tapped checkbox or
+  // button, and VoiceOver on an iPhone can read a card without moving it. A button, checkbox, or
+  // radio focused by a tap or click holds the card no longer than the tap does: Chrome focuses a
+  // tapped one and keeps it there, and HTMX keeps that focus across the swap, so the card would
+  // never refresh. A card skipped while focus is in it refreshes as soon as focus leaves, if
+  // nothing else holds it. A refresh that brings the card unchanged swaps nothing into it (below).
+  // A save swaps in a new card, whose fields start unchanged; a closed form's changes are
+  // dropped. Skip hidden tabs.
   //
   // The card is the poll's source, so it shares the card's hx-sync: a tap replaces a poll in
   // flight, and its answer can't overwrite the tap's. A poll never starts while a save is in
@@ -744,19 +746,25 @@
 
   var TYPING = "textarea, select, input:not([type=hidden]):not([type=radio]):not([type=checkbox])";
   var POINTER_FOCUS_MS = 1000; // focus this soon after a pointer goes down or up is the pointer's
+  var FOCUS_HOLD_MS = 180000; // focus holds a card this long after the last key or focus move in it
+  var PRESS_MAX_MS = 30000; // a press longer than this lost its pointerup, as to a context menu
 
   var pressing = null; // what a pointer is pressed on, until it lifts
   var pointerAt = 0; // when a pointer last went down or up
   var focusByPointer = false; // whether the focus now came from a tap or click
   var focusId = "";
   var usedAt = {}; // card id: when a tap or click was last in it
+  var keptAt = {}; // card id: when a key or a focus move was last in it
   var due = {}; // card id: a refresh skipped it, so it's waiting
 
-  function noteUse(event) {
+  function note(times, event) {
     var card = event.target instanceof Element ? event.target.closest("[data-poll]") : null;
     if (card && card.id) {
-      usedAt[card.id] = Date.now();
+      times[card.id] = Date.now();
     }
+  }
+  function noteUse(event) {
+    note(usedAt, event);
   }
   document.addEventListener(
     "pointerdown",
@@ -773,6 +781,20 @@
   }
   document.addEventListener("pointerup", lifted, true);
   document.addEventListener("pointercancel", lifted, true);
+  // A right click or long press opens a menu, and switching away leaves the window: either can
+  // swallow the pointerup.
+  function released() {
+    pressing = null;
+  }
+  document.addEventListener("contextmenu", released, true);
+  window.addEventListener("blur", released);
+  document.addEventListener(
+    "keydown",
+    function (event) {
+      note(keptAt, event);
+    },
+    true
+  );
   // VoiceOver and TalkBack activate a control with a click and no pointer, and so do Enter and
   // Space on a button.
   document.addEventListener("click", noteUse, true);
@@ -782,9 +804,12 @@
       var id = event.target instanceof Element ? event.target.id : "";
       // HTMX puts focus back on the control with the same id in the card it swaps in: the same
       // focus as before, however long the save took.
-      var same = Boolean(id) && id === focusId && focusByPointer;
-      focusByPointer = Date.now() - pointerAt < POINTER_FOCUS_MS || same;
+      var back = Boolean(id) && id === focusId;
+      focusByPointer = Date.now() - pointerAt < POINTER_FOCUS_MS || (back && focusByPointer);
       focusId = id;
+      if (!back) {
+        note(keptAt, event); // a refresh putting focus back isn't the member moving it
+      }
     },
     true
   );
@@ -834,16 +859,24 @@
     return false;
   }
 
-  // Focus in the card that holds it: typing in a field, or any focus a pointer didn't put there.
+  // Focus in the card that holds it: typing in a field, or any focus a pointer didn't put there,
+  // while the window has focus, for up to 3 minutes after the last key or focus move in the card.
+  // A member who switched apps, or left the page with focus on In, sees the card catch up.
   function focusHolds(card) {
     var focused = document.activeElement;
-    return Boolean(focused && card.contains(focused) && (focused.matches(TYPING) || !focusByPointer));
+    if (!focused || !card.contains(focused) || !document.hasFocus()) {
+      return false;
+    }
+    if (Date.now() - (keptAt[card.id] || 0) >= FOCUS_HOLD_MS) {
+      return false;
+    }
+    return focused.matches(TYPING) || !focusByPointer;
   }
 
   // sinceUse: whether a tap or click in the last 45 seconds holds the card.
   function inUse(card, sinceUse) {
     var busy = card.classList.contains("htmx-request") || card.querySelector(".htmx-request");
-    var pressed = pressing instanceof Node && card.contains(pressing);
+    var pressed = pressing instanceof Node && card.contains(pressing) && Date.now() - pointerAt < PRESS_MAX_MS;
     var recent = sinceUse && Date.now() - (usedAt[card.id] || 0) < POLL_MS;
     return Boolean(
       busy || pressed || recent || focusHolds(card) || card.querySelector("details[open]") || unsavedIn(card)
@@ -888,6 +921,46 @@
       }
     }, 0);
   });
+
+  // A refresh that brings the card exactly as the server last sent it swaps nothing into the card,
+  // so a screen reader reading it is never disturbed, focus or no focus. It compares what the
+  // server sent, as the browser parses it, never the card on the page, which the member may have
+  // changed (a ticked box, an open form). The den's state, out of band, still swaps. A save shows
+  // the card fresh, so a refresh it was waiting for isn't needed any more.
+  var served = {}; // card id: the card as the server last sent it, without data-announce
+
+  function asServed(card) {
+    var copy = card.cloneNode(true);
+    copy.removeAttribute("data-announce");
+    return copy.outerHTML;
+  }
+
+  document.addEventListener("htmx:beforeSwap", function (event) {
+    var target = event.detail && event.detail.target;
+    if (!(target instanceof Element) || !target.id || !target.matches(".event") || !event.detail.shouldSwap) {
+      return;
+    }
+    var text = typeof event.detail.serverResponse === "string" ? event.detail.serverResponse : "";
+    // An inert document: nothing in it loads or runs, and it never reaches the page.
+    var fresh = new DOMParser().parseFromString(text, "text/html").getElementById(target.id);
+    var html = fresh ? asServed(fresh) : null;
+    if (isPoll(event) && html !== null && html === served[target.id]) {
+      event.detail.swapOverride = "none";
+    }
+    if (html !== null) {
+      served[target.id] = html;
+    }
+    if (isSave(event)) {
+      delete due[target.id];
+    }
+  });
+
+  // The cards as the page arrived, before anyone changed them: app.js runs before HTMX processes
+  // the page.
+  var arrived = document.querySelectorAll(".event[data-poll]");
+  for (var a = 0; a < arrived.length; a += 1) {
+    served[arrived[a].id] = asServed(arrived[a]);
+  }
 
   pollStarted = Date.now();
   nextRound();
