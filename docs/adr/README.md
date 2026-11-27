@@ -12,6 +12,7 @@ Each ADR records one decision and the reasoning behind it, in under about 1,000 
 | [0006](0006-test-instance.md) | Test in a second instance of the same image, not a second channel | Accepted |
 | [0007](0007-seeded-weighted-ranking.md) | Seeded, weighted random ranking among places that pass every filter | Accepted |
 | [0008](0008-feedback-informed-ranking.md) | Ratings move the rater's own score, and the household sees a hint | Accepted |
-| [0009](0009-optional-assistant.md) | An optional assistant drafts through the domain API, and a member confirms | Accepted |
+| [0009](0009-optional-assistant.md) | An optional assistant drafts through the domain API, and a member confirms | Accepted, amended by 0012 |
 | [0010](0010-optional-web-app.md) | An optional web app with push notifications, beside Slack | Accepted |
 | [0011](0011-local-weather.md) | Local weather for Dinnerbone's Den, from Open-Meteo, only if an admin turns it on | Accepted |
+| [0012](0012-assistant-memory.md) | The assistant keeps a short, shared memory of each member's tastes, filled in the background | Accepted |
